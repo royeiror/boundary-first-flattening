@@ -8,34 +8,37 @@ jobs:
     runs-on: windows-latest
 
     steps:
-    - name: Checkout BFF source
-      uses: actions/checkout@v3
+    - name: Checkout BFF Source
+      uses: actions/checkout@v4
 
     - name: Setup MSVC
       uses: ilammy/msvc-dev-cmd@v1
 
     - name: Setup CMake
-      uses: jwlawson/actions-setup-cmake@v1
+      uses: jwlawson/actions-setup-cmake@v2
 
     - name: Setup Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: '3.10'
 
-    - name: Create Build Directory
+    - name: Configure Build (Enable GUI)
       run: cmake -S . -B build -DBFF_BUILD_APPS=ON
 
-    - name: Build
+    - name: Build Release
       run: cmake --build build --config Release
 
-    - name: Package Executable
+    - name: Bundle Executable + Dependent DLLs
       run: |
-        mkdir package
-        copy build\Release\bff-app.exe package\
-        powershell -Command "Compress-Archive package bff-gui-win.zip"
+        mkdir dist
+        copy build\Release\bff-app.exe dist\
+        for /r "C:\Windows\System32" %f in (*.dll) do @copy "%f" dist\ >nul 2>&1
+
+    - name: Zip Release
+      run: powershell -Command "Compress-Archive dist bff-gui-win.zip"
 
     - name: Upload Artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: bff-windows-gui
         path: bff-gui-win.zip
