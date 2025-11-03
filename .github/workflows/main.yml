@@ -17,41 +17,25 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          # the tag/branch to build will be supplied by workflow_dispatch input
           ref: ${{ github.event.inputs.tag }}
-
-      - name: Show repo top
-        run: |
-          echo "HEAD commit:"
-          git --no-pager log -1 --oneline
-          echo ""
-          echo "List top-level files:"
-          dir
 
       - name: Setup MSVC & msbuild
         uses: microsoft/setup-msbuild@v1
 
       - name: Install CMake
-        uses: lukka/get-cmake@v4
+        uses: actions/setup-cmake@v3
         with:
           cmake-version: '3.26.4'
 
-      - name: Configure (Release, enable GUI app)
+      - name: Configure (Release, enable GUI)
         shell: pwsh
         run: |
           mkdir build
           cd build
-          # turn on building the GUI app target; v1.6 uses apps/bff
           cmake .. -G "Visual Studio 17 2022" -A x64 -DBUILD_BFF_APPLICATION=ON -DCMAKE_BUILD_TYPE=Release
           cmake --build . --config Release -- /m:4
 
-      - name: Find built executables
-        shell: pwsh
-        run: |
-          $exe = Get-ChildItem -Path (Join-Path $PWD 'build') -Filter "*.exe" -Recurse -ErrorAction SilentlyContinue | Sort-Object Length -Descending
-          if ($exe) { $exe | Select-Object FullName,Length | Format-Table -AutoSize } else { Write-Host "No exe found yet; listing build directory"; Get-ChildItem -Path build -Recurse | Select-Object FullName,Length | Format-Table -AutoSize }
-
-      - name: Package runtime files
+      - name: Package executables
         shell: pwsh
         run: |
           $buildDir = Join-Path $PWD 'build'
@@ -59,51 +43,29 @@ jobs:
           if (Test-Path $outDir) { Remove-Item $outDir -Recurse -Force }
           New-Item -ItemType Directory -Path $outDir | Out-Null
 
-          # Try common exe names and copy
-          $exeCandidates = @("bff.exe","bff-app.exe","bff-demo.exe")
-          $found = $false
-          foreach ($name in $exeCandidates) {
-            $match = Get-ChildItem -Path $buildDir -Filter $name -Recurse -ErrorAction SilentlyContinue
-            if ($match) {
-              $found = $true
-              foreach ($m in $match) { Copy-Item $m.FullName $outDir -Force }
-            }
-          }
-
-          # If none matched, just copy any exe from build tree
-          if (-not $found) {
-            $anyExe = Get-ChildItem -Path $buildDir -Filter "*.exe" -Recurse -ErrorAction SilentlyContinue
-            if ($anyExe) { $anyExe | ForEach-Object { Copy-Item $_.FullName $outDir -Force } ; $found = $true }
-          }
-
-          if (-not $found) { Write-Error "No executable found in build tree — build probably failed. See logs." ; exit 1 }
-
-          # Copy DLLs from build output
-          Get-ChildItem -Path $buildDir -Include "*.dll" -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
+          # copy executables
+          Get-ChildItem -Path $buildDir -Filter "*.exe" -Recurse | ForEach-Object {
             Copy-Item $_.FullName $outDir -Force
           }
 
-          # Copy possible data folders (adjust if repo keeps them in a different name)
-          foreach ($d in @("apps","shaders","textures","assets","binaries")) {
+          # copy DLL dependencies
+          Get-ChildItem -Path $buildDir -Filter "*.dll" -Recurse | ForEach-Object {
+            Copy-Item $_.FullName $outDir -Force
+          }
+
+          # copy any data directories (GUI resources)
+          foreach ($d in @("apps", "shaders", "data", "textures")) {
             if (Test-Path (Join-Path $PWD $d)) {
               Copy-Item (Join-Path $PWD $d) (Join-Path $outDir $d) -Recurse -Force
             }
           }
 
-          # Extra: if apps/bff has resources in repo, copy them
-          if (Test-Path (Join-Path $PWD 'apps\bff\data')) {
-            Copy-Item (Join-Path $PWD 'apps\bff\data') (Join-Path $outDir 'data') -Recurse -Force
-          }
+          Write-Host "Packaged contents:"
+          Get-ChildItem $outDir -Recurse
 
-          Write-Host "Package contents:"
-          Get-ChildItem -Path $outDir -Recurse | Select-Object FullName,Length | Format-Table -AutoSize
-
-      - name: Create zip artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: bff-windows-v1.6
           path: build/package/**
           retention-days: 7
-
-      - name: Print completion
-        run: echo "Build + packaging complete. Download artifact from the Actions run -> Artifacts."
