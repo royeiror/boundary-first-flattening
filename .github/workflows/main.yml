@@ -1,71 +1,41 @@
-name: Windows Build - BFF v1.6 (GUI)
+name: Build BFF GUI (Windows)
 
 on:
   workflow_dispatch:
-    inputs:
-      tag:
-        description: 'Tag or branch to build (default v1.6)'
-        required: false
-        default: 'v1.6'
 
 jobs:
-  build-win:
+  build:
     runs-on: windows-latest
-    timeout-minutes: 60
+
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          ref: ${{ github.event.inputs.tag }}
+    - name: Checkout BFF source
+      uses: actions/checkout@v3
 
-      - name: Setup MSVC & msbuild
-        uses: microsoft/setup-msbuild@v1
+    - name: Setup MSVC
+      uses: ilammy/msvc-dev-cmd@v1
 
-      - name: Install CMake
-        uses: actions/setup-cmake@v3
-        with:
-          cmake-version: '3.26.4'
+    - name: Setup CMake
+      uses: jwlawson/actions-setup-cmake@v1
 
-      - name: Configure (Release, enable GUI)
-        shell: pwsh
-        run: |
-          mkdir build
-          cd build
-          cmake .. -G "Visual Studio 17 2022" -A x64 -DBUILD_BFF_APPLICATION=ON -DCMAKE_BUILD_TYPE=Release
-          cmake --build . --config Release -- /m:4
+    - name: Setup Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
 
-      - name: Package executables
-        shell: pwsh
-        run: |
-          $buildDir = Join-Path $PWD 'build'
-          $outDir = Join-Path $PWD 'package'
-          if (Test-Path $outDir) { Remove-Item $outDir -Recurse -Force }
-          New-Item -ItemType Directory -Path $outDir | Out-Null
+    - name: Create Build Directory
+      run: cmake -S . -B build -DBFF_BUILD_APPS=ON
 
-          # copy executables
-          Get-ChildItem -Path $buildDir -Filter "*.exe" -Recurse | ForEach-Object {
-            Copy-Item $_.FullName $outDir -Force
-          }
+    - name: Build
+      run: cmake --build build --config Release
 
-          # copy DLL dependencies
-          Get-ChildItem -Path $buildDir -Filter "*.dll" -Recurse | ForEach-Object {
-            Copy-Item $_.FullName $outDir -Force
-          }
+    - name: Package Executable
+      run: |
+        mkdir package
+        copy build\Release\bff-app.exe package\
+        powershell -Command "Compress-Archive package bff-gui-win.zip"
 
-          # copy any data directories (GUI resources)
-          foreach ($d in @("apps", "shaders", "data", "textures")) {
-            if (Test-Path (Join-Path $PWD $d)) {
-              Copy-Item (Join-Path $PWD $d) (Join-Path $outDir $d) -Recurse -Force
-            }
-          }
-
-          Write-Host "Packaged contents:"
-          Get-ChildItem $outDir -Recurse
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: bff-windows-v1.6
-          path: build/package/**
-          retention-days: 7
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: bff-windows-gui
+        path: bff-gui-win.zip
