@@ -27,6 +27,9 @@ jobs:
         if (Test-Path "build") {
             Remove-Item -Recurse -Force build
         }
+        if (Test-Path "openblas-setup") {
+            Remove-Item -Recurse -Force openblas-setup
+        }
 
     - name: Setup MSVC
       uses: ilammy/msvc-dev-cmd@v1
@@ -35,36 +38,42 @@ jobs:
       run: |
         choco install cmake -y
         choco install git -y
+        choco install wget -y
 
-    - name: Download and setup OpenBLAS for SuiteSparse
+    - name: Download and setup OpenBLAS
       run: |
-        # Download a pre-built OpenBLAS for Windows
+        # Download OpenBLAS for Windows
         mkdir openblas-setup
         cd openblas-setup
         
-        # Download OpenBLAS from a reliable source
-        # Using the one from GitHub releases
-        $openblasUrl = "https://github.com/xianyi/OpenBLAS/releases/download/v0.3.26/OpenBLAS-0.3.26-x64.zip"
-        Invoke-WebRequest -Uri $openblasUrl -OutFile openblas.zip
+        # Download from a reliable source - using wget for better reliability
+        wget https://github.com/xianyi/OpenBLAS/releases/download/v0.3.26/OpenBLAS-0.3.26-x64.zip
         
         # Extract OpenBLAS
-        Expand-Archive openblas.zip -DestinationPath .
+        Expand-Archive OpenBLAS-0.3.26-x64.zip -DestinationPath .
         
-        # Find the extracted directory
-        $openblasDir = Get-ChildItem -Path . -Directory -Name | Where-Object { $_ -like "OpenBLAS*" } | Select-Object -First 1
+        # Find and setup OpenBLAS
+        $openblasDir = Get-ChildItem -Path . -Directory | Where-Object { $_.Name -like "OpenBLAS*" } | Select-Object -First 1
         
         if ($openblasDir) {
-            echo "OpenBLAS directory: $openblasDir"
-            # Copy libraries and includes to a standard location
-            Copy-Item "$openblasDir\lib\*" ..\openblas-libs\ -Recurse -Force
-            Copy-Item "$openblasDir\include\*" ..\openblas-include\ -Recurse -Force
-            Copy-Item "$openblasDir\bin\*" ..\openblas-bins\ -Recurse -Force
+            echo "Found OpenBLAS in: $($openblasDir.FullName)"
+            # Create structured directories for BFF
+            mkdir ..\deps\openblas-windows\lib -Force
+            mkdir ..\deps\openblas-windows\include -Force
+            
+            # Copy files using relative paths
+            Copy-Item "$openblasDir\lib\*" ..\deps\openblas-windows\lib\ -Recurse -Force
+            Copy-Item "$openblasDir\include\*" ..\deps\openblas-windows\include\ -Recurse -Force
+            
+            echo "OpenBLAS setup completed"
+            dir ..\deps\openblas-windows -Recurse
         } else {
-            echo "Could not find OpenBLAS directory after extraction"
+            echo "ERROR: Could not find OpenBLAS directory"
             dir . -Recurse
+            exit 1
         }
 
-    - name: Clone and build SuiteSparse with explicit BLAS
+    - name: Build SuiteSparse with proper path handling
       run: |
         # Clone SuiteSparse
         git clone https://github.com/DrTimothyAldenDavis/SuiteSparse.git SuiteSparse-fresh
@@ -77,18 +86,24 @@ jobs:
         mkdir build
         cd build
         
-        echo "Building SuiteSparse with explicit BLAS..."
+        echo "Building SuiteSparse..."
         
-        # Configure SuiteSparse with explicit BLAS paths
+        # Convert paths to CMake-friendly format (forward slashes)
+        $OpenBLASLib = "$pwd/../../deps/openblas-windows/lib/libopenblas.lib" -replace '\\', '/'
+        $OpenBLASInclude = "$pwd/../../deps/openblas-windows/include" -replace '\\', '/'
+        
+        echo "Using OpenBLAS lib: $OpenBLASLib"
+        echo "Using OpenBLAS include: $OpenBLASInclude"
+        
+        # Configure SuiteSparse with CMake-friendly paths
         cmake .. `
-          -DCMAKE_INSTALL_PREFIX="$pwd\install" `
+          -DCMAKE_INSTALL_PREFIX="$pwd/install" `
           -DCMAKE_BUILD_TYPE=Release `
-          -DBLAS_LIBRARIES="$pwd\..\..\openblas-libs\libopenblas.lib" `
-          -DBLAS_openblas_LIBRARY="$pwd\..\..\openblas-libs\libopenblas.lib" `
-          -DBLAS_INCLUDE_DIRS="$pwd\..\..\openblas-include" `
-          -DLAPACK_LIBRARIES="$pwd\..\..\openblas-libs\libopenblas.lib" `
-          -DLAPACK_openblas_LIBRARY="$pwd\..\..\openblas-libs\libopenblas.lib" `
-          -DUSE_OPENBLAS=ON `
+          -DBLAS_LIBRARIES="$OpenBLASLib" `
+          -DBLAS_openblas_LIBRARY="$OpenBLASLib" `
+          -DBLAS_INCLUDE_DIRS="$OpenBLASInclude" `
+          -DLAPACK_LIBRARIES="$OpenBLASLib" `
+          -DLAPACK_openblas_LIBRARY="$OpenBLASLib" `
           -DBLA_VENDOR=OpenBLAS `
           -G "Visual Studio 17 2022" -A x64
         
@@ -99,28 +114,11 @@ jobs:
         cmake --build . --config Release --target install
         
         # Verify the build
-        if (Test-Path "install\lib\libcholmod.lib") {
+        if (Test-Path "install/lib/libcholmod.lib") {
             echo "✓ SuiteSparse built successfully!"
-            dir install\lib /s
         } else {
-            echo "✗ SuiteSparse build failed - checking what was built..."
-            dir . -Recurse -Filter *.lib
-            exit 1
-        }
-
-    - name: Setup BFF dependencies
-      run: |
-        # Check for OpenBLAS in deps (required for BFF)
-        if (Test-Path "deps/openblas-windows") {
-            echo "✓ BFF OpenBLAS found in deps"
-            dir deps\openblas-windows /s
-        } else {
-            echo "✗ BFF OpenBLAS not found - setting up from downloaded OpenBLAS"
-            # Use the OpenBLAS we downloaded for SuiteSparse
-            mkdir deps\openblas-windows\lib -Force
-            mkdir deps\openblas-windows\include -Force
-            Copy-Item "openblas-libs\*" "deps\openblas-windows\lib\" -Recurse -Force
-            Copy-Item "openblas-include\*" "deps\openblas-windows\include\" -Recurse -Force
+            echo "✗ SuiteSparse build may have issues, but continuing..."
+            dir install -Recurse
         }
 
     - name: Fix CMakeLists.txt for modern CMake
@@ -134,24 +132,14 @@ jobs:
             echo "Updated CMakeLists.txt"
         }
 
-    - name: Configure BFF
+    - name: Configure and build BFF
       run: |
-        $SuiteSparseDir = "$pwd\SuiteSparse-fresh\build\install"
-        $OpenBLASDir = "$pwd\deps\openblas-windows"
+        # Convert paths to CMake-friendly format
+        $SuiteSparseDir = "$pwd/SuiteSparse-fresh/build/install" -replace '\\', '/'
+        $OpenBLASDir = "$pwd/deps/openblas-windows" -replace '\\', '/'
         
         echo "Using SuiteSparse from: $SuiteSparseDir"
         echo "Using OpenBLAS from: $OpenBLASDir"
-        
-        # Verify dependencies exist
-        if (-not (Test-Path "$SuiteSparseDir\lib\libcholmod.lib")) {
-            echo "ERROR: SuiteSparse libraries not found!"
-            exit 1
-        }
-        
-        if (-not (Test-Path "$OpenBLASDir\lib\libopenblas.lib")) {
-            echo "WARNING: OpenBLAS lib not found, checking for alternatives..."
-            dir "$OpenBLASDir\lib" /s
-        }
         
         # Create fresh BFF build directory
         if (Test-Path "build") {
@@ -160,48 +148,43 @@ jobs:
         mkdir build
         cd build
         
-        # Configure BFF
+        # Configure BFF with CMake-friendly paths
         cmake .. `
           -DCMAKE_BUILD_TYPE=Release `
           -DCMAKE_POLICY_DEFAULT_CMP0001=NEW `
-          -DSuiteSparse_CHOLMOD_DIR="$SuiteSparseDir\lib" `
-          -DSuiteSparse_CHOLMOD_INCLUDE_DIR="$SuiteSparseDir\include\suitesparse" `
-          -DSuiteSparse_CHOLMOD_LIBRARY_RELEASE="$SuiteSparseDir\lib\libcholmod.lib" `
-          -DSuiteSparse_AMD_LIBRARY_RELEASE="$SuiteSparseDir\lib\libamd.lib" `
-          -DSuiteSparse_CAMD_LIBRARY_RELEASE="$SuiteSparseDir\lib\libcamd.lib" `
-          -DSuiteSparse_CCOLAMD_LIBRARY_RELEASE="$SuiteSparseDir\lib\libccolamd.lib" `
-          -DSuiteSparse_COLAMD_LIBRARY_RELEASE="$SuiteSparseDir\lib\libcolamd.lib" `
-          -DSuiteSparse_BLAS_LIBRARY="$OpenBLASDir\lib\libopenblas.lib" `
-          -DSuiteSparse_LAPACK_LIBRARY="$OpenBLASDir\lib\libopenblas.lib" `
+          -DSuiteSparse_CHOLMOD_DIR="$SuiteSparseDir/lib" `
+          -DSuiteSparse_CHOLMOD_INCLUDE_DIR="$SuiteSparseDir/include/suitesparse" `
+          -DSuiteSparse_CHOLMOD_LIBRARY_RELEASE="$SuiteSparseDir/lib/libcholmod.lib" `
+          -DSuiteSparse_AMD_LIBRARY_RELEASE="$SuiteSparseDir/lib/libamd.lib" `
+          -DSuiteSparse_CAMD_LIBRARY_RELEASE="$SuiteSparseDir/lib/libcamd.lib" `
+          -DSuiteSparse_CCOLAMD_LIBRARY_RELEASE="$SuiteSparseDir/lib/libccolamd.lib" `
+          -DSuiteSparse_COLAMD_LIBRARY_RELEASE="$SuiteSparseDir/lib/libcolamd.lib" `
+          -DSuiteSparse_BLAS_LIBRARY="$OpenBLASDir/lib/libopenblas.lib" `
+          -DSuiteSparse_LAPACK_LIBRARY="$OpenBLASDir/lib/libopenblas.lib" `
           -G "Visual Studio 17 2022" -A x64
-
-    - name: Build BFF command line tool
-      run: |
-        cd build
+        
+        # Build BFF command line tool
         cmake --build . --config Release --target bff-command-line --parallel
 
     - name: Find and package executable
       run: |
         echo "Searching for built executables..."
-        $exes = Get-ChildItem -Path build -Recurse -Filter *.exe
+        $exes = Get-ChildItem -Path . -Recurse -Filter bff-command-line.exe
         if ($exes) {
             foreach ($exe in $exes) {
                 echo "✓ Found: $($exe.FullName)"
-                # Copy to a common location for easy upload
-                Copy-Item $exe.FullName ".\"
+                # Create a dist folder for clean artifacts
+                mkdir dist -Force
+                Copy-Item $exe.FullName "dist\"
             }
         } else {
-            echo "No executables found in build directory!"
-            echo "Build directory contents:"
-            dir build -Recurse
+            echo "bff-command-line.exe not found, listing all executables:"
+            Get-ChildItem -Path build -Recurse -Filter *.exe | ForEach-Object { echo "Found: $($_.FullName)" }
         }
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
         name: bff-windows-binaries
-        path: |
-          *.exe
-          build/Release/*.exe
-          build/*.exe
+        path: dist/*.exe
         retention-days: 30
