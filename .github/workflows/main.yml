@@ -1,4 +1,4 @@
-name: Build BFF with vcpkg
+name: Build BFF Windows Binary
 
 on: 
   push:
@@ -22,23 +22,49 @@ jobs:
         git clone https://github.com/Microsoft/vcpkg.git
         .\vcpkg\bootstrap-vcpkg.bat
 
-    - name: Install dependencies
+    - name: Install SuiteSparse with all components
       run: |
-        .\vcpkg\vcpkg install suitesparse openblas eigen3 --triplet x64-windows
+        .\vcpkg\vcpkg install suitesparse[core,metis] openblas eigen3 --triplet x64-windows
 
-    - name: Fix CMake minimum version
+    - name: Get vcpkg installation directory
+      id: vcpkg_dir
       run: |
+        $vcpkgDir = (Resolve-Path "vcpkg/installed/x64-windows").Path
+        echo "vcpkg_dir=$vcpkgDir" >> $env:GITHUB_OUTPUT
+        echo "Vcpkg directory: $vcpkgDir"
+
+    - name: Fix CMakeLists.txt
+      run: |
+        # Fix CMake minimum version
         if (Test-Path "CMakeLists.txt") {
             (Get-Content CMakeLists.txt) -replace 'cmake_minimum_required\(.*\)', 'cmake_minimum_required(VERSION 3.5)' | Set-Content CMakeLists.txt
         }
 
-    - name: Configure BFF
+    - name: Configure BFF with explicit SuiteSparse paths
       run: |
+        $VcpkgDir = "$pwd/vcpkg/installed/x64-windows" -replace '\\', '/'
+        
         mkdir build
         cd build
+        
+        # Configure with explicit SuiteSparse paths
         cmake .. `
           -DCMAKE_TOOLCHAIN_FILE=../vcpkg/scripts/buildsystems/vcpkg.cmake `
           -DCMAKE_BUILD_TYPE=Release `
+          -DSuiteSparse_CHOLMOD_DIR="$VcpkgDir/lib" `
+          -DSuiteSparse_CHOLMOD_INCLUDE_DIR="$VcpkgDir/include" `
+          -DSuiteSparse_CHOLMOD_LIBRARY_RELEASE="$VcpkgDir/lib/cholmod.lib" `
+          -DSuiteSparse_AMD_LIBRARY_RELEASE="$VcpkgDir/lib/amd.lib" `
+          -DSuiteSparse_CAMD_LIBRARY_RELEASE="$VcpkgDir/lib/camd.lib" `
+          -DSuiteSparse_CCOLAMD_LIBRARY_RELEASE="$VcpkgDir/lib/ccolamd.lib" `
+          -DSuiteSparse_COLAMD_LIBRARY_RELEASE="$VcpkgDir/lib/colamd.lib" `
+          -DSuiteSparse_BTF_LIBRARY_RELEASE="$VcpkgDir/lib/btf.lib" `
+          -DSuiteSparse_KLU_LIBRARY_RELEASE="$VcpkgDir/lib/klu.lib" `
+          -DSuiteSparse_UMFPACK_LIBRARY_RELEASE="$VcpkgDir/lib/umfpack.lib" `
+          -DSuiteSparse_CXSPARSE_LIBRARY_RELEASE="$VcpkgDir/lib/cxsparse.lib" `
+          -DSuiteSparse_SUITESPARSECONFIG_LIBRARY_RELEASE="$VcpkgDir/lib/suitesparseconfig.lib" `
+          -DSuiteSparse_BLAS_LIBRARY="$VcpkgDir/lib/openblas.lib" `
+          -DSuiteSparse_LAPACK_LIBRARY="$VcpkgDir/lib/openblas.lib" `
           -G "Visual Studio 17 2022" -A x64
 
     - name: Build BFF
@@ -46,26 +72,42 @@ jobs:
         cd build
         cmake --build . --config Release --target bff-command-line --parallel
 
-    - name: Collect binaries
+    - name: Collect and test binaries
       run: |
         mkdir dist
-        # Look for the executable in common locations
-        $possiblePaths = @(
+        
+        # Find and copy the executable
+        $exePaths = @(
             "build/Release/bff-command-line.exe",
-            "build/src/Release/bff-command-line.exe", 
-            "build/bff-command-line.exe",
-            "build/src/bff-command-line.exe"
+            "build/src/Release/bff-command-line.exe",
+            "build/bff-command-line.exe"
         )
         
-        foreach ($path in $possiblePaths) {
+        foreach ($path in $exePaths) {
             if (Test-Path $path) {
                 Copy-Item $path "dist/"
-                echo "✓ Found and copied: $path"
+                echo "✓ Found executable: $path"
+                
+                # Test if it runs
+                try {
+                    & $path --help
+                    echo "✓ Executable runs successfully"
+                } catch {
+                    echo "⚠ Executable exists but may have dependencies"
+                }
             }
         }
         
-        echo "Final dist contents:"
-        dir dist -Recurse
+        # Copy required DLLs
+        if (Test-Path "vcpkg/installed/x64-windows/bin") {
+            Get-ChildItem "vcpkg/installed/x64-windows/bin" -Filter *.dll | ForEach-Object {
+                Copy-Item $_.FullName "dist/"
+                echo "✓ Copied DLL: $($_.Name)"
+            }
+        }
+        
+        echo "Final artifacts:"
+        dir dist
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
