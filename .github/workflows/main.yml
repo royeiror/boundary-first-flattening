@@ -1,44 +1,58 @@
-name: Build BFF GUI (Windows)
+name: Build BFF Windows (Pre-built Deps)
 
 on:
+  push:
+    tags: ['v*']
+  release:
+    types: [created]
   workflow_dispatch:
 
 jobs:
-  build:
+  build-windows:
     runs-on: windows-latest
 
     steps:
-    - name: Checkout BFF Source
+    - name: Checkout repository
       uses: actions/checkout@v4
+      with:
+        ref: 'v1.6'
 
     - name: Setup MSVC
       uses: ilammy/msvc-dev-cmd@v1
 
-    - name: Setup CMake
-      uses: jwlawson/actions-setup-cmake@v2
-
-    - name: Setup Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.10'
-
-    - name: Configure Build (Enable GUI)
-      run: cmake -S . -B build -DBFF_BUILD_APPS=ON
-
-    - name: Build Release
-      run: cmake --build build --config Release
-
-    - name: Bundle Executable + Dependent DLLs
+    - name: Download pre-built SuiteSparse
       run: |
-        mkdir dist
-        copy build\Release\bff-app.exe dist\
-        for /r "C:\Windows\System32" %f in (*.dll) do @copy "%f" dist\ >nul 2>&1
+        # Download pre-built SuiteSparse for Windows
+        # You'll need to host these somewhere or use a reliable source
+        mkdir suitesparse
+        cd suitesparse
+        # Example - you'll need to replace with actual download URLs
+        # curl -L -o suitesparse.zip https://example.com/suitesparse-windows-x64.zip
+        # Expand-Archive suitesparse.zip -DestinationPath .
+        echo "Please set up pre-built SuiteSparse binaries"
 
-    - name: Zip Release
-      run: powershell -Command "Compress-Archive dist bff-gui-win.zip"
+    - name: Configure and build
+      run: |
+        $SuiteSparseDir = "$pwd\suitesparse"
+        $OpenBLASDir = "$pwd\deps\openblas-windows"
+        
+        mkdir build
+        cd build
+        
+        # Configure with paths to pre-built dependencies
+        cmake .. `
+          -DCMAKE_BUILD_TYPE=Release `
+          -DSuiteSparse_CHOLMOD_DIR="$SuiteSparseDir\lib" `
+          -DSuiteSparse_CHOLMOD_INCLUDE_DIR="$SuiteSparseDir\include" `
+          -DSuiteSparse_CHOLMOD_LIBRARY_RELEASE="$SuiteSparseDir\lib\cholmod.lib" `
+          -DSuiteSparse_BLAS_LIBRARY="$OpenBLASDir\lib\openblas.lib" `
+          -DSuiteSparse_LAPACK_LIBRARY="$OpenBLASDir\lib\openblas.lib" `
+          -G "Visual Studio 17 2022" -A x64
+        
+        cmake --build . --config Release --target bff-command-line --parallel
 
-    - name: Upload Artifact
+    - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
-        name: bff-windows-gui
-        path: bff-gui-win.zip
+        name: bff-windows-cli
+        path: build/Release/bff-command-line.exe
