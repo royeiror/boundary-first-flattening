@@ -49,35 +49,26 @@ jobs:
         # Download from a reliable source
         wget https://github.com/xianyi/OpenBLAS/releases/download/v0.3.26/OpenBLAS-0.3.26-x64.zip
         
-        # Extract OpenBLAS
+        # Extract OpenBLAS - it extracts directly to current directory
         Expand-Archive OpenBLAS-0.3.26-x64.zip -DestinationPath .
         
-        # Find and setup OpenBLAS
-        $openblasDir = Get-ChildItem -Path . -Directory | Where-Object { $_.Name -like "OpenBLAS*" } | Select-Object -First 1
+        echo "OpenBLAS extracted files:"
+        dir . -Recurse
         
-        if ($openblasDir) {
-            echo "Found OpenBLAS in: $($openblasDir.FullName)"
-            
-            # Create structured directories for BFF dependencies
-            mkdir ..\deps\openblas-windows\lib -Force
-            mkdir ..\deps\openblas-windows\include -Force
-            mkdir ..\deps\openblas-windows\bin -Force
-            
-            # Copy the correct library files - use libopenblas.lib for MSVC
-            Copy-Item "$openblasDir\lib\libopenblas.lib" ..\deps\openblas-windows\lib\ -Force
-            Copy-Item "$openblasDir\lib\libopenblas.dll.a" ..\deps\openblas-windows\lib\ -Force
-            Copy-Item "$openblasDir\include\*" ..\deps\openblas-windows\include\ -Recurse -Force
-            Copy-Item "$openblasDir\bin\*.dll" ..\deps\openblas-windows\bin\ -Force
-            
-            echo "OpenBLAS setup completed"
-            dir ..\deps\openblas-windows -Recurse
-        } else {
-            echo "ERROR: Could not find OpenBLAS directory"
-            dir . -Recurse
-            exit 1
-        }
+        # Create structured directories for BFF dependencies
+        mkdir ..\deps\openblas-windows\lib -Force
+        mkdir ..\deps\openblas-windows\include -Force
+        mkdir ..\deps\openblas-windows\bin -Force
+        
+        # Copy the correct library files - use libopenblas.lib for MSVC
+        Copy-Item "lib\libopenblas.lib" ..\deps\openblas-windows\lib\ -Force
+        Copy-Item "include\*" ..\deps\openblas-windows\include\ -Recurse -Force
+        Copy-Item "bin\*.dll" ..\deps\openblas-windows\bin\ -Force
+        
+        echo "OpenBLAS setup completed"
+        dir ..\deps\openblas-windows -Recurse
 
-    - name: Build SuiteSparse with correct library names
+    - name: Build SuiteSparse
       run: |
         # Clone SuiteSparse
         git clone https://github.com/DrTimothyAldenDavis/SuiteSparse.git SuiteSparse-fresh
@@ -99,7 +90,7 @@ jobs:
         echo "Using OpenBLAS lib: $OpenBLASLib"
         echo "Using OpenBLAS include: $OpenBLASInclude"
         
-        # Configure SuiteSparse with correct library names
+        # Configure SuiteSparse
         cmake .. `
           -DCMAKE_INSTALL_PREFIX="$pwd/install" `
           -DCMAKE_BUILD_TYPE=Release `
@@ -165,7 +156,7 @@ jobs:
         mkdir build
         cd build
         
-        # Configure BFF with correct library paths
+        # Configure BFF
         cmake .. `
           -DCMAKE_BUILD_TYPE=Release `
           -DCMAKE_POLICY_DEFAULT_CMP0001=NEW `
