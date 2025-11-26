@@ -1,151 +1,46 @@
-name: Build BFF Windows Binary
+name: Build BFF Windows (Simplified)
 
 on:
-  push:
-    tags: ['v*']
-  release:
-    types: [created]
-  workflow_dispatch:  # Manual trigger
+  workflow_dispatch:
 
 jobs:
-  build-windows:
-    name: Build BFF Command Line (Windows x64)
+  build:
     runs-on: windows-latest
-
+    
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
       with:
         submodules: recursive
 
-    - name: Clean existing build directories
-      run: |
-        # Remove any existing build directories to start fresh
-        if (Test-Path "SuiteSparse") {
-            Remove-Item -Recurse -Force SuiteSparse -ErrorAction SilentlyContinue
-        }
-        if (Test-Path "build") {
-            Remove-Item -Recurse -Force build -ErrorAction SilentlyContinue
-        }
-
     - name: Setup MSVC
       uses: ilammy/msvc-dev-cmd@v1
 
-    - name: Install build tools
-      run: |
-        choco install cmake -y
-        choco install git -y
-        choco install ninja -y  # Optional: for faster builds
+    - name: Install CMake
+      run: choco install cmake -y
 
-    - name: Clone and build SuiteSparse
+    - name: Create build directory
       run: |
-        # Clone SuiteSparse with a fresh clone
-        git clone https://github.com/DrTimothyAldenDavis/SuiteSparse.git
-        cd SuiteSparse
-        
-        # Create and enter build directory
+        # Clean any existing build
+        if (Test-Path "build") {
+            Remove-Item -Recurse -Force build
+        }
         mkdir build
-        cd build
-        
-        # Build SuiteSparse using CMake
-        cmake .. `
-          -DCMAKE_INSTALL_PREFIX="$pwd\install" `
-          -DCMAKE_BUILD_TYPE=Release `
-          -G "Visual Studio 17 2022" -A x64
-        
-        cmake --build . --config Release --target install --parallel
-        
-        # List installed files for verification
-        echo "SuiteSparse build completed:"
-        dir install\lib /s
-        dir install\include /s
 
-    - name: Setup OpenBLAS paths
-      run: |
-        # Check if OpenBLAS exists in deps
-        if (Test-Path "deps/openblas-windows") {
-            echo "OpenBLAS found in deps folder"
-            dir deps\openblas-windows /s
-        } else {
-            echo "WARNING: OpenBLAS not found in deps folder"
-            echo "This may cause build failures. The repository should include OpenBLAS in deps/openblas-windows/"
-            # Create minimal structure for CMake configuration to continue
-            mkdir deps\openblas-windows\lib -Force
-            mkdir deps\openblas-windows\include -Force
-            # Try to download a pre-built OpenBLAS if missing
-            echo "Attempting to download OpenBLAS..."
-            # You might want to add actual download logic here
-        }
-
-    - name: Configure BFF with CMake
-      run: |
-        $SuiteSparseDir = "$pwd\SuiteSparse\build\install"
-        $OpenBLASDir = "$pwd\deps\openblas-windows"
-        
-        echo "SuiteSparse directory: $SuiteSparseDir"
-        echo "OpenBLAS directory: $OpenBLASDir"
-        
-        # Verify SuiteSparse was built correctly
-        if (-not (Test-Path "$SuiteSparseDir\lib\libcholmod.lib")) {
-            echo "ERROR: SuiteSparse libraries not found!"
-            dir "$SuiteSparseDir\lib" /s
-            exit 1
-        }
-        
-        # Create fresh build directory for BFF
-        mkdir build
-        cd build
-        
-        # Configure with all required SuiteSparse paths
-        cmake .. `
-          -DCMAKE_BUILD_TYPE=Release `
-          -DSuiteSparse_CHOLMOD_DIR="$SuiteSparseDir\lib" `
-          -DSuiteSparse_CHOLMOD_INCLUDE_DIR="$SuiteSparseDir\include\suitesparse" `
-          -DSuiteSparse_CHOLMOD_LIBRARY_RELEASE="$SuiteSparseDir\lib\libcholmod.lib" `
-          -DSuiteSparse_AMD_LIBRARY_RELEASE="$SuiteSparseDir\lib\libamd.lib" `
-          -DSuiteSparse_CAMD_LIBRARY_RELEASE="$SuiteSparseDir\lib\libcamd.lib" `
-          -DSuiteSparse_CCOLAMD_LIBRARY_RELEASE="$SuiteSparseDir\lib\libccolamd.lib" `
-          -DSuiteSparse_COLAMD_LIBRARY_RELEASE="$SuiteSparseDir\lib\libcolamd.lib" `
-          -DSuiteSparse_BLAS_LIBRARY="$OpenBLASDir\lib\libopenblas.lib" `
-          -DSuiteSparse_LAPACK_LIBRARY="$OpenBLASDir\lib\libopenblas.lib" `
-          -G "Visual Studio 17 2022" -A x64
-
-    - name: Build BFF command line tool
+    - name: Configure with basic settings
       run: |
         cd build
-        # Build only the command line tool
-        cmake --build . --config Release --target bff-command-line --parallel
+        # Try a basic configuration first to see what's missing
+        cmake .. -G "Visual Studio 17 2022" -A x64
 
-    - name: Verify built executable
+    - name: Build
       run: |
-        echo "Looking for built executables..."
-        Get-ChildItem -Path build -Recurse -Filter *.exe | ForEach-Object { 
-            echo "Found: $($_.FullName)"
-            # Try to get file version info
-            try {
-                $version = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($_.FullName)
-                echo "  Version: $($version.FileVersion)"
-                echo "  Product: $($version.ProductName)"
-            } catch {
-                echo "  Could not read version info"
-            }
-        }
-        
-        # Check specifically for the command line tool
-        if (Test-Path "build\Release\bff-command-line.exe") {
-            echo "✓ SUCCESS: bff-command-line.exe built successfully!"
-        } elseif (Test-Path "build\bff-command-line.exe") {
-            echo "✓ SUCCESS: bff-command-line.exe built successfully!"
-        } else {
-            echo "✗ WARNING: bff-command-line.exe not found in expected locations"
-            echo "But other executables might have been built"
-        }
+        cd build
+        cmake --build . --config Release --parallel
 
-    - name: Upload binary artifact
+    - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: bff-windows-binaries
-        path: |
-          build/**/*.exe
-          build/**/*.dll
-        retention-days: 30
+        name: bff-build-output
+        path: build/**
+        retention-days: 5
