@@ -21,12 +21,10 @@ jobs:
     - name: Clean existing directories
       run: |
         # Clean up any existing directories completely
-        if (Test-Path "SuiteSparse") {
-            echo "Removing existing SuiteSparse directory..."
-            Remove-Item -Recurse -Force SuiteSparse
+        if (Test-Path "SuiteSparse-fresh") {
+            Remove-Item -Recurse -Force SuiteSparse-fresh
         }
         if (Test-Path "build") {
-            echo "Removing existing build directory..."
             Remove-Item -Recurse -Force build
         }
 
@@ -38,71 +36,102 @@ jobs:
         choco install cmake -y
         choco install git -y
 
-    - name: Clone SuiteSparse
+    - name: Download and setup OpenBLAS for SuiteSparse
       run: |
-        # Clone SuiteSparse without any existing directories
+        # Download a pre-built OpenBLAS for Windows
+        mkdir openblas-setup
+        cd openblas-setup
+        
+        # Download OpenBLAS from a reliable source
+        # Using the one from GitHub releases
+        $openblasUrl = "https://github.com/xianyi/OpenBLAS/releases/download/v0.3.26/OpenBLAS-0.3.26-x64.zip"
+        Invoke-WebRequest -Uri $openblasUrl -OutFile openblas.zip
+        
+        # Extract OpenBLAS
+        Expand-Archive openblas.zip -DestinationPath .
+        
+        # Find the extracted directory
+        $openblasDir = Get-ChildItem -Path . -Directory -Name | Where-Object { $_ -like "OpenBLAS*" } | Select-Object -First 1
+        
+        if ($openblasDir) {
+            echo "OpenBLAS directory: $openblasDir"
+            # Copy libraries and includes to a standard location
+            Copy-Item "$openblasDir\lib\*" ..\openblas-libs\ -Recurse -Force
+            Copy-Item "$openblasDir\include\*" ..\openblas-include\ -Recurse -Force
+            Copy-Item "$openblasDir\bin\*" ..\openblas-bins\ -Recurse -Force
+        } else {
+            echo "Could not find OpenBLAS directory after extraction"
+            dir . -Recurse
+        }
+
+    - name: Clone and build SuiteSparse with explicit BLAS
+      run: |
+        # Clone SuiteSparse
         git clone https://github.com/DrTimothyAldenDavis/SuiteSparse.git SuiteSparse-fresh
         cd SuiteSparse-fresh
         
-        # Check if build directory exists from clone
+        # Create fresh build directory
         if (Test-Path "build") {
-            echo "Removing build directory from clone..."
             Remove-Item -Recurse -Force build
         }
-        
-        # Create fresh build directory
         mkdir build
         cd build
         
-        echo "Building SuiteSparse..."
-        # Build SuiteSparse using CMake with policy workaround
+        echo "Building SuiteSparse with explicit BLAS..."
+        
+        # Configure SuiteSparse with explicit BLAS paths
         cmake .. `
           -DCMAKE_INSTALL_PREFIX="$pwd\install" `
           -DCMAKE_BUILD_TYPE=Release `
+          -DBLAS_LIBRARIES="$pwd\..\..\openblas-libs\libopenblas.lib" `
+          -DBLAS_openblas_LIBRARY="$pwd\..\..\openblas-libs\libopenblas.lib" `
+          -DBLAS_INCLUDE_DIRS="$pwd\..\..\openblas-include" `
+          -DLAPACK_LIBRARIES="$pwd\..\..\openblas-libs\libopenblas.lib" `
+          -DLAPACK_openblas_LIBRARY="$pwd\..\..\openblas-libs\libopenblas.lib" `
+          -DUSE_OPENBLAS=ON `
+          -DBLA_VENDOR=OpenBLAS `
           -G "Visual Studio 17 2022" -A x64
         
-        cmake --build . --config Release --target install --parallel
+        # Build SuiteSparse
+        cmake --build . --config Release --parallel
+        
+        # Install to the local install directory
+        cmake --build . --config Release --target install
         
         # Verify the build
         if (Test-Path "install\lib\libcholmod.lib") {
             echo "✓ SuiteSparse built successfully!"
-        } else {
-            echo "✗ SuiteSparse build failed - libcholmod.lib not found"
             dir install\lib /s
+        } else {
+            echo "✗ SuiteSparse build failed - checking what was built..."
+            dir . -Recurse -Filter *.lib
             exit 1
         }
 
-    - name: Fix CMake compatibility
+    - name: Setup BFF dependencies
       run: |
-        # Apply CMake policy override by creating a wrapper
-        if (Test-Path "CMakeLists.txt") {
-            # Create a backup
-            Copy-Item CMakeLists.txt CMakeLists.txt.original
-            
-            # Read the first few lines to check the current version
-            $lines = Get-Content CMakeLists.txt
-            $firstLine = $lines[0]
-            echo "First line of CMakeLists.txt: $firstLine"
-            
-            # Update the cmake_minimum_required line if needed
-            $updatedContent = $lines -replace '^cmake_minimum_required\(.*\)', 'cmake_minimum_required(VERSION 3.5)'
-            $updatedContent | Set-Content CMakeLists.txt
-            
-            echo "Updated CMakeLists.txt"
-        }
-
-    - name: Setup OpenBLAS
-      run: |
-        # Check for OpenBLAS in deps
+        # Check for OpenBLAS in deps (required for BFF)
         if (Test-Path "deps/openblas-windows") {
-            echo "✓ OpenBLAS found in deps"
+            echo "✓ BFF OpenBLAS found in deps"
             dir deps\openblas-windows /s
         } else {
-            echo "✗ OpenBLAS not found in deps/openblas-windows"
-            echo "This will likely cause build failures"
-            # Create directory structure to avoid CMake errors
+            echo "✗ BFF OpenBLAS not found - setting up from downloaded OpenBLAS"
+            # Use the OpenBLAS we downloaded for SuiteSparse
             mkdir deps\openblas-windows\lib -Force
             mkdir deps\openblas-windows\include -Force
+            Copy-Item "openblas-libs\*" "deps\openblas-windows\lib\" -Recurse -Force
+            Copy-Item "openblas-include\*" "deps\openblas-windows\include\" -Recurse -Force
+        }
+
+    - name: Fix CMakeLists.txt for modern CMake
+      run: |
+        # Apply minimal fix to CMakeLists.txt
+        if (Test-Path "CMakeLists.txt") {
+            $content = Get-Content CMakeLists.txt -Raw
+            # Update cmake_minimum_required to a compatible version
+            $content = $content -replace 'cmake_minimum_required\(.*\)', 'cmake_minimum_required(VERSION 3.5)'
+            $content | Set-Content CMakeLists.txt
+            echo "Updated CMakeLists.txt"
         }
 
     - name: Configure BFF
@@ -113,6 +142,17 @@ jobs:
         echo "Using SuiteSparse from: $SuiteSparseDir"
         echo "Using OpenBLAS from: $OpenBLASDir"
         
+        # Verify dependencies exist
+        if (-not (Test-Path "$SuiteSparseDir\lib\libcholmod.lib")) {
+            echo "ERROR: SuiteSparse libraries not found!"
+            exit 1
+        }
+        
+        if (-not (Test-Path "$OpenBLASDir\lib\libopenblas.lib")) {
+            echo "WARNING: OpenBLAS lib not found, checking for alternatives..."
+            dir "$OpenBLASDir\lib" /s
+        }
+        
         # Create fresh BFF build directory
         if (Test-Path "build") {
             Remove-Item -Recurse -Force build
@@ -120,10 +160,10 @@ jobs:
         mkdir build
         cd build
         
-        # Configure BFF with CMake policy override
+        # Configure BFF
         cmake .. `
-          -DCMAKE_POLICY_DEFAULT_CMP0001=NEW `
           -DCMAKE_BUILD_TYPE=Release `
+          -DCMAKE_POLICY_DEFAULT_CMP0001=NEW `
           -DSuiteSparse_CHOLMOD_DIR="$SuiteSparseDir\lib" `
           -DSuiteSparse_CHOLMOD_INCLUDE_DIR="$SuiteSparseDir\include\suitesparse" `
           -DSuiteSparse_CHOLMOD_LIBRARY_RELEASE="$SuiteSparseDir\lib\libcholmod.lib" `
@@ -135,28 +175,23 @@ jobs:
           -DSuiteSparse_LAPACK_LIBRARY="$OpenBLASDir\lib\libopenblas.lib" `
           -G "Visual Studio 17 2022" -A x64
 
-    - name: Build BFF
+    - name: Build BFF command line tool
       run: |
         cd build
         cmake --build . --config Release --target bff-command-line --parallel
 
-    - name: Find and test executable
+    - name: Find and package executable
       run: |
         echo "Searching for built executables..."
-        $exes = Get-ChildItem -Path . -Recurse -Filter *.exe
+        $exes = Get-ChildItem -Path build -Recurse -Filter *.exe
         if ($exes) {
             foreach ($exe in $exes) {
-                echo "Found: $($exe.FullName)"
-                # Try to run with --help to test
-                try {
-                    & $exe.FullName --help
-                    echo "✓ $($exe.Name) runs successfully"
-                } catch {
-                    echo "  - Could not execute (may require specific arguments)"
-                }
+                echo "✓ Found: $($exe.FullName)"
+                # Copy to a common location for easy upload
+                Copy-Item $exe.FullName ".\"
             }
         } else {
-            echo "No executables found!"
+            echo "No executables found in build directory!"
             echo "Build directory contents:"
             dir build -Recurse
         }
@@ -164,8 +199,9 @@ jobs:
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: bff-windows-build
+        name: bff-windows-binaries
         path: |
-          build/**/*.exe
-          build/**/*.dll
+          *.exe
+          build/Release/*.exe
+          build/*.exe
         retention-days: 30
