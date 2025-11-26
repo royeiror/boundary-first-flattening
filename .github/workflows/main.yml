@@ -46,7 +46,7 @@ jobs:
         mkdir openblas-setup
         cd openblas-setup
         
-        # Download from a reliable source - using wget for better reliability
+        # Download from a reliable source
         wget https://github.com/xianyi/OpenBLAS/releases/download/v0.3.26/OpenBLAS-0.3.26-x64.zip
         
         # Extract OpenBLAS
@@ -57,13 +57,17 @@ jobs:
         
         if ($openblasDir) {
             echo "Found OpenBLAS in: $($openblasDir.FullName)"
-            # Create structured directories for BFF
+            
+            # Create structured directories for BFF dependencies
             mkdir ..\deps\openblas-windows\lib -Force
             mkdir ..\deps\openblas-windows\include -Force
+            mkdir ..\deps\openblas-windows\bin -Force
             
-            # Copy files using relative paths
-            Copy-Item "$openblasDir\lib\*" ..\deps\openblas-windows\lib\ -Recurse -Force
+            # Copy the correct library files - use libopenblas.lib for MSVC
+            Copy-Item "$openblasDir\lib\libopenblas.lib" ..\deps\openblas-windows\lib\ -Force
+            Copy-Item "$openblasDir\lib\libopenblas.dll.a" ..\deps\openblas-windows\lib\ -Force
             Copy-Item "$openblasDir\include\*" ..\deps\openblas-windows\include\ -Recurse -Force
+            Copy-Item "$openblasDir\bin\*.dll" ..\deps\openblas-windows\bin\ -Force
             
             echo "OpenBLAS setup completed"
             dir ..\deps\openblas-windows -Recurse
@@ -73,7 +77,7 @@ jobs:
             exit 1
         }
 
-    - name: Build SuiteSparse with proper path handling
+    - name: Build SuiteSparse with correct library names
       run: |
         # Clone SuiteSparse
         git clone https://github.com/DrTimothyAldenDavis/SuiteSparse.git SuiteSparse-fresh
@@ -95,7 +99,7 @@ jobs:
         echo "Using OpenBLAS lib: $OpenBLASLib"
         echo "Using OpenBLAS include: $OpenBLASInclude"
         
-        # Configure SuiteSparse with CMake-friendly paths
+        # Configure SuiteSparse with correct library names
         cmake .. `
           -DCMAKE_INSTALL_PREFIX="$pwd/install" `
           -DCMAKE_BUILD_TYPE=Release `
@@ -141,6 +145,19 @@ jobs:
         echo "Using SuiteSparse from: $SuiteSparseDir"
         echo "Using OpenBLAS from: $OpenBLASDir"
         
+        # Verify required files exist
+        if (-not (Test-Path "$SuiteSparseDir/lib/libcholmod.lib")) {
+            echo "ERROR: SuiteSparse libcholmod.lib not found!"
+            dir "$SuiteSparseDir/lib" -Recurse
+            exit 1
+        }
+        
+        if (-not (Test-Path "$OpenBLASDir/lib/libopenblas.lib")) {
+            echo "ERROR: OpenBLAS libopenblas.lib not found!"
+            dir "$OpenBLASDir/lib" -Recurse
+            exit 1
+        }
+        
         # Create fresh BFF build directory
         if (Test-Path "build") {
             Remove-Item -Recurse -Force build
@@ -148,7 +165,7 @@ jobs:
         mkdir build
         cd build
         
-        # Configure BFF with CMake-friendly paths
+        # Configure BFF with correct library paths
         cmake .. `
           -DCMAKE_BUILD_TYPE=Release `
           -DCMAKE_POLICY_DEFAULT_CMP0001=NEW `
@@ -166,6 +183,14 @@ jobs:
         # Build BFF command line tool
         cmake --build . --config Release --target bff-command-line --parallel
 
+    - name: Copy required DLLs
+      run: |
+        # Copy OpenBLAS DLL to the build directory so the executable can find it
+        if (Test-Path "deps/openblas-windows/bin/libopenblas.dll") {
+            Copy-Item "deps/openblas-windows/bin/libopenblas.dll" "build/Release/" -Force
+            echo "✓ Copied libopenblas.dll to build directory"
+        }
+
     - name: Find and package executable
       run: |
         echo "Searching for built executables..."
@@ -176,6 +201,13 @@ jobs:
                 # Create a dist folder for clean artifacts
                 mkdir dist -Force
                 Copy-Item $exe.FullName "dist\"
+                
+                # Also copy any DLLs that might be needed
+                $exeDir = $exe.DirectoryName
+                Get-ChildItem -Path $exeDir -Filter *.dll | ForEach-Object {
+                    Copy-Item $_.FullName "dist\"
+                    echo "✓ Copied DLL: $($_.Name)"
+                }
             }
         } else {
             echo "bff-command-line.exe not found, listing all executables:"
@@ -186,5 +218,5 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: bff-windows-binaries
-        path: dist/*.exe
+        path: dist/*
         retention-days: 30
