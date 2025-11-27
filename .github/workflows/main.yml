@@ -1,10 +1,8 @@
-name: Build BFF Windows Binary
+name: Build BFF Windows
 
 on: 
   push:
     tags: ['v*']
-  release:
-    types: [created]
   workflow_dispatch:
 
 jobs:
@@ -12,7 +10,7 @@ jobs:
     runs-on: windows-latest
     
     steps:
-    - name: Checkout repository
+    - name: Checkout
       uses: actions/checkout@v4
       with:
         submodules: recursive
@@ -21,110 +19,29 @@ jobs:
       run: |
         git clone https://github.com/Microsoft/vcpkg.git
         .\vcpkg\bootstrap-vcpkg.bat
-
-    - name: Install dependencies
-      run: |
         .\vcpkg\vcpkg install suitesparse openblas eigen3 --triplet x64-windows
 
-    - name: Check vcpkg installation
+    - name: Copy SuiteSparse headers
       run: |
-        echo "Checking SuiteSparse installation..."
-        dir "vcpkg/installed/x64-windows/include" -Recurse -Filter *cholmod*
-        echo "Available headers in include directory:"
-        dir "vcpkg/installed/x64-windows/include" -Name | Select-Object -First 20
+        # Copy required headers to where the build expects them
+        Copy-Item "vcpkg/installed/x64-windows/include/cholmod.h" "include/" -ErrorAction SilentlyContinue
+        Copy-Item "vcpkg/installed/x64-windows/include/amd.h" "include/" -ErrorAction SilentlyContinue
+        Copy-Item "vcpkg/installed/x64-windows/include/colamd.h" "include/" -ErrorAction SilentlyContinue
+        echo "Copied SuiteSparse headers"
 
-    - name: Fix the cholmod.h include in source code
+    - name: Fix CMake minimum version
       run: |
-        # Fix the Common.h file to find cholmod.h in the correct location
-        $commonHeader = "include/bff/linear-algebra/Common.h"
-        if (Test-Path $commonHeader) {
-            $content = Get-Content $commonHeader -Raw
-            
-            # Replace the simple include with a more robust version
-            $newInclude = @'
-#pragma once
+        (Get-Content CMakeLists.txt) -replace 'cmake_minimum_required\(.*\)', 'cmake_minimum_required(VERSION 3.5)' | Set-Content CMakeLists.txt
 
-// Try to find cholmod.h in various possible locations
-#if __has_include("cholmod.h")
-    #include "cholmod.h"
-#elif __has_include("suitesparse/cholmod.h")
-    #include "suitesparse/cholmod.h" 
-#else
-    // If not found with has_include, try direct paths for CI
-    #ifdef _MSC_VER
-        #include "../../vcpkg/installed/x64-windows/include/cholmod.h"
-    #else
-        #error "Cannot find cholmod.h. Please ensure SuiteSparse is installed."
-    #endif
-#endif
-
-#include "Eigen/Dense"
-#include "Eigen/SparseCore"
-'@
-            $newInclude | Set-Content $commonHeader
-            echo "Fixed Common.h to handle cholmod.h location"
-        }
-
-    - name: Fix CMakeLists.txt
+    - name: Build
       run: |
-        if (Test-Path "CMakeLists.txt") {
-            $content = Get-Content CMakeLists.txt -Raw
-            $content = $content -replace 'cmake_minimum_required\(.*\)', 'cmake_minimum_required(VERSION 3.5)'
-            $content | Set-Content CMakeLists.txt
-        }
-
-    - name: Modify FindSuiteSparse.cmake to be less strict
-      run: |
-        if (Test-Path "cmake/FindSuiteSparse.cmake") {
-            $content = Get-Content "cmake/FindSuiteSparse.cmake" -Raw
-            # Comment out the fatal error
-            $content = $content -replace 'MESSAGE\(FATAL_ERROR "SuiteSparse required but some headers or libs not found."\)', '# MESSAGE(FATAL_ERROR "SuiteSparse required but some headers or libs not found.")'
-            # Force SuiteSparse to be found
-            $content = $content -replace 'SET\(SuiteSparse_FOUND FALSE\)', 'SET(SuiteSparse_FOUND TRUE)'
-            $content | Set-Content "cmake/FindSuiteSparse.cmake"
-        }
-
-    - name: Configure with explicit include paths
-      run: |
-        $VcpkgDir = "$pwd/vcpkg/installed/x64-windows" -replace '\\', '/'
-        
         mkdir build
         cd build
-        
-        # Configure with explicit include directories
-        cmake .. `
-          -DCMAKE_TOOLCHAIN_FILE=../vcpkg/scripts/buildsystems/vcpkg.cmake `
-          -DCMAKE_BUILD_TYPE=Release `
-          -DCMAKE_CXX_FLAGS="/I$VcpkgDir/include" `
-          -DCMAKE_C_FLAGS="/I$VcpkgDir/include" `
-          -G "Visual Studio 17 2022" -A x64
-
-    - name: Build BFF command line tool
-      run: |
-        cd build
+        cmake .. -DCMAKE_TOOLCHAIN_FILE=../vcpkg/scripts/buildsystems/vcpkg.cmake -DCMAKE_BUILD_TYPE=Release -G "Visual Studio 17 2022" -A x64
         cmake --build . --config Release --target bff-command-line --parallel
 
-    - name: Collect binaries
-      run: |
-        mkdir dist
-        
-        # Find the executable
-        Get-ChildItem -Path build -Recurse -Filter bff-command-line.exe | ForEach-Object {
-            Copy-Item $_.FullName "dist/"
-            echo "✓ Found: $($_.FullName)"
-        }
-        
-        # Copy required DLLs
-        if (Test-Path "vcpkg/installed/x64-windows/bin") {
-            Copy-Item "vcpkg/installed/x64-windows/bin/*.dll" "dist/" -ErrorAction SilentlyContinue
-        }
-        
-        echo "Final artifacts:"
-        dir dist
-
-    - name: Upload artifacts
+    - name: Upload binary
       uses: actions/upload-artifact@v4
       with:
-        name: bff-command-line
-        path: dist/*
-        retention-days: 30
+        name: bff-windows
+        path: build/Release/bff-command-line.exe
