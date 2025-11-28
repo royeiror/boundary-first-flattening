@@ -15,89 +15,136 @@ jobs:
       with:
         submodules: recursive
 
-    - name: Remove SuiteSparse dependency completely
+    - name: Install build tools
       run: |
-        # Remove the problematic FindSuiteSparse.cmake file
-        if (Test-Path "cmake/FindSuiteSparse.cmake") {
-            Remove-Item "cmake/FindSuiteSparse.cmake" -Force
-            echo "Removed FindSuiteSparse.cmake"
-        }
-        
-        # Completely remove SuiteSparse requirement from CMakeLists.txt
-        if (Test-Path "CMakeLists.txt") {
-            $content = Get-Content "CMakeLists.txt" -Raw
-            # Remove the find_package line
-            $content = $content -replace 'find_package\(SuiteSparse REQUIRED\).*', ''
-            # Fix minimum version
-            $content = $content -replace 'cmake_minimum_required\(.*\)', 'cmake_minimum_required(VERSION 3.5)'
-            $content | Set-Content "CMakeLists.txt"
-            echo "Removed SuiteSparse requirement from CMakeLists.txt"
-        }
+        choco install cmake -y
+        choco install git -y
 
-    - name: Create comprehensive stub headers
+    - name: Clone and build SuiteSparse with Metis
       run: |
-        # Create a complete stub cholmod.h
-        echo "#pragma once" > include/cholmod.h
-        echo "// Stub cholmod.h for Windows compilation" >> include/cholmod.h
-        echo "typedef struct cholmod_common_struct {" >> include/cholmod.h
-        echo "    int print;" >> include/cholmod.h
-        echo "    int precise;" >> include/cholmod.h
-        echo "    int supernodal;" >> include/cholmod.h
-        echo "    int status;" >> include/cholmod.h
-        echo "} cholmod_common;" >> include/cholmod.h
-        echo "typedef struct cholmod_factor_struct* cholmod_factor;" >> include/cholmod.h
-        echo "typedef struct cholmod_dense_struct* cholmod_dense;" >> include/cholmod.h
-        echo "typedef struct cholmod_sparse_struct* cholmod_sparse;" >> include/cholmod.h
-        echo "#define CHOLMOD_MAIN_VERSION 5" >> include/cholmod.h
-        echo "#define CHOLMOD_SUB_VERSION 0" >> include/cholmod.h
-        echo "#define CHOLMOD_SUPERNODAL 1" >> include/cholmod.h
-        echo "#define CHOLMOD_NOT_INSTALLED (-1)" >> include/cholmod.h
-        echo "#define CHOLMOD_OUT_OF_MEMORY (-2)" >> include/cholmod.h
-        echo "#define CHOLMOD_TOO_LARGE (-3)" >> include/cholmod.h
-        echo "#define CHOLMOD_INVALID (-4)" >> include/cholmod.h
-        echo "#define CHOLMOD_GPU_PROBLEM (-5)" >> include/cholmod.h
-        echo "#define CHOLMOD_NOT_POSDEF (-6)" >> include/cholmod.h
-        echo "#define CHOLMOD_DSMALL (-7)" >> include/cholmod.h
-        echo "cholmod_common* cholmod_l_start(int*);" >> include/cholmod.h
-        echo "int cholmod_l_finish(cholmod_common*);" >> include/cholmod.h
+        # Clone the Windows-specific SuiteSparse
+        git clone https://github.com/jlblancoc/suitesparse-metis-for-windows.git SuiteSparseWin
+        cd SuiteSparseWin
         
-        # Create stub amd.h
-        echo "#pragma once" > include/amd.h
-        echo "#define AMD_VERSION 0" >> include/amd.h
-        
-        # Create stub suitesparseconfig.h
-        echo "#pragma once" > include/suitesparseconfig.h
-        echo "#define SUITESPARSE_VERSION 0" >> include/suitesparseconfig.h
-        
-        # Create stub cblas.h (for the BLAS dependency)
-        echo "#pragma once" > include/cblas.h
-        echo "// Stub cblas.h" >> include/cblas.h
-        
-        echo "Created all stub headers"
-
-    - name: Build BFF directly
-      run: |
+        echo "=== Building SuiteSparse with Metis ==="
         mkdir build
         cd build
-        cmake .. -DCMAKE_BUILD_TYPE=Release -G "Visual Studio 17 2022" -A x64 -Wno-dev
-        cmake --build . --config Release --target bff-command-line --parallel
+        
+        # Build SuiteSparse as per the instructions
+        cmake .. -DCMAKE_INSTALL_PREFIX="$pwd/install" -DCMAKE_BUILD_TYPE=Release -G "Visual Studio 17 2022" -A x64
+        cmake --build . --config Release --target install --parallel
+        
+        echo "=== SuiteSparse build completed ==="
+        echo "=== Include files ==="
+        dir install/include -Recurse
+        echo "=== Library files ==="
+        dir install/lib -Filter *.lib
 
-    - name: Check for built executable
+    - name: Verify OpenBLAS in repository
       run: |
-        echo "=== Searching for built executables ==="
-        Get-ChildItem -Path "build" -Recurse -Filter *.exe | ForEach-Object {
-            echo "Found: $($_.FullName)"
-            # Test if it runs
-            try {
-                & $_.FullName --help
-                echo "✓ Executable runs successfully"
-            } catch {
-                echo "⚠ Executable exists but may have dependency issues"
-            }
+        echo "=== Checking for OpenBLAS in deps ==="
+        if (Test-Path "deps/openblas-windows") {
+            dir deps/openblas-windows -Recurse
+        } else {
+            echo "ERROR: OpenBLAS not found in deps/openblas-windows"
+            echo "The repository should include OpenBLAS as mentioned in the build instructions"
+            exit 1
         }
 
-    - name: Upload binary
+    - name: Configure BFF with correct SuiteSparse paths
+      run: |
+        $SuiteSparseDir = "$pwd/SuiteSparseWin/build/install"
+        $OpenBLASDir = "$pwd/deps/openblas-windows"
+        
+        echo "SuiteSparse directory: $SuiteSparseDir"
+        echo "OpenBLAS directory: $OpenBLASDir"
+        
+        # Verify critical files exist
+        if (-not (Test-Path "$SuiteSparseDir/include/suitesparse/cholmod.h")) {
+            echo "ERROR: cholmod.h not found at expected location"
+            dir "$SuiteSparseDir/include" -Recurse
+            exit 1
+        }
+        
+        if (-not (Test-Path "$OpenBLASDir/lib/libopenblas.lib")) {
+            echo "ERROR: libopenblas.lib not found at expected location"
+            dir "$OpenBLASDir/lib" -Recurse
+            exit 1
+        }
+        
+        mkdir build
+        cd build
+        
+        # Configure BFF with all required paths as per the Windows instructions
+        cmake .. `
+          -DCMAKE_BUILD_TYPE=Release `
+          -DSuiteSparse_DIR="$SuiteSparseDir/lib" `
+          -DSuiteSparse_CHOLMOD_DIR="$SuiteSparseDir/lib" `
+          -DSuiteSparse_CHOLMOD_INCLUDE_DIR="$SuiteSparseDir/include/suitesparse" `
+          -DSuiteSparse_CHOLMOD_LIBRARY_RELEASE="$SuiteSparseDir/lib/libcholmod.lib" `
+          -DSuiteSparse_AMD_LIBRARY_RELEASE="$SuiteSparseDir/lib/libamd.lib" `
+          -DSuiteSparse_CAMD_LIBRARY_RELEASE="$SuiteSparseDir/lib/libcamd.lib" `
+          -DSuiteSparse_CCOLAMD_LIBRARY_RELEASE="$SuiteSparseDir/lib/libccolamd.lib" `
+          -DSuiteSparse_COLAMD_LIBRARY_RELEASE="$SuiteSparseDir/lib/libcolamd.lib" `
+          -DSuiteSparse_BTF_LIBRARY_RELEASE="$SuiteSparseDir/lib/libbtf.lib" `
+          -DSuiteSparse_KLU_LIBRARY_RELEASE="$SuiteSparseDir/lib/libklu.lib" `
+          -DSuiteSparse_UMFPACK_LIBRARY_RELEASE="$SuiteSparseDir/lib/libumfpack.lib" `
+          -DSuiteSparse_CXSPARSE_LIBRARY_RELEASE="$SuiteSparseDir/lib/libcxsparse.lib" `
+          -DSuiteSparse_SUITESPARSECONFIG_LIBRARY_RELEASE="$SuiteSparseDir/lib/libsuitesparseconfig.lib" `
+          -DSuiteSparse_BLAS_LIBRARY="$OpenBLASDir/lib/libopenblas.lib" `
+          -DSuiteSparse_LAPACK_LIBRARY="$OpenBLASDir/lib/libopenblas.lib" `
+          -G "Visual Studio 17 2022" -A x64
+
+    - name: Build BFF command line tool
+      run: |
+        cd build
+        cmake --build . --config Release --target bff-command-line --parallel
+
+    - name: Copy required DLLs
+      run: |
+        # Copy SuiteSparse DLLs
+        if (Test-Path "SuiteSparseWin/build/install/bin") {
+            Copy-Item "SuiteSparseWin/build/install/bin/*.dll" "build/Release/" -ErrorAction SilentlyContinue
+            echo "Copied SuiteSparse DLLs"
+        }
+        
+        # Copy OpenBLAS DLLs
+        if (Test-Path "deps/openblas-windows/bin") {
+            Copy-Item "deps/openblas-windows/bin/*.dll" "build/Release/" -ErrorAction SilentlyContinue
+            echo "Copied OpenBLAS DLLs"
+        }
+
+    - name: Test the executable
+      run: |
+        if (Test-Path "build/Release/bff-command-line.exe") {
+            echo "=== Testing bff-command-line.exe ==="
+            cd build/Release
+            ./bff-command-line.exe --help || echo "Executable ran (may have exited with help message)"
+        } else {
+            echo "ERROR: bff-command-line.exe not found"
+            dir build -Recurse -Filter *.exe
+        }
+
+    - name: Package and upload artifacts
+      run: |
+        mkdir dist
+        
+        # Copy the main executable
+        if (Test-Path "build/Release/bff-command-line.exe") {
+            Copy-Item "build/Release/bff-command-line.exe" "dist/"
+            echo "✓ Copied bff-command-line.exe"
+        }
+        
+        # Copy all DLLs
+        Copy-Item "build/Release/*.dll" "dist/" -ErrorAction SilentlyContinue
+        echo "✓ Copied DLLs"
+        
+        echo "=== Final distribution package ==="
+        dir dist
+
+    - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: bff-windows-command-line
-        path: build/Release/bff-command-line.exe
+        name: bff-windows-binary
+        path: dist/*
+        retention-days: 30
