@@ -1,166 +1,43 @@
-name: Build BFF Windows Binary
+name: Build BFF Manual
 
-on: 
-  push:
-    tags: ['v*']
-  workflow_dispatch:
+on: workflow_dispatch
 
 jobs:
   build:
     runs-on: windows-latest
     
     steps:
-    - name: Checkout repository
+    - name: Checkout
       uses: actions/checkout@v4
       with:
         submodules: recursive
 
-    - name: Setup vcpkg
+    - name: Install build tools
       run: |
-        git clone https://github.com/Microsoft/vcpkg.git
-        cd vcpkg
-        .\bootstrap-vcpkg.bat
-        .\vcpkg install suitesparse openblas eigen3 --triplet x64-windows
+        choco install cmake -y
 
-    - name: Check what vcpkg installed
+    - name: Use provided dependencies
       run: |
-        echo "=== vcpkg include directory ==="
-        dir "vcpkg\installed\x64-windows\include" -Recurse | Select-Object -First 30
-        echo "=== vcpkg lib directory ==="
-        dir "vcpkg\installed\x64-windows\lib" -Filter *.lib | Select-Object -First 20
-
-    - name: Copy SuiteSparse headers to include directory
-      run: |
-        # Copy all SuiteSparse headers to the main include directory
-        $sourceDir = "vcpkg\installed\x64-windows\include"
-        $destDir = "include"
-        
-        # Copy from main include directory
-        if (Test-Path $sourceDir) {
-            Get-ChildItem "$sourceDir\*.h" | ForEach-Object {
-                Copy-Item $_.FullName $destDir -ErrorAction SilentlyContinue
-                echo "Copied: $($_.Name)"
-            }
-        }
-        
-        # Copy from suitesparse subdirectory if it exists
-        if (Test-Path "$sourceDir\suitesparse") {
-            Get-ChildItem "$sourceDir\suitesparse\*.h" | ForEach-Object {
-                Copy-Item $_.FullName $destDir -ErrorAction SilentlyContinue
-                echo "Copied from suitesparse: $($_.Name)"
-            }
-        }
-        
-        echo "Final include directory contents:"
-        dir $destDir -Filter *.h | Select-Object -First 20
-
-    - name: Completely disable SuiteSparse check
-      run: |
-        # Remove or rename the problematic FindSuiteSparse.cmake file
-        if (Test-Path "cmake/FindSuiteSparse.cmake") {
-            Remove-Item "cmake/FindSuiteSparse.cmake" -Force
-            echo "Removed FindSuiteSparse.cmake"
-        }
-        
-        # Modify CMakeLists.txt to remove SuiteSparse requirement
-        if (Test-Path "CMakeLists.txt") {
-            $content = Get-Content "CMakeLists.txt" -Raw
-            # Fix minimum version
-            $content = $content -replace 'cmake_minimum_required\(.*\)', 'cmake_minimum_required(VERSION 3.5)'
-            # Remove SuiteSparse requirement
-            $content = $content -replace 'find_package\(SuiteSparse REQUIRED\)', '# find_package(SuiteSparse REQUIRED)'
-            $content | Set-Content "CMakeLists.txt"
-            echo "Modified CMakeLists.txt to remove SuiteSparse requirement"
+        echo "=== Using dependencies from repository ==="
+        if (Test-Path "deps") {
+            dir "deps" -Recurse
         }
 
-    - name: Create a simple CMake file for manual linking
+    - name: Simple direct build
       run: |
-        # Create a simple CMake file that manually links the libraries
-        $simpleCmake = @'
-cmake_minimum_required(VERSION 3.5)
-project(bff)
-
-# Set C++ standard
-set(CMAKE_CXX_STANDARD 11)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-
-# Include directories
-include_directories(include)
-include_directories(deps/libigl/include)
-include_directories(deps/eigen)
-
-# Add subdirectories
-add_subdirectory(src)
-
-# Create command line executable
-add_executable(bff-command-line src/command-line/main.cpp)
-target_link_libraries(bff-command-line bff)
-
-# Manually link required libraries
-target_link_libraries(bff-command-line 
-    ${CMAKE_SOURCE_DIR}/vcpkg/installed/x64-windows/lib/cholmod.lib
-    ${CMAKE_SOURCE_DIR}/vcpkg/installed/x64-windows/lib/amd.lib
-    ${CMAKE_SOURCE_DIR}/vcpkg/installed/x64-windows/lib/camd.lib
-    ${CMAKE_SOURCE_DIR}/vcpkg/installed/x64-windows/lib/ccolamd.lib
-    ${CMAKE_SOURCE_DIR}/vcpkg/installed/x64-windows/lib/colamd.lib
-    ${CMAKE_SOURCE_DIR}/vcpkg/installed/x64-windows/lib/suitesparseconfig.lib
-    ${CMAKE_SOURCE_DIR}/vcpkg/installed/x64-windows/lib/openblas.lib
-)
-'@
-        $simpleCmake | Set-Content "CMakeLists-simple.txt"
-        echo "Created simplified CMakeLists-simple.txt"
-
-    - name: Configure with simplified CMake
-      run: |
+        # Fix CMake minimum version
+        (Get-Content CMakeLists.txt) -replace 'cmake_minimum_required\(.*\)', 'cmake_minimum_required(VERSION 3.5)' | Set-Content CMakeLists.txt
+        
+        # Remove SuiteSparse requirement
+        (Get-Content CMakeLists.txt) -replace 'find_package\(SuiteSparse REQUIRED\)', '# find_package(SuiteSparse)' | Set-Content CMakeLists.txt
+        
         mkdir build
         cd build
-        
-        # Use the vcpkg toolchain with the correct relative path
-        cmake .. -DCMAKE_TOOLCHAIN_FILE=../vcpkg/scripts/buildsystems/vcpkg.cmake -DCMAKE_BUILD_TYPE=Release -G "Visual Studio 17 2022" -A x64
+        cmake .. -DCMAKE_BUILD_TYPE=Release -G "Visual Studio 17 2022" -A x64 -Wno-dev
+        cmake --build . --config Release --target bff-command-line
 
-    - name: Build BFF command line tool
-      run: |
-        cd build
-        cmake --build . --config Release --target bff-command-line --parallel
-
-    - name: Check if build succeeded
-      run: |
-        echo "=== Build directory contents ==="
-        dir "build" -Recurse -Filter *.exe
-        dir "build" -Recurse -Filter *.dll
-
-    - name: Collect and package binaries
-      run: |
-        mkdir dist
-        
-        # Find and copy the executable
-        $exeFound = $false
-        Get-ChildItem -Path "build" -Recurse -Filter "bff-command-line.exe" | ForEach-Object {
-            Copy-Item $_.FullName "dist\"
-            echo "✓ Found executable: $($_.FullName)"
-            $exeFound = $true
-        }
-        
-        if (-not $exeFound) {
-            echo "bff-command-line.exe not found. All executables:"
-            Get-ChildItem -Path "build" -Recurse -Filter "*.exe" | ForEach-Object {
-                echo "Found: $($_.FullName)"
-                Copy-Item $_.FullName "dist\" -ErrorAction SilentlyContinue
-            }
-        }
-        
-        # Copy required DLLs
-        if (Test-Path "vcpkg/installed/x64-windows/bin") {
-            Copy-Item "vcpkg/installed/x64-windows/bin/*.dll" "dist/" -ErrorAction SilentlyContinue
-            echo "Copied DLLs from vcpkg"
-        }
-        
-        echo "=== Final dist contents ==="
-        dir "dist" -Recurse
-
-    - name: Upload artifacts
+    - name: Upload result
       uses: actions/upload-artifact@v4
       with:
-        name: bff-windows-binary
-        path: dist/*
-        retention-days: 30
+        name: bff-simple
+        path: build/Release/bff-command-line.exe
