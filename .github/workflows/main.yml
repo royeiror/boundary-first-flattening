@@ -59,33 +59,32 @@ jobs:
 
     - name: Create a simple override CMakeLists.txt
       run: |
-        # Create a simple CMakeLists that handles dependencies manually
-        $simpleCmake = @'
-cmake_minimum_required(VERSION 3.5)
-project(bff)
-
-# Set C++ standard
-set(CMAKE_CXX_STANDARD 11)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-
-# Include directories
-include_directories(include)
-include_directories(deps/libigl/include)
-include_directories(deps/eigen)
-
-# Add subdirectories but skip SuiteSparse checks
-add_subdirectory(deps/nanogui)
-add_subdirectory(deps/glm/glm)
-add_subdirectory(src)
-
-# Create command line executable
-add_executable(bff-command-line src/command-line/main.cpp)
-target_link_libraries(bff-command-line bff nanogui)
-
-# Add compiler definitions that might be needed
-target_compile_definitions(bff-command-line PRIVATE NOMINMAX)
-target_compile_definitions(bff PRIVATE NOMINMAX)
-'@
+        # Create the simplified CMakeLists content
+        $simpleCmake = 'cmake_minimum_required(VERSION 3.5)' + "`n" +
+        'project(bff)' + "`n" +
+        "`n" +
+        '# Set C++ standard' + "`n" +
+        'set(CMAKE_CXX_STANDARD 11)' + "`n" +
+        'set(CMAKE_CXX_STANDARD_REQUIRED ON)' + "`n" +
+        "`n" +
+        '# Include directories' + "`n" +
+        'include_directories(include)' + "`n" +
+        'include_directories(deps/libigl/include)' + "`n" +
+        'include_directories(deps/eigen)' + "`n" +
+        "`n" +
+        '# Add subdirectories but skip SuiteSparse checks' + "`n" +
+        'add_subdirectory(deps/nanogui)' + "`n" +
+        'add_subdirectory(deps/glm/glm)' + "`n" +
+        'add_subdirectory(src)' + "`n" +
+        "`n" +
+        '# Create command line executable' + "`n" +
+        'add_executable(bff-command-line src/command-line/main.cpp)' + "`n" +
+        'target_link_libraries(bff-command-line bff nanogui)' + "`n" +
+        "`n" +
+        '# Add compiler definitions that might be needed' + "`n" +
+        'target_compile_definitions(bff-command-line PRIVATE NOMINMAX)' + "`n" +
+        'target_compile_definitions(bff PRIVATE NOMINMAX)'
+        
         $simpleCmake | Set-Content "CMakeLists-simple.txt"
         echo "Created simplified CMakeLists-simple.txt"
 
