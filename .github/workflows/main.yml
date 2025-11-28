@@ -1,9 +1,6 @@
-name: Build BFF Windows Binary
+name: Build BFF with Pre-built SuiteSparse
 
-on: 
-  push:
-    tags: ['v*']
-  workflow_dispatch:
+on: workflow_dispatch
 
 jobs:
   build:
@@ -15,105 +12,56 @@ jobs:
       with:
         submodules: recursive
 
-    - name: Clone and build SuiteSparse for Windows
+    - name: Download pre-built SuiteSparse
       run: |
-        # Clone the Windows-specific SuiteSparse
-        git clone https://github.com/jlblancoc/suitesparse-metis-for-windows.git SuiteSparseWin
-        cd SuiteSparseWin
-        
-        echo "Building SuiteSparse for Windows..."
-        # Build using the provided scripts
-        mkdir build
-        cd build
-        cmake .. -DCMAKE_BUILD_TYPE=Release -G "Visual Studio 17 2022" -A x64
-        cmake --build . --config Release --target install --parallel
-        
-        echo "SuiteSparse build completed"
-        dir install -Recurse
-
-    - name: Setup OpenBLAS from repository deps
-      run: |
-        # Use the OpenBLAS provided in the BFF repository
-        if (Test-Path "deps/openblas-windows") {
-            echo "Using OpenBLAS from deps folder"
-            dir deps/openblas-windows -Recurse
+        # Try to find or download pre-built SuiteSparse for Windows
+        # This is a placeholder - you might need to host pre-built binaries
+        echo "Looking for pre-built SuiteSparse..."
+        if (Test-Path "deps/suitesparse") {
+            echo "Using SuiteSparse from deps folder"
+            dir deps/suitesparse -Recurse
         } else {
-            echo "WARNING: OpenBLAS not found in deps, trying to download"
-            # Download OpenBLAS as fallback
-            mkdir deps/openblas-windows
-            mkdir deps/openblas-windows/lib
-            mkdir deps/openblas-windows/include
-            # We'll rely on the build to find it or use the one from SuiteSparse
+            echo "No pre-built SuiteSparse found, the build may fail"
+            # Create minimal structure to avoid CMake errors
+            mkdir deps/suitesparse
+            mkdir deps/suitesparse/lib
+            mkdir deps/suitesparse/include
         }
 
-    - name: Fix CMakeLists.txt
+    - name: Use repository dependencies
       run: |
-        # Fix minimum version
-        (Get-Content CMakeLists.txt) -replace 'cmake_minimum_required\(.*\)', 'cmake_minimum_required(VERSION 3.5)' | Set-Content CMakeLists.txt
+        echo "=== Available dependencies ==="
+        if (Test-Path "deps") {
+            dir deps -Recurse
+        }
 
-    - name: Configure BFF with correct paths
+    - name: Build with local dependencies only
       run: |
-        $SuiteSparseDir = "$pwd/SuiteSparseWin/build/install"
-        $OpenBLASDir = "$pwd/deps/openblas-windows"
-        
-        echo "SuiteSparse directory: $SuiteSparseDir"
-        echo "OpenBLAS directory: $OpenBLASDir"
+        # Fix CMake
+        (Get-Content CMakeLists.txt) -replace 'cmake_minimum_required\(.*\)', 'cmake_minimum_required(VERSION 3.5)' | Set-Content CMakeLists.txt
         
         mkdir build
         cd build
         
-        # Configure with all required SuiteSparse paths as per the Windows instructions
-        cmake .. `
-          -DCMAKE_BUILD_TYPE=Release `
-          -DSuiteSparse_CHOLMOD_DIR="$SuiteSparseDir/lib" `
-          -DSuiteSparse_CHOLMOD_INCLUDE_DIR="$SuiteSparseDir/include/suitesparse" `
-          -DSuiteSparse_CHOLMOD_LIBRARY_DEBUG="$SuiteSparseDir/lib/libcholmod.lib" `
-          -DSuiteSparse_CHOLMOD_LIBRARY_RELEASE="$SuiteSparseDir/lib/libcholmod.lib" `
-          -DSuiteSparse_AMD_LIBRARY_RELEASE="$SuiteSparseDir/lib/libamd.lib" `
-          -DSuiteSparse_CAMD_LIBRARY_RELEASE="$SuiteSparseDir/lib/libcamd.lib" `
-          -DSuiteSparse_CCOLAMD_LIBRARY_RELEASE="$SuiteSparseDir/lib/libccolamd.lib" `
-          -DSuiteSparse_COLAMD_LIBRARY_RELEASE="$SuiteSparseDir/lib/libcolamd.lib" `
-          -DSuiteSparse_BTF_LIBRARY_RELEASE="$SuiteSparseDir/lib/libbtf.lib" `
-          -DSuiteSparse_KLU_LIBRARY_RELEASE="$SuiteSparseDir/lib/libklu.lib" `
-          -DSuiteSparse_UMFPACK_LIBRARY_RELEASE="$SuiteSparseDir/lib/libumfpack.lib" `
-          -DSuiteSparse_CXSPARSE_LIBRARY_RELEASE="$SuiteSparseDir/lib/libcxsparse.lib" `
-          -DSuiteSparse_SUITESPARSECONFIG_LIBRARY_RELEASE="$SuiteSparseDir/lib/libsuitesparseconfig.lib" `
-          -DSuiteSparse_BLAS_LIBRARY="$OpenBLASDir/lib/libopenblas.lib" `
-          -DSuiteSparse_LAPACK_LIBRARY="$OpenBLASDir/lib/libopenblas.lib" `
-          -G "Visual Studio 17 2022" -A x64
+        # Try to build with whatever dependencies are available
+        cmake .. -DCMAKE_BUILD_TYPE=Release -G "Visual Studio 17 2022" -A x64 -Wno-dev
+        
+        # Build whatever targets are available
+        cmake --build . --config Release --parallel
 
-    - name: Build BFF command line tool
+    - name: Find any built executables
       run: |
-        cd build
-        cmake --build . --config Release --target bff-command-line --parallel
-
-    - name: Copy required DLLs
-      run: |
-        # Copy SuiteSparse DLLs to build directory
-        if (Test-Path "SuiteSparseWin/build/install/bin") {
-            Copy-Item "SuiteSparseWin/build/install/bin/*.dll" "build/Release/" -ErrorAction SilentlyContinue
-            echo "Copied SuiteSparse DLLs"
+        echo "=== All built executables ==="
+        Get-ChildItem -Path "build" -Recurse -Filter *.exe | ForEach-Object {
+            echo "Found: $($_.FullName)"
+            # Copy to a common location
+            mkdir artifacts -Force
+            Copy-Item $_.FullName "artifacts/"
         }
 
-    - name: Collect binaries
-      run: |
-        mkdir dist
-        
-        # Find and copy the executable
-        Get-ChildItem -Path "build" -Recurse -Filter "bff-command-line.exe" | ForEach-Object {
-            Copy-Item $_.FullName "dist/"
-            echo "✓ Found: $($_.FullName)"
-        }
-        
-        # Copy DLLs
-        Copy-Item "build/Release/*.dll" "dist/" -ErrorAction SilentlyContinue
-        
-        echo "Final artifacts:"
-        dir dist
-
-    - name: Upload artifacts
+    - name: Upload any results
       uses: actions/upload-artifact@v4
       with:
-        name: bff-windows-binary
-        path: dist/*
-        retention-days: 30
+        name: bff-build-attempt
+        path: artifacts/*
+        retention-days: 5
