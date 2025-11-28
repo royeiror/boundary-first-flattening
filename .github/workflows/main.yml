@@ -1,9 +1,6 @@
 name: Build BFF Windows Binary
 
-on: 
-  push:
-    tags: ['v*']
-  workflow_dispatch:
+on: workflow_dispatch
 
 jobs:
   build:
@@ -15,28 +12,27 @@ jobs:
       with:
         submodules: recursive
 
-    - name: Setup vcpkg for dependencies
-      run: |
-        git clone https://github.com/Microsoft/vcpkg.git
-        cd vcpkg
-        .\bootstrap-vcpkg.bat
-        .\vcpkg install suitesparse openblas eigen3 --triplet x64-windows
-
     - name: Create stub headers for SuiteSparse
       run: |
-        # Create minimal stub headers to allow compilation
-        echo "#pragma once" | Out-File -FilePath "include/cholmod.h" -Encoding utf8
-        echo "typedef struct cholmod_common_struct { int dummy; } cholmod_common;" | Out-File -FilePath "include/cholmod.h" -Append -Encoding utf8
-        echo "typedef void* cholmod_factor;" | Out-File -FilePath "include/cholmod.h" -Append -Encoding utf8
-        echo "typedef void* cholmod_dense;" | Out-File -FilePath "include/cholmod.h" -Append -Encoding utf8
-        echo "typedef void* cholmod_sparse;" | Out-File -FilePath "include/cholmod.h" -Append -Encoding utf8
-        echo "#define CHOLMOD_MAIN_VERSION 0" | Out-File -FilePath "include/cholmod.h" -Append -Encoding utf8
+        # Create stub cholmod.h using simple echo commands
+        echo "#pragma once" > include/cholmod.h
+        echo "// Stub cholmod.h for compilation" >> include/cholmod.h
+        echo "typedef struct cholmod_common_struct { int dummy; } cholmod_common;" >> include/cholmod.h
+        echo "typedef void* cholmod_factor;" >> include/cholmod.h
+        echo "typedef void* cholmod_dense;" >> include/cholmod.h
+        echo "typedef void* cholmod_sparse;" >> include/cholmod.h
+        echo "#define CHOLMOD_MAIN_VERSION 0" >> include/cholmod.h
+        echo "#define CHOLMOD_SUB_VERSION 0" >> include/cholmod.h
         
-        echo "#pragma once" | Out-File -FilePath "include/amd.h" -Encoding utf8
-        echo "#define AMD_VERSION 0" | Out-File -FilePath "include/amd.h" -Append -Encoding utf8
+        # Create stub amd.h
+        echo "#pragma once" > include/amd.h
+        echo "#define AMD_VERSION 0" >> include/amd.h
         
-        echo "#pragma once" | Out-File -FilePath "include/suitesparseconfig.h" -Encoding utf8
-        echo "#define SUITESPARSE_VERSION 0" | Out-File -FilePath "include/suitesparseconfig.h" -Append -Encoding utf8
+        # Create stub suitesparseconfig.h
+        echo "#pragma once" > include/suitesparseconfig.h
+        echo "#define SUITESPARSE_VERSION 0" >> include/suitesparseconfig.h
+        
+        echo "Created stub headers"
 
     - name: Fix CMake files
       run: |
@@ -54,15 +50,15 @@ jobs:
             Remove-Item "cmake/FindSuiteSparse.cmake" -Force
         }
 
-    - name: Build with vcpkg
+    - name: Build BFF
       run: |
         mkdir build
         cd build
-        cmake .. -DCMAKE_TOOLCHAIN_FILE=../vcpkg/scripts/buildsystems/vcpkg.cmake -DCMAKE_BUILD_TYPE=Release -G "Visual Studio 17 2022" -A x64
+        cmake .. -DCMAKE_BUILD_TYPE=Release -G "Visual Studio 17 2022" -A x64
         cmake --build . --config Release --target bff-command-line --parallel
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: bff-windows-binaries
+        name: bff-windows-binary
         path: build/Release/bff-command-line.exe
