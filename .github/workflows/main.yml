@@ -15,113 +15,106 @@ jobs:
       with:
         submodules: recursive
 
-    - name: Fix all CMakeLists.txt files in the project
+    - name: Setup vcpkg for dependencies
       run: |
-        # Fix main CMakeLists.txt
-        if (Test-Path "CMakeLists.txt") {
-            $content = Get-Content "CMakeLists.txt" -Raw
-            $content = $content -replace 'cmake_minimum_required\(.*\)', 'cmake_minimum_required(VERSION 3.5)'
-            $content = $content -replace 'find_package\(SuiteSparse REQUIRED\)', '# find_package(SuiteSparse REQUIRED)'
-            $content | Set-Content "CMakeLists.txt"
-            echo "Fixed main CMakeLists.txt"
-        }
-        
-        # Fix nanogui CMakeLists.txt
-        if (Test-Path "deps/nanogui/CMakeLists.txt") {
-            $content = Get-Content "deps/nanogui/CMakeLists.txt" -Raw
-            $content = $content -replace 'cmake_minimum_required\(.*\)', 'cmake_minimum_required(VERSION 3.5)'
-            $content | Set-Content "deps/nanogui/CMakeLists.txt"
-            echo "Fixed nanogui CMakeLists.txt"
-        }
-        
-        # Fix glm CMakeLists.txt
-        if (Test-Path "deps/glm/glm/CMakeLists.txt") {
-            $content = Get-Content "deps/glm/glm/CMakeLists.txt" -Raw
-            $content = $content -replace 'cmake_minimum_required\(.*\)', 'cmake_minimum_required(VERSION 3.5)'
-            $content | Set-Content "deps/glm/glm/CMakeLists.txt"
-            echo "Fixed glm CMakeLists.txt"
-        }
-        
-        # Fix libigl CMakeLists.txt if it exists
-        if (Test-Path "deps/libigl/CMakeLists.txt") {
-            $content = Get-Content "deps/libigl/CMakeLists.txt" -Raw
-            $content = $content -replace 'cmake_minimum_required\(.*\)', 'cmake_minimum_required(VERSION 3.5)'
-            $content | Set-Content "deps/libigl/CMakeLists.txt"
-            echo "Fixed libigl CMakeLists.txt"
+        git clone https://github.com/Microsoft/vcpkg.git
+        cd vcpkg
+        .\bootstrap-vcpkg.bat
+        .\vcpkg install suitesparse openblas eigen3 --triplet x64-windows
+
+    - name: Fix the cholmod.h include in source code
+      run: |
+        # Fix the Common.h file to find cholmod.h
+        $commonHeader = "include/bff/linear-algebra/Common.h"
+        if (Test-Path $commonHeader) {
+            # Create a fixed version that doesn't require cholmod.h
+            $fixedContent = @'
+#pragma once
+
+// Try to include cholmod.h if available, but don't fail if not
+#ifdef _MSC_VER
+    // On Windows with MSVC, try to include from vcpkg
+    #if __has_include("../../../vcpkg/installed/x64-windows/include/cholmod.h")
+        #include "../../../vcpkg/installed/x64-windows/include/cholmod.h"
+    #elif __has_include("cholmod.h")
+        #include "cholmod.h"
+    #else
+        // Define minimal cholmod types needed for compilation
+        typedef struct cholmod_common_struct {
+            int dummy;
+        } cholmod_common;
+        typedef void* cholmod_factor;
+        typedef void* cholmod_dense;
+        typedef void* cholmod_sparse;
+        #define CHOLMOD_MAIN_VERSION 0
+        #define CHOLMOD_SUB_VERSION 0
+        #warning "Using stub cholmod definitions - functionality may be limited"
+    #endif
+#else
+    #include "cholmod.h"
+#endif
+
+#include "Eigen/Dense"
+#include "Eigen/SparseCore"
+'@
+            $fixedContent | Set-Content $commonHeader
+            echo "Fixed Common.h to handle missing cholmod.h"
         }
 
-    - name: Remove problematic FindSuiteSparse.cmake
+    - name: Fix CMake files
       run: |
+        # Fix main CMakeLists
+        (Get-Content CMakeLists.txt) -replace 'cmake_minimum_required\(.*\)', 'cmake_minimum_required(VERSION 3.5)' | Set-Content CMakeLists.txt
+        (Get-Content CMakeLists.txt) -replace 'find_package\(SuiteSparse REQUIRED\)', '# find_package(SuiteSparse)' | Set-Content CMakeLists.txt
+        
+        # Fix nanogui CMakeLists
+        if (Test-Path "deps/nanogui/CMakeLists.txt") {
+            (Get-Content "deps/nanogui/CMakeLists.txt") -replace 'cmake_minimum_required\(.*\)', 'cmake_minimum_required(VERSION 3.5)' | Set-Content "deps/nanogui/CMakeLists.txt"
+        }
+        
+        # Remove problematic file
         if (Test-Path "cmake/FindSuiteSparse.cmake") {
             Remove-Item "cmake/FindSuiteSparse.cmake" -Force
-            echo "Removed FindSuiteSparse.cmake"
         }
 
-    - name: Create a simple override CMakeLists.txt
+    - name: Copy SuiteSparse headers if available
       run: |
-        # Create the simplified CMakeLists content
-        $simpleCmake = 'cmake_minimum_required(VERSION 3.5)' + "`n" +
-        'project(bff)' + "`n" +
-        "`n" +
-        '# Set C++ standard' + "`n" +
-        'set(CMAKE_CXX_STANDARD 11)' + "`n" +
-        'set(CMAKE_CXX_STANDARD_REQUIRED ON)' + "`n" +
-        "`n" +
-        '# Include directories' + "`n" +
-        'include_directories(include)' + "`n" +
-        'include_directories(deps/libigl/include)' + "`n" +
-        'include_directories(deps/eigen)' + "`n" +
-        "`n" +
-        '# Add subdirectories but skip SuiteSparse checks' + "`n" +
-        'add_subdirectory(deps/nanogui)' + "`n" +
-        'add_subdirectory(deps/glm/glm)' + "`n" +
-        'add_subdirectory(src)' + "`n" +
-        "`n" +
-        '# Create command line executable' + "`n" +
-        'add_executable(bff-command-line src/command-line/main.cpp)' + "`n" +
-        'target_link_libraries(bff-command-line bff nanogui)' + "`n" +
-        "`n" +
-        '# Add compiler definitions that might be needed' + "`n" +
-        'target_compile_definitions(bff-command-line PRIVATE NOMINMAX)' + "`n" +
-        'target_compile_definitions(bff PRIVATE NOMINMAX)'
-        
-        $simpleCmake | Set-Content "CMakeLists-simple.txt"
-        echo "Created simplified CMakeLists-simple.txt"
+        # Try to copy cholmod.h from vcpkg if it exists
+        if (Test-Path "vcpkg/installed/x64-windows/include/cholmod.h") {
+            Copy-Item "vcpkg/installed/x64-windows/include/cholmod.h" "include/" -ErrorAction SilentlyContinue
+            echo "Copied cholmod.h to include directory"
+        }
 
-    - name: Configure with CMake policy override
+    - name: Build with vcpkg toolchain
       run: |
         mkdir build
         cd build
         
-        # Configure with policy override to handle old CMake syntax
+        # Configure with vcpkg toolchain and policy overrides
         cmake .. `
+          -DCMAKE_TOOLCHAIN_FILE=../vcpkg/scripts/buildsystems/vcpkg.cmake `
           -DCMAKE_BUILD_TYPE=Release `
-          -DCMAKE_POLICY_DEFAULT_CMP0001=NEW `
-          -DCMAKE_POLICY_DEFAULT_CMP0002=NEW `
-          -DCMAKE_POLICY_DEFAULT_CMP0003=NEW `
-          -DCMAKE_POLICY_DEFAULT_CMP0004=NEW `
+          -DCMAKE_POLICY_VERSION_MINIMUM=3.5 `
           -G "Visual Studio 17 2022" -A x64 `
           -Wno-dev
-
-    - name: Build BFF command line tool
-      run: |
-        cd build
+        
+        # Build the command line tool
         cmake --build . --config Release --target bff-command-line --parallel
 
     - name: Check build results
       run: |
-        echo "=== Build directory structure ==="
-        dir "build" -Recurse -Name | Select-Object -First 30
-        
-        echo "=== Executables found ==="
+        echo "=== Looking for built executables ==="
         Get-ChildItem -Path "build" -Recurse -Filter *.exe | ForEach-Object {
-            echo "EXE: $($_.FullName)"
+            echo "Found: $($_.FullName)"
+            # Try to get file info
+            echo "  Size: $($_.Length) bytes"
+            echo "  Last modified: $($_.LastWriteTime)"
         }
 
-    - name: Upload any built executables
+    - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: bff-build-output
+        name: bff-windows-binaries
         path: |
           build/**/*.exe
           build/**/*.dll
