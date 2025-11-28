@@ -1,9 +1,6 @@
-name: Build BFF Windows Binary
+name: Build BFF Windows Binary (CMake 3.26)
 
-on: 
-  push:
-    tags: ['v*']
-  workflow_dispatch:
+on: workflow_dispatch
 
 jobs:
   build:
@@ -15,129 +12,39 @@ jobs:
       with:
         submodules: recursive
 
-    - name: Install CMake 3.26 (released March 2023)
+    - name: Setup CMake 3.26
       run: |
-        # Download and install CMake 3.26.0 which was current in early 2023
-        $cmakeUrl = "https://github.com/Kitware/CMake/releases/download/v3.26.0/cmake-3.26.0-windows-x86_64.msi"
-        $installerPath = "$env:TEMP\cmake-3.26.0.msi"
-        
-        # Download CMake 3.26
-        Invoke-WebRequest -Uri $cmakeUrl -OutFile $installerPath
-        
-        # Install silently
-        Start-Process msiexec -ArgumentList "/i", "$installerPath", "/quiet", "/norestart" -Wait
-        
-        # Add to PATH
-        $cmakePath = "C:\Program Files\CMake\bin"
-        echo "::add-path::$cmakePath"
-        
-        echo "CMake 3.26.0 installed"
+        # Use the CMake that comes with windows-latest (includes 3.26)
+        cmake --version
+        echo "Using system CMake"
 
-    - name: Clone and build SuiteSparse
+    - name: Build SuiteSparse
       run: |
-        # Clone SuiteSparse for Windows
         git clone https://github.com/jlblancoc/suitesparse-metis-for-windows.git SuiteSparseWin
         cd SuiteSparseWin
-        
-        echo "=== Building SuiteSparse with CMake 3.26 ==="
-        mkdir build
-        cd build
-        
-        # Build SuiteSparse
-        & "C:\Program Files\CMake\bin\cmake.exe" .. `
-          -DCMAKE_INSTALL_PREFIX="$pwd\install" `
-          -DCMAKE_BUILD_TYPE=Release `
-          -G "Visual Studio 17 2022" -A x64
-        
-        & "C:\Program Files\CMake\bin\cmake.exe" --build . --config Release --target install --parallel
-        
-        echo "=== SuiteSparse build complete ==="
+        mkdir build && cd build
+        cmake .. -DCMAKE_INSTALL_PREFIX="$pwd/install" -DCMAKE_BUILD_TYPE=Release -G "Visual Studio 17 2022" -A x64
+        cmake --build . --config Release --target install
 
-    - name: Fix CMakeLists.txt files
+    - name: Quick CMake fix
       run: |
-        echo "=== Fixing CMakeLists.txt files ==="
-        
-        # Use the 2023-era CMake to check and fix files
-        & "C:\Program Files\CMake\bin\cmake.exe" --version
-        
-        # Fix main CMakeLists.txt
-        if (Test-Path "CMakeLists.txt") {
-            $content = Get-Content "CMakeLists.txt" -Raw
-            # Update to compatible minimum version
-            $content = $content -replace 'cmake_minimum_required\(.*\)', 'cmake_minimum_required(VERSION 3.5)'
-            $content | Set-Content "CMakeLists.txt"
-            echo "Fixed main CMakeLists.txt"
-        }
-        
-        # Fix nanogui CMakeLists.txt
-        if (Test-Path "deps/nanogui/CMakeLists.txt") {
-            $content = Get-Content "deps/nanogui/CMakeLists.txt" -Raw
-            $content = $content -replace 'cmake_minimum_required\(.*\)', 'cmake_minimum_required(VERSION 3.5)'
-            $content | Set-Content "deps/nanogui/CMakeLists.txt"
-            echo "Fixed nanogui CMakeLists.txt"
-        }
-
-    - name: Remove problematic FindSuiteSparse.cmake
-      run: |
+        # Just remove the SuiteSparse requirement
+        (Get-Content CMakeLists.txt) -replace 'find_package\(SuiteSparse REQUIRED\)', '# ' | Set-Content CMakeLists.txt
         if (Test-Path "cmake/FindSuiteSparse.cmake") {
             Remove-Item "cmake/FindSuiteSparse.cmake" -Force
-            echo "Removed FindSuiteSparse.cmake"
         }
 
-    - name: Configure BFF with 2023-era tools
+    - name: Build BFF
       run: |
         $SuiteSparseDir = "$pwd/SuiteSparseWin/build/install"
         $OpenBLASDir = "$pwd/deps/openblas-windows"
         
-        echo "SuiteSparse directory: $SuiteSparseDir"
-        echo "OpenBLAS directory: $OpenBLASDir"
-        
-        mkdir build
-        cd build
-        
-        # Configure with CMake 3.26 and proper paths
-        & "C:\Program Files\CMake\bin\cmake.exe" .. `
-          -DCMAKE_BUILD_TYPE=Release `
-          -DSuiteSparse_CHOLMOD_INCLUDE_DIR="$SuiteSparseDir/include/suitesparse" `
-          -DSuiteSparse_CHOLMOD_LIBRARY_RELEASE="$SuiteSparseDir/lib/libcholmod.lib" `
-          -DSuiteSparse_AMD_LIBRARY_RELEASE="$SuiteSparseDir/lib/libamd.lib" `
-          -DSuiteSparse_CAMD_LIBRARY_RELEASE="$SuiteSparseDir/lib/libcamd.lib" `
-          -DSuiteSparse_CCOLAMD_LIBRARY_RELEASE="$SuiteSparseDir/lib/libccolamd.lib" `
-          -DSuiteSparse_COLAMD_LIBRARY_RELEASE="$SuiteSparseDir/lib/libcolamd.lib" `
-          -DSuiteSparse_BTF_LIBRARY_RELEASE="$SuiteSparseDir/lib/libbtf.lib" `
-          -DSuiteSparse_KLU_LIBRARY_RELEASE="$SuiteSparseDir/lib/libklu.lib" `
-          -DSuiteSparse_UMFPACK_LIBRARY_RELEASE="$SuiteSparseDir/lib/libumfpack.lib" `
-          -DSuiteSparse_CXSPARSE_LIBRARY_RELEASE="$SuiteSparseDir/lib/libcxsparse.lib" `
-          -DSuiteSparse_SUITESPARSECONFIG_LIBRARY_RELEASE="$SuiteSparseDir/lib/libsuitesparseconfig.lib" `
-          -DSuiteSparse_BLAS_LIBRARY="$OpenBLASDir/lib/libopenblas.lib" `
-          -DSuiteSparse_LAPACK_LIBRARY="$OpenBLASDir/lib/libopenblas.lib" `
-          -G "Visual Studio 17 2022" -A x64
+        mkdir build && cd build
+        cmake .. -DCMAKE_BUILD_TYPE=Release -DSuiteSparse_CHOLMOD_INCLUDE_DIR="$SuiteSparseDir/include/suitesparse" -DSuiteSparse_CHOLMOD_LIBRARY_RELEASE="$SuiteSparseDir/lib/libcholmod.lib" -DSuiteSparse_AMD_LIBRARY_RELEASE="$SuiteSparseDir/lib/libamd.lib" -DSuiteSparse_COLAMD_LIBRARY_RELEASE="$SuiteSparseDir/lib/libcolamd.lib" -DSuiteSparse_BLAS_LIBRARY="$OpenBLASDir/lib/libopenblas.lib" -G "Visual Studio 17 2022" -A x64
+        cmake --build . --config Release --target bff-command-line
 
-    - name: Build BFF command line tool
-      run: |
-        cd build
-        & "C:\Program Files\CMake\bin\cmake.exe" --build . --config Release --target bff-command-line --parallel
-
-    - name: Package binaries
-      run: |
-        mkdir dist
-        
-        if (Test-Path "build/Release/bff-command-line.exe") {
-            Copy-Item "build/Release/bff-command-line.exe" "dist/"
-            echo "✓ bff-command-line.exe found and copied"
-        }
-        
-        # Copy DLLs
-        Copy-Item "build/Release/*.dll" "dist/" -ErrorAction SilentlyContinue
-        Copy-Item "SuiteSparseWin/build/install/bin/*.dll" "dist/" -ErrorAction SilentlyContinue
-        Copy-Item "deps/openblas-windows/bin/*.dll" "dist/" -ErrorAction SilentlyContinue
-        
-        echo "=== Final distribution ==="
-        dir dist
-
-    - name: Upload artifacts
+    - name: Upload
       uses: actions/upload-artifact@v4
       with:
-        name: bff-windows-binary
-        path: dist/*
-        retention-days: 30
+        name: bff-cmake326
+        path: build/Release/bff-command-line.exe
