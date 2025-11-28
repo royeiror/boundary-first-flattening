@@ -1,43 +1,129 @@
-name: Build BFF Manual
+name: Build BFF Windows Binary
 
-on: workflow_dispatch
+on: 
+  push:
+    tags: ['v*']
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: windows-latest
     
     steps:
-    - name: Checkout
+    - name: Checkout repository
       uses: actions/checkout@v4
       with:
         submodules: recursive
 
-    - name: Install build tools
+    - name: Fix all CMakeLists.txt files in the project
       run: |
-        choco install cmake -y
-
-    - name: Use provided dependencies
-      run: |
-        echo "=== Using dependencies from repository ==="
-        if (Test-Path "deps") {
-            dir "deps" -Recurse
+        # Fix main CMakeLists.txt
+        if (Test-Path "CMakeLists.txt") {
+            $content = Get-Content "CMakeLists.txt" -Raw
+            $content = $content -replace 'cmake_minimum_required\(.*\)', 'cmake_minimum_required(VERSION 3.5)'
+            $content = $content -replace 'find_package\(SuiteSparse REQUIRED\)', '# find_package(SuiteSparse REQUIRED)'
+            $content | Set-Content "CMakeLists.txt"
+            echo "Fixed main CMakeLists.txt"
+        }
+        
+        # Fix nanogui CMakeLists.txt
+        if (Test-Path "deps/nanogui/CMakeLists.txt") {
+            $content = Get-Content "deps/nanogui/CMakeLists.txt" -Raw
+            $content = $content -replace 'cmake_minimum_required\(.*\)', 'cmake_minimum_required(VERSION 3.5)'
+            $content | Set-Content "deps/nanogui/CMakeLists.txt"
+            echo "Fixed nanogui CMakeLists.txt"
+        }
+        
+        # Fix glm CMakeLists.txt
+        if (Test-Path "deps/glm/glm/CMakeLists.txt") {
+            $content = Get-Content "deps/glm/glm/CMakeLists.txt" -Raw
+            $content = $content -replace 'cmake_minimum_required\(.*\)', 'cmake_minimum_required(VERSION 3.5)'
+            $content | Set-Content "deps/glm/glm/CMakeLists.txt"
+            echo "Fixed glm CMakeLists.txt"
+        }
+        
+        # Fix libigl CMakeLists.txt if it exists
+        if (Test-Path "deps/libigl/CMakeLists.txt") {
+            $content = Get-Content "deps/libigl/CMakeLists.txt" -Raw
+            $content = $content -replace 'cmake_minimum_required\(.*\)', 'cmake_minimum_required(VERSION 3.5)'
+            $content | Set-Content "deps/libigl/CMakeLists.txt"
+            echo "Fixed libigl CMakeLists.txt"
         }
 
-    - name: Simple direct build
+    - name: Remove problematic FindSuiteSparse.cmake
       run: |
-        # Fix CMake minimum version
-        (Get-Content CMakeLists.txt) -replace 'cmake_minimum_required\(.*\)', 'cmake_minimum_required(VERSION 3.5)' | Set-Content CMakeLists.txt
-        
-        # Remove SuiteSparse requirement
-        (Get-Content CMakeLists.txt) -replace 'find_package\(SuiteSparse REQUIRED\)', '# find_package(SuiteSparse)' | Set-Content CMakeLists.txt
-        
+        if (Test-Path "cmake/FindSuiteSparse.cmake") {
+            Remove-Item "cmake/FindSuiteSparse.cmake" -Force
+            echo "Removed FindSuiteSparse.cmake"
+        }
+
+    - name: Create a simple override CMakeLists.txt
+      run: |
+        # Create a simple CMakeLists that handles dependencies manually
+        $simpleCmake = @'
+cmake_minimum_required(VERSION 3.5)
+project(bff)
+
+# Set C++ standard
+set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# Include directories
+include_directories(include)
+include_directories(deps/libigl/include)
+include_directories(deps/eigen)
+
+# Add subdirectories but skip SuiteSparse checks
+add_subdirectory(deps/nanogui)
+add_subdirectory(deps/glm/glm)
+add_subdirectory(src)
+
+# Create command line executable
+add_executable(bff-command-line src/command-line/main.cpp)
+target_link_libraries(bff-command-line bff nanogui)
+
+# Add compiler definitions that might be needed
+target_compile_definitions(bff-command-line PRIVATE NOMINMAX)
+target_compile_definitions(bff PRIVATE NOMINMAX)
+'@
+        $simpleCmake | Set-Content "CMakeLists-simple.txt"
+        echo "Created simplified CMakeLists-simple.txt"
+
+    - name: Configure with CMake policy override
+      run: |
         mkdir build
         cd build
-        cmake .. -DCMAKE_BUILD_TYPE=Release -G "Visual Studio 17 2022" -A x64 -Wno-dev
-        cmake --build . --config Release --target bff-command-line
+        
+        # Configure with policy override to handle old CMake syntax
+        cmake .. `
+          -DCMAKE_BUILD_TYPE=Release `
+          -DCMAKE_POLICY_DEFAULT_CMP0001=NEW `
+          -DCMAKE_POLICY_DEFAULT_CMP0002=NEW `
+          -DCMAKE_POLICY_DEFAULT_CMP0003=NEW `
+          -DCMAKE_POLICY_DEFAULT_CMP0004=NEW `
+          -G "Visual Studio 17 2022" -A x64 `
+          -Wno-dev
 
-    - name: Upload result
+    - name: Build BFF command line tool
+      run: |
+        cd build
+        cmake --build . --config Release --target bff-command-line --parallel
+
+    - name: Check build results
+      run: |
+        echo "=== Build directory structure ==="
+        dir "build" -Recurse -Name | Select-Object -First 30
+        
+        echo "=== Executables found ==="
+        Get-ChildItem -Path "build" -Recurse -Filter *.exe | ForEach-Object {
+            echo "EXE: $($_.FullName)"
+        }
+
+    - name: Upload any built executables
       uses: actions/upload-artifact@v4
       with:
-        name: bff-simple
-        path: build/Release/bff-command-line.exe
+        name: bff-build-output
+        path: |
+          build/**/*.exe
+          build/**/*.dll
+        retention-days: 30
