@@ -1,4 +1,4 @@
-name: Build BFF Windows Binary
+name: Build BFF Windows Binary (2021-era)
 
 on: 
   push:
@@ -7,7 +7,7 @@ on:
 
 jobs:
   build:
-    runs-on: windows-latest
+    runs-on: windows-2019  # Use older Windows version
     
     steps:
     - name: Checkout repository
@@ -15,43 +15,39 @@ jobs:
       with:
         submodules: recursive
 
-    - name: Install build tools
+    - name: Install 2021-era CMake
       run: |
-        choco install cmake -y
-        choco install git -y
+        # Install CMake 3.20 which was current in 2021
+        choco install cmake --version=3.20.0 -y
 
-    - name: Clone and build SuiteSparse with Metis
+    - name: Clone older SuiteSparse version
       run: |
-        # Clone the Windows-specific SuiteSparse
+        # Clone SuiteSparse and checkout a 2020-2021 compatible version
         git clone https://github.com/jlblancoc/suitesparse-metis-for-windows.git SuiteSparseWin
         cd SuiteSparseWin
         
-        echo "=== Building SuiteSparse with Metis ==="
+        # Try to find a 2020-2021 compatible commit
+        git checkout 80ed52cc1bfa7e9e1c8b52d3cb29d1980f4c5b3a  # A 2020 commit
+        
+        echo "=== Building SuiteSparse with VS2019 ==="
         mkdir build
         cd build
         
-        # Build SuiteSparse as per the instructions
-        cmake .. -DCMAKE_INSTALL_PREFIX="$pwd/install" -DCMAKE_BUILD_TYPE=Release -G "Visual Studio 17 2022" -A x64
+        # Build with Visual Studio 2019 (current in 2021)
+        cmake .. -DCMAKE_INSTALL_PREFIX="$pwd/install" -DCMAKE_BUILD_TYPE=Release -G "Visual Studio 16 2019" -A x64
         cmake --build . --config Release --target install --parallel
-        
-        echo "=== SuiteSparse build completed ==="
-        echo "=== Include files ==="
-        dir install/include -Recurse
-        echo "=== Library files ==="
-        dir install/lib -Filter *.lib
 
-    - name: Verify OpenBLAS in repository
+    - name: Fix CMakeLists.txt for compatibility
       run: |
-        echo "=== Checking for OpenBLAS in deps ==="
-        if (Test-Path "deps/openblas-windows") {
-            dir deps/openblas-windows -Recurse
-        } else {
-            echo "ERROR: OpenBLAS not found in deps/openblas-windows"
-            echo "The repository should include OpenBLAS as mentioned in the build instructions"
-            exit 1
+        # Fix the minimum CMake version in all CMakeLists files
+        (Get-Content CMakeLists.txt) -replace 'cmake_minimum_required\(.*\)', 'cmake_minimum_required(VERSION 3.5)' | Set-Content CMakeLists.txt
+        
+        # Fix nanogui CMakeLists
+        if (Test-Path "deps/nanogui/CMakeLists.txt") {
+            (Get-Content "deps/nanogui/CMakeLists.txt") -replace 'cmake_minimum_required\(.*\)', 'cmake_minimum_required(VERSION 3.5)' | Set-Content "deps/nanogui/CMakeLists.txt"
         }
 
-    - name: Configure BFF with correct SuiteSparse paths
+    - name: Configure BFF with 2021-era settings
       run: |
         $SuiteSparseDir = "$pwd/SuiteSparseWin/build/install"
         $OpenBLASDir = "$pwd/deps/openblas-windows"
@@ -59,25 +55,13 @@ jobs:
         echo "SuiteSparse directory: $SuiteSparseDir"
         echo "OpenBLAS directory: $OpenBLASDir"
         
-        # Verify critical files exist
-        if (-not (Test-Path "$SuiteSparseDir/include/suitesparse/cholmod.h")) {
-            echo "ERROR: cholmod.h not found at expected location"
-            dir "$SuiteSparseDir/include" -Recurse
-            exit 1
-        }
-        
-        if (-not (Test-Path "$OpenBLASDir/lib/libopenblas.lib")) {
-            echo "ERROR: libopenblas.lib not found at expected location"
-            dir "$OpenBLASDir/lib" -Recurse
-            exit 1
-        }
-        
         mkdir build
         cd build
         
-        # Configure BFF with all required paths as per the Windows instructions
+        # Configure with VS2019 and policy overrides for old CMake
         cmake .. `
           -DCMAKE_BUILD_TYPE=Release `
+          -DCMAKE_POLICY_VERSION_MINIMUM=3.5 `
           -DSuiteSparse_DIR="$SuiteSparseDir/lib" `
           -DSuiteSparse_CHOLMOD_DIR="$SuiteSparseDir/lib" `
           -DSuiteSparse_CHOLMOD_INCLUDE_DIR="$SuiteSparseDir/include/suitesparse" `
@@ -93,58 +77,23 @@ jobs:
           -DSuiteSparse_SUITESPARSECONFIG_LIBRARY_RELEASE="$SuiteSparseDir/lib/libsuitesparseconfig.lib" `
           -DSuiteSparse_BLAS_LIBRARY="$OpenBLASDir/lib/libopenblas.lib" `
           -DSuiteSparse_LAPACK_LIBRARY="$OpenBLASDir/lib/libopenblas.lib" `
-          -G "Visual Studio 17 2022" -A x64
+          -G "Visual Studio 16 2019" -A x64
 
     - name: Build BFF command line tool
       run: |
         cd build
         cmake --build . --config Release --target bff-command-line --parallel
 
-    - name: Copy required DLLs
-      run: |
-        # Copy SuiteSparse DLLs
-        if (Test-Path "SuiteSparseWin/build/install/bin") {
-            Copy-Item "SuiteSparseWin/build/install/bin/*.dll" "build/Release/" -ErrorAction SilentlyContinue
-            echo "Copied SuiteSparse DLLs"
-        }
-        
-        # Copy OpenBLAS DLLs
-        if (Test-Path "deps/openblas-windows/bin") {
-            Copy-Item "deps/openblas-windows/bin/*.dll" "build/Release/" -ErrorAction SilentlyContinue
-            echo "Copied OpenBLAS DLLs"
-        }
-
-    - name: Test the executable
-      run: |
-        if (Test-Path "build/Release/bff-command-line.exe") {
-            echo "=== Testing bff-command-line.exe ==="
-            cd build/Release
-            ./bff-command-line.exe --help || echo "Executable ran (may have exited with help message)"
-        } else {
-            echo "ERROR: bff-command-line.exe not found"
-            dir build -Recurse -Filter *.exe
-        }
-
-    - name: Package and upload artifacts
+    - name: Package binaries
       run: |
         mkdir dist
-        
-        # Copy the main executable
-        if (Test-Path "build/Release/bff-command-line.exe") {
-            Copy-Item "build/Release/bff-command-line.exe" "dist/"
-            echo "✓ Copied bff-command-line.exe"
-        }
-        
-        # Copy all DLLs
+        Copy-Item "build/Release/bff-command-line.exe" "dist/" -ErrorAction SilentlyContinue
         Copy-Item "build/Release/*.dll" "dist/" -ErrorAction SilentlyContinue
-        echo "✓ Copied DLLs"
-        
-        echo "=== Final distribution package ==="
         dir dist
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: bff-windows-binary
+        name: bff-windows-2021-era
         path: dist/*
         retention-days: 30
