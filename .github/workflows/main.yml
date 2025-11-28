@@ -1,4 +1,4 @@
-name: Build BFF Windows Binary (CMake 3.26)
+name: Build BFF Manual Fix
 
 on: workflow_dispatch
 
@@ -12,12 +12,6 @@ jobs:
       with:
         submodules: recursive
 
-    - name: Setup CMake 3.26
-      run: |
-        # Use the CMake that comes with windows-latest (includes 3.26)
-        cmake --version
-        echo "Using system CMake"
-
     - name: Build SuiteSparse
       run: |
         git clone https://github.com/jlblancoc/suitesparse-metis-for-windows.git SuiteSparseWin
@@ -26,25 +20,36 @@ jobs:
         cmake .. -DCMAKE_INSTALL_PREFIX="$pwd/install" -DCMAKE_BUILD_TYPE=Release -G "Visual Studio 17 2022" -A x64
         cmake --build . --config Release --target install
 
-    - name: Quick CMake fix
+    - name: Fix Common.h include
       run: |
-        # Just remove the SuiteSparse requirement
-        (Get-Content CMakeLists.txt) -replace 'find_package\(SuiteSparse REQUIRED\)', '# ' | Set-Content CMakeLists.txt
+        # Fix the Common.h file to use the correct path
+        $commonHeader = "include/bff/linear-algebra/Common.h"
+        $cholmodPath = "$pwd/SuiteSparseWin/build/install/include/suitesparse/cholmod.h"
+        
+        if (Test-Path $commonHeader) {
+            $content = Get-Content $commonHeader -Raw
+            # Replace the simple include with absolute path
+            $newContent = $content -replace '#include "cholmod.h"', "#include `"$cholmodPath`""
+            $newContent | Set-Content $commonHeader
+            echo "Fixed Common.h to use absolute path to cholmod.h"
+        }
+
+    - name: Remove dependency check
+      run: |
         if (Test-Path "cmake/FindSuiteSparse.cmake") {
             Remove-Item "cmake/FindSuiteSparse.cmake" -Force
         }
+        (Get-Content CMakeLists.txt) -replace 'find_package\(SuiteSparse REQUIRED\)', '# ' | Set-Content CMakeLists.txt
 
     - name: Build BFF
       run: |
-        $SuiteSparseDir = "$pwd/SuiteSparseWin/build/install"
-        $OpenBLASDir = "$pwd/deps/openblas-windows"
-        
-        mkdir build && cd build
-        cmake .. -DCMAKE_BUILD_TYPE=Release -DSuiteSparse_CHOLMOD_INCLUDE_DIR="$SuiteSparseDir/include/suitesparse" -DSuiteSparse_CHOLMOD_LIBRARY_RELEASE="$SuiteSparseDir/lib/libcholmod.lib" -DSuiteSparse_AMD_LIBRARY_RELEASE="$SuiteSparseDir/lib/libamd.lib" -DSuiteSparse_COLAMD_LIBRARY_RELEASE="$SuiteSparseDir/lib/libcolamd.lib" -DSuiteSparse_BLAS_LIBRARY="$OpenBLASDir/lib/libopenblas.lib" -G "Visual Studio 17 2022" -A x64
+        mkdir build
+        cd build
+        cmake .. -DCMAKE_BUILD_TYPE=Release -G "Visual Studio 17 2022" -A x64
         cmake --build . --config Release --target bff-command-line
 
     - name: Upload
       uses: actions/upload-artifact@v4
       with:
-        name: bff-cmake326
+        name: bff-manual-fix
         path: build/Release/bff-command-line.exe
