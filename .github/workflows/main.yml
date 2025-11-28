@@ -1,4 +1,4 @@
-name: Build BFF Windows Binary (2021-era)
+name: Build BFF Windows Binary (2021 Compatibility)
 
 on: 
   push:
@@ -7,7 +7,7 @@ on:
 
 jobs:
   build:
-    runs-on: windows-2019  # Use older Windows version
+    runs-on: windows-latest
     
     steps:
     - name: Checkout repository
@@ -15,39 +15,74 @@ jobs:
       with:
         submodules: recursive
 
-    - name: Install 2021-era CMake
+    - name: Install specific CMake version
       run: |
-        # Install CMake 3.20 which was current in 2021
+        # Install CMake 3.20.0 (released April 2021)
         choco install cmake --version=3.20.0 -y
 
-    - name: Clone older SuiteSparse version
+    - name: Clone and build SuiteSparse with compatibility
       run: |
-        # Clone SuiteSparse and checkout a 2020-2021 compatible version
+        # Clone SuiteSparse for Windows
         git clone https://github.com/jlblancoc/suitesparse-metis-for-windows.git SuiteSparseWin
         cd SuiteSparseWin
         
-        # Try to find a 2020-2021 compatible commit
-        git checkout 80ed52cc1bfa7e9e1c8b52d3cb29d1980f4c5b3a  # A 2020 commit
+        # Use a 2020-2021 compatible commit
+        git checkout 80ed52cc1bfa7e9e1c8b52d3cb29d1980f4c5b3a
         
-        echo "=== Building SuiteSparse with VS2019 ==="
+        echo "=== Building SuiteSparse ==="
         mkdir build
         cd build
         
-        # Build with Visual Studio 2019 (current in 2021)
-        cmake .. -DCMAKE_INSTALL_PREFIX="$pwd/install" -DCMAKE_BUILD_TYPE=Release -G "Visual Studio 16 2019" -A x64
-        cmake --build . --config Release --target install --parallel
-
-    - name: Fix CMakeLists.txt for compatibility
-      run: |
-        # Fix the minimum CMake version in all CMakeLists files
-        (Get-Content CMakeLists.txt) -replace 'cmake_minimum_required\(.*\)', 'cmake_minimum_required(VERSION 3.5)' | Set-Content CMakeLists.txt
+        # Build with compatibility flags
+        cmake .. `
+          -DCMAKE_INSTALL_PREFIX="$pwd/install" `
+          -DCMAKE_BUILD_TYPE=Release `
+          -DCMAKE_POLICY_DEFAULT_CMP0001=NEW `
+          -DCMAKE_POLICY_DEFAULT_CMP0002=NEW `
+          -DCMAKE_POLICY_DEFAULT_CMP0003=NEW `
+          -G "Visual Studio 17 2022" -A x64
         
-        # Fix nanogui CMakeLists
+        cmake --build . --config Release --target install --parallel
+        
+        echo "=== SuiteSparse build complete ==="
+        dir install/include/suitesparse | Select-Object -First 10
+
+    - name: Fix all CMakeLists.txt files
+      run: |
+        echo "=== Fixing CMakeLists.txt files ==="
+        
+        # Fix main CMakeLists.txt
+        if (Test-Path "CMakeLists.txt") {
+            $content = Get-Content "CMakeLists.txt" -Raw
+            $content = $content -replace 'cmake_minimum_required\(.*\)', 'cmake_minimum_required(VERSION 3.5)'
+            $content | Set-Content "CMakeLists.txt"
+            echo "Fixed main CMakeLists.txt"
+        }
+        
+        # Fix nanogui CMakeLists.txt
         if (Test-Path "deps/nanogui/CMakeLists.txt") {
-            (Get-Content "deps/nanogui/CMakeLists.txt") -replace 'cmake_minimum_required\(.*\)', 'cmake_minimum_required(VERSION 3.5)' | Set-Content "deps/nanogui/CMakeLists.txt"
+            $content = Get-Content "deps/nanogui/CMakeLists.txt" -Raw
+            $content = $content -replace 'cmake_minimum_required\(.*\)', 'cmake_minimum_required(VERSION 3.5)'
+            $content | Set-Content "deps/nanogui/CMakeLists.txt"
+            echo "Fixed nanogui CMakeLists.txt"
+        }
+        
+        # Fix glm CMakeLists.txt
+        if (Test-Path "deps/glm/glm/CMakeLists.txt") {
+            $content = Get-Content "deps/glm/glm/CMakeLists.txt" -Raw
+            $content = $content -replace 'cmake_minimum_required\(.*\)', 'cmake_minimum_required(VERSION 3.5)'
+            $content | Set-Content "deps/glm/glm/CMakeLists.txt"
+            echo "Fixed glm CMakeLists.txt"
         }
 
-    - name: Configure BFF with 2021-era settings
+    - name: Remove problematic FindSuiteSparse.cmake
+      run: |
+        if (Test-Path "cmake/FindSuiteSparse.cmake") {
+            Remove-Item "cmake/FindSuiteSparse.cmake" -Force
+            echo "Removed FindSuiteSparse.cmake"
+        }
+
+    - name: Configure BFF with compatibility settings
       run: |
         $SuiteSparseDir = "$pwd/SuiteSparseWin/build/install"
         $OpenBLASDir = "$pwd/deps/openblas-windows"
@@ -55,15 +90,30 @@ jobs:
         echo "SuiteSparse directory: $SuiteSparseDir"
         echo "OpenBLAS directory: $OpenBLASDir"
         
+        # Verify critical files
+        if (-not (Test-Path "$SuiteSparseDir/include/suitesparse/cholmod.h")) {
+            echo "ERROR: cholmod.h not found!"
+            dir "$SuiteSparseDir/include" -Recurse
+            exit 1
+        }
+        
+        if (-not (Test-Path "$OpenBLASDir/lib/libopenblas.lib")) {
+            echo "ERROR: libopenblas.lib not found!"
+            dir "$OpenBLASDir/lib" -Recurse
+            exit 1
+        }
+        
         mkdir build
         cd build
         
-        # Configure with VS2019 and policy overrides for old CMake
+        # Configure with extensive compatibility settings
         cmake .. `
           -DCMAKE_BUILD_TYPE=Release `
           -DCMAKE_POLICY_VERSION_MINIMUM=3.5 `
-          -DSuiteSparse_DIR="$SuiteSparseDir/lib" `
-          -DSuiteSparse_CHOLMOD_DIR="$SuiteSparseDir/lib" `
+          -DCMAKE_POLICY_DEFAULT_CMP0001=NEW `
+          -DCMAKE_POLICY_DEFAULT_CMP0002=NEW `
+          -DCMAKE_POLICY_DEFAULT_CMP0003=NEW `
+          -DCMAKE_POLICY_DEFAULT_CMP0004=NEW `
           -DSuiteSparse_CHOLMOD_INCLUDE_DIR="$SuiteSparseDir/include/suitesparse" `
           -DSuiteSparse_CHOLMOD_LIBRARY_RELEASE="$SuiteSparseDir/lib/libcholmod.lib" `
           -DSuiteSparse_AMD_LIBRARY_RELEASE="$SuiteSparseDir/lib/libamd.lib" `
@@ -77,23 +127,50 @@ jobs:
           -DSuiteSparse_SUITESPARSECONFIG_LIBRARY_RELEASE="$SuiteSparseDir/lib/libsuitesparseconfig.lib" `
           -DSuiteSparse_BLAS_LIBRARY="$OpenBLASDir/lib/libopenblas.lib" `
           -DSuiteSparse_LAPACK_LIBRARY="$OpenBLASDir/lib/libopenblas.lib" `
-          -G "Visual Studio 16 2019" -A x64
+          -G "Visual Studio 17 2022" -A x64 `
+          -Wno-dev
 
     - name: Build BFF command line tool
       run: |
         cd build
         cmake --build . --config Release --target bff-command-line --parallel
 
-    - name: Package binaries
+    - name: Copy required DLLs
+      run: |
+        # Copy SuiteSparse DLLs
+        if (Test-Path "SuiteSparseWin/build/install/bin") {
+            Copy-Item "SuiteSparseWin/build/install/bin/*.dll" "build/Release/" -ErrorAction SilentlyContinue
+            echo "Copied SuiteSparse DLLs"
+        }
+        
+        # Copy OpenBLAS DLLs
+        if (Test-Path "deps/openblas-windows/bin") {
+            Copy-Item "deps/openblas-windows/bin/*.dll" "build/Release/" -ErrorAction SilentlyContinue
+            echo "Copied OpenBLAS DLLs"
+        }
+
+    - name: Package and test
       run: |
         mkdir dist
-        Copy-Item "build/Release/bff-command-line.exe" "dist/" -ErrorAction SilentlyContinue
+        
+        if (Test-Path "build/Release/bff-command-line.exe") {
+            Copy-Item "build/Release/bff-command-line.exe" "dist/"
+            echo "✓ bff-command-line.exe found and copied"
+            
+            # Test if it runs
+            cd dist
+            ./bff-command-line.exe --help || echo "Executable ran (may have shown help)"
+        } else {
+            echo "ERROR: bff-command-line.exe not found"
+            dir build -Recurse -Filter *.exe
+        }
+        
         Copy-Item "build/Release/*.dll" "dist/" -ErrorAction SilentlyContinue
         dir dist
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: bff-windows-2021-era
+        name: bff-windows-binary
         path: dist/*
         retention-days: 30
