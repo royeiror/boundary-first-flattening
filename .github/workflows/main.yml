@@ -1,121 +1,158 @@
-name: Build BFF Windows Binary
+name: Build BFF with Stubs
 
-on: 
-  push:
-    tags: ['v*']
-  workflow_dispatch:
+on: workflow_dispatch
 
 jobs:
   build:
     runs-on: windows-latest
     
     steps:
-    - name: Checkout repository
+    - name: Checkout
       uses: actions/checkout@v4
       with:
         submodules: recursive
 
-    - name: Setup vcpkg for dependencies
+    - name: Create stub headers for SuiteSparse
       run: |
-        git clone https://github.com/Microsoft/vcpkg.git
-        cd vcpkg
-        .\bootstrap-vcpkg.bat
-        .\vcpkg install suitesparse openblas eigen3 --triplet x64-windows
-
-    - name: Fix the cholmod.h include in source code
-      run: |
-        # Fix the Common.h file to find cholmod.h
-        $commonHeader = "include/bff/linear-algebra/Common.h"
-        if (Test-Path $commonHeader) {
-            # Create a fixed version that doesn't require cholmod.h
-            $fixedContent = @'
+        # Create stub cholmod.h
+        $stubCholmod = @'
 #pragma once
 
-// Try to include cholmod.h if available, but don't fail if not
-#ifdef _MSC_VER
-    // On Windows with MSVC, try to include from vcpkg
-    #if __has_include("../../../vcpkg/installed/x64-windows/include/cholmod.h")
-        #include "../../../vcpkg/installed/x64-windows/include/cholmod.h"
-    #elif __has_include("cholmod.h")
-        #include "cholmod.h"
-    #else
-        // Define minimal cholmod types needed for compilation
-        typedef struct cholmod_common_struct {
-            int dummy;
-        } cholmod_common;
-        typedef void* cholmod_factor;
-        typedef void* cholmod_dense;
-        typedef void* cholmod_sparse;
-        #define CHOLMOD_MAIN_VERSION 0
-        #define CHOLMOD_SUB_VERSION 0
-        #warning "Using stub cholmod definitions - functionality may be limited"
-    #endif
-#else
-    #include "cholmod.h"
-#endif
+// Stub cholmod.h for compilation - actual functionality will be limited
+typedef struct cholmod_common_struct {
+    int print;
+    int precise;
+    int (*malloc_memory)(size_t);
+    int (*free_memory)(void*);
+    int (*realloc_memory)(void*, size_t);
+    void* (*calloc_memory)(size_t, size_t);
+    int (*printf_func)(const char*, ...);
+    int (*hypotenuse)(double, double);
+    int (*divcomplex)(double [2], double [2], double [2]);
+    double dbound;
+    double grow0;
+    double grow1;
+    double grow2;
+    size_t maxrank;
+    double supernodal_switch;
+    double supernodal_switch2;
+    int final_asis;
+    int final_super;
+    int final_ll;
+    int final_pack;
+    int final_monotonic;
+    int final_resymbol;
+    int prefer_zomplex;
+    int prefer_upper;
+    int quick_return_if_not_posdef;
+    int nmethods;
+    int (*method)(int);
+    double (*postorder);
+    int itype;
+    double dtype;
+} cholmod_common;
 
-#include "Eigen/Dense"
-#include "Eigen/SparseCore"
+typedef struct cholmod_factor_struct {
+    int n;
+    int minor;
+    int *Perm;
+    int *ColCount;
+    int *IPerm;
+    int *super;
+    int *pi;
+    int *px;
+    int *s;
+    int ordering;
+    int is_ll;
+    int is_super;
+    int is_monotonic;
+    size_t nzmax;
+    int nz;
+    int *p;
+    int *i;
+    double *x;
+    double *z;
+    int *next;
+    int *prev;
+} *cholmod_factor;
+
+typedef struct cholmod_dense_struct {
+    size_t nrow;
+    size_t ncol;
+    size_t nzmax;
+    size_t d;
+    void *x;
+    void *z;
+    int xtype;
+    int dtype;
+} *cholmod_dense;
+
+typedef struct cholmod_sparse_struct {
+    size_t nrow;
+    size_t ncol;
+    size_t nzmax;
+    void *p;
+    void *i;
+    void *x;
+    void *z;
+    int stype;
+    int itype;
+    int xtype;
+    int dtype;
+    int sorted;
+    int packed;
+} *cholmod_sparse;
+
+#define CHOLMOD_MAIN_VERSION 0
+#define CHOLMOD_SUB_VERSION 0
+#define CHOLMOD_PATCH_VERSION 0
+
+// Stub function declarations
+cholmod_common* cholmod_start(int*);
+int cholmod_finish(cholmod_common*);
+cholmod_dense* cholmod_zeros(size_t, size_t, int, cholmod_common*);
+int cholmod_free_dense(cholmod_dense**, cholmod_common*);
+cholmod_sparse* cholmod_allocate_sparse(size_t, size_t, size_t, int, int, int, int, cholmod_common*);
+int cholmod_free_sparse(cholmod_sparse**, cholmod_common*);
+cholmod_factor* cholmod_analyze(cholmod_sparse*, cholmod_common*);
+cholmod_factor* cholmod_factorize(cholmod_sparse*, cholmod_factor*, cholmod_common*);
+cholmod_dense* cholmod_solve(int, cholmod_factor*, cholmod_dense*, cholmod_common*);
 '@
-            $fixedContent | Set-Content $commonHeader
-            echo "Fixed Common.h to handle missing cholmod.h"
-        }
+        $stubCholmod | Set-Content "include/cholmod.h"
+        echo "Created stub cholmod.h"
 
-    - name: Fix CMake files
+        # Create stub amd.h
+        $stubAmd = @'
+#pragma once
+// Stub amd.h for compilation
+#define AMD_VERSION 0
+#define AMD_SUB_VERSION 0
+'@
+        $stubAmd | Set-Content "include/amd.h"
+
+        # Create stub suitesparseconfig.h
+        $stubConfig = @'
+#pragma once
+// Stub suitesparseconfig.h for compilation
+#define SUITESPARSE_VERSION 0
+#define SUITESPARSE_MAIN_VERSION 0
+#define SUITESPARSE_SUB_VERSION 0
+#define SUITESPARSE_SUBSUB_VERSION 0
+'@
+        $stubConfig | Set-Content "include/suitesparseconfig.h"
+
+    - name: Fix CMake and build
       run: |
-        # Fix main CMakeLists
-        (Get-Content CMakeLists.txt) -replace 'cmake_minimum_required\(.*\)', 'cmake_minimum_required(VERSION 3.5)' | Set-Content CMakeLists.txt
-        (Get-Content CMakeLists.txt) -replace 'find_package\(SuiteSparse REQUIRED\)', '# find_package(SuiteSparse)' | Set-Content CMakeLists.txt
+        # Quick CMake fixes
+        (Get-Content CMakeLists.txt) -replace 'find_package\(SuiteSparse REQUIRED\)', '# ' | Set-Content CMakeLists.txt
         
-        # Fix nanogui CMakeLists
-        if (Test-Path "deps/nanogui/CMakeLists.txt") {
-            (Get-Content "deps/nanogui/CMakeLists.txt") -replace 'cmake_minimum_required\(.*\)', 'cmake_minimum_required(VERSION 3.5)' | Set-Content "deps/nanogui/CMakeLists.txt"
-        }
-        
-        # Remove problematic file
-        if (Test-Path "cmake/FindSuiteSparse.cmake") {
-            Remove-Item "cmake/FindSuiteSparse.cmake" -Force
-        }
-
-    - name: Copy SuiteSparse headers if available
-      run: |
-        # Try to copy cholmod.h from vcpkg if it exists
-        if (Test-Path "vcpkg/installed/x64-windows/include/cholmod.h") {
-            Copy-Item "vcpkg/installed/x64-windows/include/cholmod.h" "include/" -ErrorAction SilentlyContinue
-            echo "Copied cholmod.h to include directory"
-        }
-
-    - name: Build with vcpkg toolchain
-      run: |
         mkdir build
         cd build
-        
-        # Configure with vcpkg toolchain and policy overrides
-        cmake .. `
-          -DCMAKE_TOOLCHAIN_FILE=../vcpkg/scripts/buildsystems/vcpkg.cmake `
-          -DCMAKE_BUILD_TYPE=Release `
-          -DCMAKE_POLICY_VERSION_MINIMUM=3.5 `
-          -G "Visual Studio 17 2022" -A x64 `
-          -Wno-dev
-        
-        # Build the command line tool
+        cmake .. -DCMAKE_BUILD_TYPE=Release -G "Visual Studio 17 2022" -A x64
         cmake --build . --config Release --target bff-command-line --parallel
 
-    - name: Check build results
-      run: |
-        echo "=== Looking for built executables ==="
-        Get-ChildItem -Path "build" -Recurse -Filter *.exe | ForEach-Object {
-            echo "Found: $($_.FullName)"
-            # Try to get file info
-            echo "  Size: $($_.Length) bytes"
-            echo "  Last modified: $($_.LastWriteTime)"
-        }
-
-    - name: Upload artifacts
+    - name: Upload
       uses: actions/upload-artifact@v4
       with:
-        name: bff-windows-binaries
-        path: |
-          build/**/*.exe
-          build/**/*.dll
-        retention-days: 30
+        name: bff-stub-build
+        path: build/Release/bff-command-line.exe
