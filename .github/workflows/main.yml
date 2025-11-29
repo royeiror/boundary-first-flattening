@@ -1,4 +1,4 @@
-name: Build BFF Manual Fix
+name: Build BFF Manual Header Copy
 
 on: workflow_dispatch
 
@@ -20,29 +20,39 @@ jobs:
         cmake .. -DCMAKE_INSTALL_PREFIX="$pwd/install" -DCMAKE_BUILD_TYPE=Release -G "Visual Studio 17 2022" -A x64
         cmake --build . --config Release --target install
 
-    - name: Fix Common.h include
+    - name: Manually copy each header
       run: |
-        # Fix the Common.h file to use the correct path
-        $commonHeader = "include/bff/linear-algebra/Common.h"
-        $cholmodPath = "$pwd/SuiteSparseWin/build/install/include/suitesparse/cholmod.h"
+        echo "=== Manually copying SuiteSparse headers ==="
+        $sourceDir = "SuiteSparseWin/build/install/include/suitesparse"
+        $destDir = "include"
         
-        if (Test-Path $commonHeader) {
-            $content = Get-Content $commonHeader -Raw
-            # Replace the simple include with absolute path
-            $newContent = $content -replace '#include "cholmod.h"', "#include `"$cholmodPath`""
-            $newContent | Set-Content $commonHeader
-            echo "Fixed Common.h to use absolute path to cholmod.h"
+        echo "Source directory: $sourceDir"
+        echo "Destination directory: $destDir"
+        
+        # List all headers in source
+        echo "Headers available:"
+        dir $sourceDir -Filter *.h | Select-Object Name
+        
+        # Copy each header individually
+        $headers = @("cholmod.h", "amd.h", "camd.h", "ccolamd.h", "colamd.h", "suitesparseconfig.h")
+        foreach ($header in $headers) {
+            if (Test-Path "$sourceDir/$header") {
+                Copy-Item "$sourceDir/$header" "$destDir/" -Force
+                echo "Copied: $header"
+            } else {
+                echo "WARNING: $header not found in source"
+            }
         }
+        
+        echo "Final include directory:"
+        dir $destDir -Filter *.h
 
-    - name: Remove dependency check
+    - name: Remove dependency check and build
       run: |
         if (Test-Path "cmake/FindSuiteSparse.cmake") {
             Remove-Item "cmake/FindSuiteSparse.cmake" -Force
         }
-        (Get-Content CMakeLists.txt) -replace 'find_package\(SuiteSparse REQUIRED\)', '# ' | Set-Content CMakeLists.txt
-
-    - name: Build BFF
-      run: |
+        
         mkdir build
         cd build
         cmake .. -DCMAKE_BUILD_TYPE=Release -G "Visual Studio 17 2022" -A x64
@@ -51,5 +61,5 @@ jobs:
     - name: Upload
       uses: actions/upload-artifact@v4
       with:
-        name: bff-manual-fix
+        name: bff-manual-copy
         path: build/Release/bff-command-line.exe
