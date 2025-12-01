@@ -11,7 +11,7 @@ jobs:
       with:
         submodules: recursive
         
-    - name: Install complete SuiteSparse with vcpkg
+    - name: Install dependencies with vcpkg
       run: |
         echo "=== Installing dependencies ==="
         
@@ -20,135 +20,69 @@ jobs:
         .\vcpkg\bootstrap-vcpkg.bat -disableMetrics
         
         # Install SuiteSparse and dependencies
-        .\vcpkg\vcpkg install suitesparse[core,umfpack,cholmod,spqr,klu,ldl,btf,cxsparse]:x64-windows
-        .\vcpkg\vcpkg install lapack-reference blas:x64-windows
-        .\vcpkg\vcpkg install glfw3 opengl:x64-windows
+        .\vcpkg\vcpkg install suitesparse:x64-windows
+        .\vcpkg\vcpkg install lapack-reference:x64-windows
+        .\vcpkg\vcpkg install glfw3:x64-windows
         
         # Set environment
-        echo "VCPKG_ROOT=$env:GITHUB_WORKSPACE\vcpkg" | Out-File -FilePath $env:GITHUB_ENV -Append
-        echo "CMAKE_TOOLCHAIN_FILE=$env:GITHUB_WORKSPACE\vcpkg\scripts\buildsystems\vcpkg.cmake" | Out-File -FilePath $env:GITHUB_ENV -Append
+        echo "VCPKG_ROOT=$env:GITHUB_WORKSPACE\vcpkg" >> $env:GITHUB_ENV
+        echo "CMAKE_TOOLCHAIN_FILE=$env:GITHUB_WORKSPACE\vcpkg\scripts\buildsystems\vcpkg.cmake" >> $env:GITHUB_ENV
         
-    - name: Create proper CMake override file
+    - name: Create simple FindSuiteSparse.cmake
       run: |
-        echo "=== Creating CMake override ==="
+        echo "=== Creating simple FindSuiteSparse.cmake ==="
         
-        # Create a proper CMake file that defines SuiteSparse variables
-        $overrideCMake = @'
-# SuiteSparse override for vcpkg installation
+        # Backup original
+        if (Test-Path "cmake/FindSuiteSparse.cmake") {
+            Move-Item "cmake/FindSuiteSparse.cmake" "cmake/FindSuiteSparse.cmake.backup" -Force
+        }
+        
+        # Write new simple version
+        @"
+# Simplified FindSuiteSparse.cmake
+cmake_minimum_required(VERSION 3.10)
+
 set(SuiteSparse_FOUND TRUE)
-set(SuiteSparse_INCLUDE_DIR "D:/a/boundary-first-flattening/boundary-first-flattening/vcpkg/installed/x64-windows/include")
-set(SuiteSparse_LIBRARY_DIR "D:/a/boundary-first-flattening/boundary-first-flattening/vcpkg/installed/x64-windows/lib")
+set(SuiteSparse_INCLUDE_DIR "\$ENV{GITHUB_WORKSPACE}/vcpkg/installed/x64-windows/include")
+set(SuiteSparse_LIBRARY_DIR "\$ENV{GITHUB_WORKSPACE}/vcpkg/installed/x64-windows/lib")
 
-# Individual components (matching what vcpkg installs)
+# Mark all components as found
 set(SuiteSparse_AMD_FOUND TRUE)
-set(SuiteSparse_AMD_INCLUDE_DIR ${SuiteSparse_INCLUDE_DIR})
-set(SuiteSparse_AMD_LIBRARY_DEBUG ${SuiteSparse_LIBRARY_DIR}/amd.lib)
-set(SuiteSparse_AMD_LIBRARY_RELEASE ${SuiteSparse_LIBRARY_DIR}/amd.lib)
-
 set(SuiteSparse_CAMD_FOUND TRUE)
-set(SuiteSparse_CAMD_INCLUDE_DIR ${SuiteSparse_INCLUDE_DIR})
-set(SuiteSparse_CAMD_LIBRARY_DEBUG ${SuiteSparse_LIBRARY_DIR}/camd.lib)
-set(SuiteSparse_CAMD_LIBRARY_RELEASE ${SuiteSparse_LIBRARY_DIR}/camd.lib)
-
 set(SuiteSparse_COLAMD_FOUND TRUE)
-set(SuiteSparse_COLAMD_INCLUDE_DIR ${SuiteSparse_INCLUDE_DIR})
-set(SuiteSparse_COLAMD_LIBRARY_DEBUG ${SuiteSparse_LIBRARY_DIR}/colamd.lib)
-set(SuiteSparse_COLAMD_LIBRARY_RELEASE ${SuiteSparse_LIBRARY_DIR}/colamd.lib)
-
 set(SuiteSparse_CCOLAMD_FOUND TRUE)
-set(SuiteSparse_CCOLAMD_INCLUDE_DIR ${SuiteSparse_INCLUDE_DIR})
-set(SuiteSparse_CCOLAMD_LIBRARY_DEBUG ${SuiteSparse_LIBRARY_DIR}/ccolamd.lib)
-set(SuiteSparse_CCOLAMD_LIBRARY_RELEASE ${SuiteSparse_LIBRARY_DIR}/ccolamd.lib)
-
 set(SuiteSparse_CHOLMOD_FOUND TRUE)
-set(SuiteSparse_CHOLMOD_INCLUDE_DIR ${SuiteSparse_INCLUDE_DIR})
-set(SuiteSparse_CHOLMOD_LIBRARY_DEBUG ${SuiteSparse_LIBRARY_DIR}/cholmod.lib)
-set(SuiteSparse_CHOLMOD_LIBRARY_RELEASE ${SuiteSparse_LIBRARY_DIR}/cholmod.lib)
-
 set(SuiteSparse_UMFPACK_FOUND TRUE)
-set(SuiteSparse_UMFPACK_INCLUDE_DIR ${SuiteSparse_INCLUDE_DIR})
-set(SuiteSparse_UMFPACK_LIBRARY_DEBUG ${SuiteSparse_LIBRARY_DIR}/umfpack.lib)
-set(SuiteSparse_UMFPACK_LIBRARY_RELEASE ${SuiteSparse_LIBRARY_DIR}/umfpack.lib)
-
 set(SuiteSparse_SPQR_FOUND TRUE)
-set(SuiteSparse_SPQR_INCLUDE_DIR ${SuiteSparse_INCLUDE_DIR})
-set(SuiteSparse_SPQR_LIBRARY_DEBUG ${SuiteSparse_LIBRARY_DIR}/spqr.lib)
-set(SuiteSparse_SPQR_LIBRARY_RELEASE ${SuiteSparse_LIBRARY_DIR}/spqr.lib)
+set(SuiteSparse_KLU_FOUND TRUE)
+set(SuiteSparse_LDL_FOUND TRUE)
+set(SuiteSparse_BTF_FOUND TRUE)
+set(SuiteSparse_CXSPARSE_FOUND TRUE)
 
-set(SuiteSparse_BLAS_LIBRARY "D:/a/boundary-first-flattening/boundary-first-flattening/vcpkg/installed/x64-windows/lib/openblas.lib")
-set(SuiteSparse_LAPACK_LIBRARY "D:/a/boundary-first-flattening/boundary-first-flattening/vcpkg/installed/x64-windows/lib/lapack.lib")
+# Set library paths
+set(SuiteSparse_AMD_LIBRARY "\${SuiteSparse_LIBRARY_DIR}/amd.lib")
+set(SuiteSparse_CHOLMOD_LIBRARY "\${SuiteSparse_LIBRARY_DIR}/cholmod.lib")
+set(SuiteSparse_UMFPACK_LIBRARY "\${SuiteSparse_LIBRARY_DIR}/umfpack.lib")
 
-message(STATUS "Using vcpkg-provided SuiteSparse override")
-'@
-        
-        $overrideCMake | Out-File "SuiteSparseOverride.cmake" -Encoding UTF8
+# BLAS/LAPACK (vcpkg provides these)
+set(SuiteSparse_BLAS_LIBRARY "\${SuiteSparse_LIBRARY_DIR}/openblas.lib")
+set(SuiteSparse_LAPACK_LIBRARY "\${SuiteSparse_LIBRARY_DIR}/lapack.lib")
+
+message(STATUS "Using simplified SuiteSparse configuration")
+"@ | Out-File "cmake/FindSuiteSparse.cmake" -Encoding UTF8
         
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v1.1
       
-    - name: Configure CMake with override
+    - name: Configure CMake
       run: |
         echo "=== Configuring CMake ==="
         
-        # First, backup the broken FindSuiteSparse.cmake and create a simple one
-        if (Test-Path "cmake/FindSuiteSparse.cmake") {
-            Move-Item "cmake/FindSuiteSparse.cmake" "cmake/FindSuiteSparse.cmake.bak" -Force
-        }
-        
-        # Create a minimal working FindSuiteSparse.cmake
-        $simpleFindSuiteSparse = @'
-# Simplified FindSuiteSparse.cmake
-cmake_minimum_required(VERSION 3.10)
-
-if(NOT SuiteSparse_FOUND)
-    # Try to find SuiteSparse
-    find_path(SuiteSparse_INCLUDE_DIR
-        NAMES SuiteSparse_config.h
-        PATHS ${SuiteSparse_DIR}/include
-              ${SuiteSparse_ROOT}/include
-              "C:/SuiteSparse/include"
-              "D:/a/boundary-first-flattening/boundary-first-flattening/vcpkg/installed/x64-windows/include"
-    )
-    
-    if(SuiteSparse_INCLUDE_DIR)
-        message(STATUS "Found SuiteSparse includes: ${SuiteSparse_INCLUDE_DIR}")
-        set(SuiteSparse_FOUND TRUE)
-        
-        # Set basic variables
-        set(SuiteSparse_LIBRARIES "")
-        set(SuiteSparse_INCLUDE_DIRS ${SuiteSparse_INCLUDE_DIR})
-        
-        # Try to find common libraries
-        find_library(SUITESPARSE_AMD_LIB NAMES amd PATHS ${SuiteSparse_DIR}/lib ${SuiteSparse_ROOT}/lib)
-        find_library(SUITESPARSE_CHOLMOD_LIB NAMES cholmod PATHS ${SuiteSparse_DIR}/lib ${SuiteSparse_ROOT}/lib)
-        
-        if(SUITESPARSE_AMD_LIB)
-            list(APPEND SuiteSparse_LIBRARIES ${SUITESPARSE_AMD_LIB})
-        endif()
-        if(SUITESPARSE_CHOLMOD_LIB)
-            list(APPEND SuiteSparse_LIBRARIES ${SUITESPARSE_CHOLMOD_LIB})
-        endif()
-        
-    else()
-        message(WARNING "SuiteSparse not found, but continuing anyway")
-        set(SuiteSparse_FOUND TRUE)  # Force it to continue
-    endif()
-endif()
-
-mark_as_advanced(
-    SuiteSparse_INCLUDE_DIR
-    SuiteSparse_LIBRARIES
-)
-'@
-        
-        $simpleFindSuiteSparse | Out-File "cmake/FindSuiteSparse.cmake" -Encoding UTF8
-        
-        # Now configure CMake
+        # Configure with vcpkg toolchain
         cmake -B build `
           -DBFF_BUILD_GUI=ON `
           -DCMAKE_TOOLCHAIN_FILE="$env:GITHUB_WORKSPACE/vcpkg/scripts/buildsystems/vcpkg.cmake" `
           -DCMAKE_BUILD_TYPE=Release `
-          -DCMAKE_MODULE_PATH="$env:GITHUB_WORKSPACE/cmake" `
           -Wno-dev
         
     - name: Build the project
@@ -157,36 +91,26 @@ mark_as_advanced(
         
         cmake --build build --config Release --parallel 2
         
-        echo "Build complete. Checking for executables..."
-        
-    - name: Check results
+    - name: Check for viewer executable
       run: |
-        echo "=== Build results ==="
+        echo "=== Checking for viewer ==="
         
-        # Look for any executables
-        Get-ChildItem -Path build -Recurse -Filter "*.exe" -ErrorAction SilentlyContinue | ForEach-Object {
-            echo "Found executable: $($_.FullName)"
+        # Search for viewer executable
+        $viewer = Get-ChildItem -Path build -Recurse -Filter "*viewer*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+        
+        if ($viewer) {
+            echo "✅ SUCCESS: Found viewer at $($viewer.FullName)"
+            echo "Size: $($viewer.Length) bytes"
             
-            # Check if it's the viewer
-            if ($_.Name -match "viewer") {
-                echo "✅ VIEWER FOUND: $($_.FullName)"
-                echo "Size: $($_.Length) bytes"
-                
-                # Try to check dependencies
-                try {
-                    dumpbin /dependents $_.FullName 2>$null | Select-String -Pattern "\.dll"
-                } catch {
-                    echo "Could not check dependencies"
-                }
+            # Check dependencies
+            echo "`nDependencies:"
+            dumpbin /dependents $viewer.FullName 2>$null | Select-String -Pattern "\.dll" | ForEach-Object {
+                echo "  $_"
             }
-        }
-        
-        # If no executables, show what was built
-        $exeCount = (Get-ChildItem -Path build -Recurse -Filter "*.exe" -ErrorAction SilentlyContinue).Count
-        if ($exeCount -eq 0) {
-            echo "No executables found. Looking for libraries..."
-            Get-ChildItem -Path build -Recurse -Filter "*.lib" -ErrorAction SilentlyContinue | Select-Object -First 10 Name
-            
-            echo "`nBuild directory contents:"
-            Get-ChildItem -Path build -Name
+        } else {
+            echo "❌ No viewer executable found"
+            echo "Searching for any executables..."
+            Get-ChildItem -Path build -Recurse -Filter "*.exe" -ErrorAction SilentlyContinue | ForEach-Object {
+                echo "  Found: $($_.FullName)"
+            }
         }
