@@ -11,13 +11,26 @@ jobs:
       with:
         submodules: recursive
         
+    - name: Install SuiteSparse (Windows)
+      run: |
+        echo "Installing SuiteSparse dependencies..."
+        # Download prebuilt SuiteSparse for Windows
+        # From: https://github.com/jlblancoc/suitesparse-metis-for-windows
+        curl -L -o suitesparse.zip https://github.com/jlblancoc/suitesparse-metis-for-windows/releases/download/v1.4.0/SuiteSparse-5.1.2-METIS-5.1.0.tar.gz
+        7z x suitesparse.zip -o"C:\SuiteSparse" -y
+        echo "SuiteSparse installed to C:\SuiteSparse"
+        
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v1.1
       
-    - name: Configure CMake with GUI enabled
+    - name: Configure CMake with SuiteSparse
       run: |
-        echo "Configuring CMake with GUI support..."
-        cmake -B build -DBFF_BUILD_GUI=ON
+        echo "Configuring CMake with SuiteSparse path..."
+        # Set the path to SuiteSparse
+        cmake -B build `
+          -DBFF_BUILD_GUI=ON `
+          -DSuiteSparse_DIR="C:/SuiteSparse" `
+          -DSuiteSparse_ROOT="C:/SuiteSparse"
         
     - name: Build the project
       run: |
@@ -38,74 +51,5 @@ jobs:
             echo "Searching for any executable..."
             Get-ChildItem -Path build -Recurse -Filter "*.exe" | ForEach-Object {
                 echo "Found executable: $($_.FullName)"
-            }
-        }
-        
-    - name: Test viewer (basic check)
-      run: |
-        echo "=== Testing viewer executable ==="
-        $viewerPath = ""
-        
-        if (Test-Path "build/Release/bff-viewer.exe") {
-            $viewerPath = "build/Release/bff-viewer.exe"
-        } elseif (Test-Path "build/bff-viewer.exe") {
-            $viewerPath = "build/bff-viewer.exe"
-        }
-        
-        if ($viewerPath -ne "") {
-            echo "Found viewer at: $viewerPath"
-            
-            # Check file information
-            echo "File info:"
-            Get-Item $viewerPath | Format-List *
-            
-            # Try to run with --help or --version (common flags)
-            echo "`nTrying to run viewer with --help flag..."
-            & $viewerPath --help 2>&1 | Out-String
-            
-            echo "`nTrying to run viewer with --version flag..."
-            & $viewerPath --version 2>&1 | Out-String
-            
-            # Just running it without args (it might fail without display, but that's OK)
-            echo "`nTrying to run viewer (will likely fail without display)..."
-            & $viewerPath 2>&1 | Out-String
-            
-        } else {
-            echo "No viewer executable found to test"
-        }
-        
-    - name: Analyze dependencies
-      run: |
-        echo "=== Analyzing what the viewer needs ==="
-        $viewerPath = ""
-        
-        if (Test-Path "build/Release/bff-viewer.exe") {
-            $viewerPath = "build/Release/bff-viewer.exe"
-        } elseif (Test-Path "build/bff-viewer.exe") {
-            $viewerPath = "build/bff-viewer.exe"
-        }
-        
-        if ($viewerPath -ne "") {
-            echo "Checking dependencies with dumpbin..."
-            dumpbin /dependents $viewerPath
-            
-            echo "`nChecking if required DLLs exist..."
-            # Common required DLLs for GUI apps
-            $requiredDlls = @(
-                "glfw3.dll",
-                "opengl32.dll",
-                "glu32.dll",
-                "user32.dll",
-                "gdi32.dll"
-            )
-            
-            foreach ($dll in $requiredDlls) {
-                if (Test-Path "build/$dll") {
-                    echo "✅ Found: $dll in build/"
-                } elseif (Test-Path "build/Release/$dll") {
-                    echo "✅ Found: $dll in build/Release/"
-                } else {
-                    echo "⚠️  Missing: $dll (may be in system path)"
-                }
             }
         }
