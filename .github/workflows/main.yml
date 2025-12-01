@@ -11,26 +11,28 @@ jobs:
       with:
         submodules: recursive
         
-    - name: Install SuiteSparse (Windows)
+    - name: Install SuiteSparse (Windows - alternative)
       run: |
         echo "Installing SuiteSparse dependencies..."
-        # Download prebuilt SuiteSparse for Windows
-        # From: https://github.com/jlblancoc/suitesparse-metis-for-windows
-        curl -L -o suitesparse.zip https://github.com/jlblancoc/suitesparse-metis-for-windows/releases/download/v1.4.0/SuiteSparse-5.1.2-METIS-5.1.0.tar.gz
-        7z x suitesparse.zip -o"C:\SuiteSparse" -y
-        echo "SuiteSparse installed to C:\SuiteSparse"
+        # Download SuiteSparse from a working source
+        # Using vcpkg to install SuiteSparse
+        git clone https://github.com/Microsoft/vcpkg.git
+        .\vcpkg\bootstrap-vcpkg.bat
+        .\vcpkg\vcpkg install suitesparse:x64-windows
         
+        # Set environment variables for CMake
+        echo "VCPKG_ROOT=$env:GITHUB_WORKSPACE\vcpkg" | Out-File -FilePath $env:GITHUB_ENV -Append
+        echo "CMAKE_TOOLCHAIN_FILE=$env:GITHUB_WORKSPACE\vcpkg\scripts\buildsystems\vcpkg.cmake" | Out-File -FilePath $env:GITHUB_ENV -Append
+      
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v1.1
       
-    - name: Configure CMake with SuiteSparse
+    - name: Configure CMake with vcpkg
       run: |
-        echo "Configuring CMake with SuiteSparse path..."
-        # Set the path to SuiteSparse
+        echo "Configuring CMake with vcpkg toolchain..."
         cmake -B build `
           -DBFF_BUILD_GUI=ON `
-          -DSuiteSparse_DIR="C:/SuiteSparse" `
-          -DSuiteSparse_ROOT="C:/SuiteSparse"
+          -DCMAKE_TOOLCHAIN_FILE="$env:GITHUB_WORKSPACE/vcpkg/scripts/buildsystems/vcpkg.cmake"
         
     - name: Build the project
       run: |
@@ -48,8 +50,4 @@ jobs:
             Get-Item "build/bff-viewer.exe"
         } else {
             echo "❌ Viewer not found in expected locations"
-            echo "Searching for any executable..."
-            Get-ChildItem -Path build -Recurse -Filter "*.exe" | ForEach-Object {
-                echo "Found executable: $($_.FullName)"
-            }
         }
