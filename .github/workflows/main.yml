@@ -1,4 +1,4 @@
-name: Build BFF Windows Binary
+name: Build BFF Windows
 
 on: 
   push:
@@ -15,60 +15,27 @@ jobs:
       with:
         submodules: recursive
 
-    - name: Build SuiteSparse
+    - name: Check what dependencies we have
       run: |
-        git clone https://github.com/jlblancoc/suitesparse-metis-for-windows.git SuiteSparseWin
-        cd SuiteSparseWin
-        mkdir build && cd build
-        cmake .. -DCMAKE_INSTALL_PREFIX="$pwd/install" -DCMAKE_BUILD_TYPE=Release -G "Visual Studio 17 2022" -A x64
-        cmake --build . --config Release --target install
+        echo "=== Available dependencies ==="
+        if (Test-Path "deps") {
+            dir deps -Recurse
+        }
 
-    - name: Create simple build script
+    - name: Simple CMake configuration
       run: |
-        # Create a PowerShell script to build BFF with all required variables
-        $buildScript = @'
-$SuiteSparseDir = "$pwd/SuiteSparseWin/build/install"
-$OpenBLASDir = "$pwd/deps/openblas-windows"
+        # Just try to configure with what we have
+        mkdir build
+        cd build
+        cmake .. -DCMAKE_BUILD_TYPE=Release -G "Visual Studio 17 2022" -A x64
 
-mkdir build
-cd build
-
-# Configure with ALL required variables
-cmake .. `
-  -DCMAKE_BUILD_TYPE=Release `
-  -DSuiteSparse_DIR="$SuiteSparseDir" `
-  -DSuiteSparse_CHOLMOD_DIR="$SuiteSparseDir/lib" `
-  -DSuiteSparse_CHOLMOD_INCLUDE_DIR="$SuiteSparseDir/include/suitesparse" `
-  -DSuiteSparse_CHOLMOD_LIBRARY_RELEASE="$SuiteSparseDir/lib/libcholmod.lib" `
-  -DSuiteSparse_AMD_LIBRARY_RELEASE="$SuiteSparseDir/lib/libamd.lib" `
-  -DSuiteSparse_CAMD_LIBRARY_RELEASE="$SuiteSparseDir/lib/libcamd.lib" `
-  -DSuiteSparse_CCOLAMD_LIBRARY_RELEASE="$SuiteSparseDir/lib/libccolamd.lib" `
-  -DSuiteSparse_COLAMD_LIBRARY_RELEASE="$SuiteSparseDir/lib/libcolamd.lib" `
-  -DSuiteSparse_BTF_LIBRARY_RELEASE="$SuiteSparseDir/lib/libbtf.lib" `
-  -DSuiteSparse_KLU_LIBRARY_RELEASE="$SuiteSparseDir/lib/libklu.lib" `
-  -DSuiteSparse_UMFPACK_LIBRARY_RELEASE="$SuiteSparseDir/lib/libumfpack.lib" `
-  -DSuiteSparse_CXSPARSE_LIBRARY_RELEASE="$SuiteSparseDir/lib/libcxsparse.lib" `
-  -DSuiteSparse_SUITESPARSECONFIG_LIBRARY_RELEASE="$SuiteSparseDir/lib/libsuitesparseconfig.lib" `
-  -DSuiteSparse_BLAS_LIBRARY="$OpenBLASDir/lib/libopenblas.lib" `
-  -DSuiteSparse_LAPACK_LIBRARY="$OpenBLASDir/lib/libopenblas.lib" `
-  -G "Visual Studio 17 2022" -A x64
-
-cmake --build . --config Release --target bff-command-line
-'@
-        $buildScript | Out-File -FilePath "build-bff.ps1" -Encoding UTF8
-        echo "Created build script"
-
-    - name: Run build script
+    - name: Try to build
       run: |
-        ./build-bff.ps1
+        cd build
+        cmake --build . --config Release --target bff-command-line
 
-    - name: Copy DLLs
-      run: |
-        Copy-Item "SuiteSparseWin/build/install/bin/*.dll" "build/Release/" -ErrorAction SilentlyContinue
-        Copy-Item "deps/openblas-windows/bin/*.dll" "build/Release/" -ErrorAction SilentlyContinue
-
-    - name: Upload binary
+    - name: Upload result
       uses: actions/upload-artifact@v4
       with:
-        name: bff-windows
+        name: bff-attempt
         path: build/Release/bff-command-line.exe
