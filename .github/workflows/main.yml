@@ -1,41 +1,37 @@
-name: Build BFF Windows
+name: Analyze BFF Viewer Structure
 
-on: 
-  push:
-    tags: ['v*']
-  workflow_dispatch:
+on: workflow_dispatch
 
 jobs:
-  build:
+  analyze:
     runs-on: windows-latest
     
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+    - uses: actions/checkout@v4
       with:
         submodules: recursive
-
-    - name: Check what dependencies we have
+        
+    - name: Analyze source for viewer
       run: |
-        echo "=== Available dependencies ==="
-        if (Test-Path "deps") {
-            dir deps -Recurse
+        echo "=== Looking for viewer source files ==="
+        if (Test-Path "src/viewer") {
+            echo "Viewer directory found:"
+            dir src/viewer -Recurse
         }
-
-    - name: Simple CMake configuration
-      run: |
-        # Just try to configure with what we have
-        mkdir build
-        cd build
-        cmake .. -DCMAKE_BUILD_TYPE=Release -G "Visual Studio 17 2022" -A x64
-
-    - name: Try to build
-      run: |
-        cd build
-        cmake --build . --config Release --target bff-command-line
-
-    - name: Upload result
-      uses: actions/upload-artifact@v4
-      with:
-        name: bff-attempt
-        path: build/Release/bff-command-line.exe
+        if (Test-Path "src/gui") {
+            echo "GUI directory found:"
+            dir src/gui -Recurse
+        }
+        
+        echo "=== Searching for viewer in CMakeLists ==="
+        Get-ChildItem -Path . -Recurse -Filter "CMakeLists.txt" | ForEach-Object {
+            echo "Checking: $($_.FullName)"
+            Get-Content $_ | Select-String -Pattern "viewer|gui|visualizer" | ForEach-Object {
+                echo "  Found: $_"
+            }
+        }
+        
+        echo "=== Possible viewer entry points ==="
+        Get-ChildItem -Path . -Recurse -Filter "*.cpp" | Select-String -Pattern "main.*\(.*argc.*argv" | ForEach-Object {
+            echo "Main function in: $($_.Filename)"
+        }
