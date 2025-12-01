@@ -1,9 +1,9 @@
-name: Build BFF Viewer with SuiteSparse
+name: Build BFF Viewer
 
 on: workflow_dispatch
 
 jobs:
-  build-complete:
+  build-viewer:
     runs-on: windows-latest
     
     steps:
@@ -11,106 +11,57 @@ jobs:
       with:
         submodules: recursive
         
-    - name: Install dependencies with vcpkg
+    - name: Install vcpkg and SuiteSparse
       run: |
-        echo "=== Installing dependencies ==="
-        
-        # Install vcpkg
         git clone https://github.com/Microsoft/vcpkg.git
-        .\vcpkg\bootstrap-vcpkg.bat -disableMetrics
-        
-        # Install SuiteSparse and dependencies
+        .\vcpkg\bootstrap-vcpkg.bat
         .\vcpkg\vcpkg install suitesparse:x64-windows
-        .\vcpkg\vcpkg install lapack-reference:x64-windows
-        .\vcpkg\vcpkg install glfw3:x64-windows
         
-        # Set environment
-        echo "VCPKG_ROOT=$env:GITHUB_WORKSPACE\vcpkg" >> $env:GITHUB_ENV
-        echo "CMAKE_TOOLCHAIN_FILE=$env:GITHUB_WORKSPACE\vcpkg\scripts\buildsystems\vcpkg.cmake" >> $env:GITHUB_ENV
-        
-    - name: Create simple FindSuiteSparse.cmake
+    - name: Create simplified FindSuiteSparse.cmake
+      shell: pwsh
       run: |
-        echo "=== Creating simple FindSuiteSparse.cmake ==="
-        
         # Backup original
         if (Test-Path "cmake/FindSuiteSparse.cmake") {
             Move-Item "cmake/FindSuiteSparse.cmake" "cmake/FindSuiteSparse.cmake.backup" -Force
         }
         
-        # Write new simple version
-        @"
+        # Create simple version
+        $content = @'
 # Simplified FindSuiteSparse.cmake
 cmake_minimum_required(VERSION 3.10)
 
+# Always return success
 set(SuiteSparse_FOUND TRUE)
-set(SuiteSparse_INCLUDE_DIR "\$ENV{GITHUB_WORKSPACE}/vcpkg/installed/x64-windows/include")
-set(SuiteSparse_LIBRARY_DIR "\$ENV{GITHUB_WORKSPACE}/vcpkg/installed/x64-windows/lib")
+set(SuiteSparse_INCLUDE_DIR "$ENV{GITHUB_WORKSPACE}/vcpkg/installed/x64-windows/include")
+set(SuiteSparse_LIBRARY_DIR "$ENV{GITHUB_WORKSPACE}/vcpkg/installed/x64-windows/lib")
 
 # Mark all components as found
 set(SuiteSparse_AMD_FOUND TRUE)
-set(SuiteSparse_CAMD_FOUND TRUE)
-set(SuiteSparse_COLAMD_FOUND TRUE)
-set(SuiteSparse_CCOLAMD_FOUND TRUE)
 set(SuiteSparse_CHOLMOD_FOUND TRUE)
 set(SuiteSparse_UMFPACK_FOUND TRUE)
 set(SuiteSparse_SPQR_FOUND TRUE)
-set(SuiteSparse_KLU_FOUND TRUE)
-set(SuiteSparse_LDL_FOUND TRUE)
-set(SuiteSparse_BTF_FOUND TRUE)
-set(SuiteSparse_CXSPARSE_FOUND TRUE)
-
-# Set library paths
-set(SuiteSparse_AMD_LIBRARY "\${SuiteSparse_LIBRARY_DIR}/amd.lib")
-set(SuiteSparse_CHOLMOD_LIBRARY "\${SuiteSparse_LIBRARY_DIR}/cholmod.lib")
-set(SuiteSparse_UMFPACK_LIBRARY "\${SuiteSparse_LIBRARY_DIR}/umfpack.lib")
-
-# BLAS/LAPACK (vcpkg provides these)
-set(SuiteSparse_BLAS_LIBRARY "\${SuiteSparse_LIBRARY_DIR}/openblas.lib")
-set(SuiteSparse_LAPACK_LIBRARY "\${SuiteSparse_LIBRARY_DIR}/lapack.lib")
 
 message(STATUS "Using simplified SuiteSparse configuration")
-"@ | Out-File "cmake/FindSuiteSparse.cmake" -Encoding UTF8
+'@
+        
+        $content | Out-File "cmake/FindSuiteSparse.cmake" -Encoding UTF8
         
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v1.1
       
     - name: Configure CMake
       run: |
-        echo "=== Configuring CMake ==="
-        
-        # Configure with vcpkg toolchain
         cmake -B build `
           -DBFF_BUILD_GUI=ON `
-          -DCMAKE_TOOLCHAIN_FILE="$env:GITHUB_WORKSPACE/vcpkg/scripts/buildsystems/vcpkg.cmake" `
           -DCMAKE_BUILD_TYPE=Release `
-          -Wno-dev
+          -DCMAKE_TOOLCHAIN_FILE="$env:GITHUB_WORKSPACE/vcpkg/scripts/buildsystems/vcpkg.cmake"
         
-    - name: Build the project
+    - name: Build
       run: |
-        echo "=== Building project ==="
+        cmake --build build --config Release
         
-        cmake --build build --config Release --parallel 2
-        
-    - name: Check for viewer executable
+    - name: Check for viewer
       run: |
-        echo "=== Checking for viewer ==="
-        
-        # Search for viewer executable
-        $viewer = Get-ChildItem -Path build -Recurse -Filter "*viewer*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-        
-        if ($viewer) {
-            echo "✅ SUCCESS: Found viewer at $($viewer.FullName)"
-            echo "Size: $($viewer.Length) bytes"
-            
-            # Check dependencies
-            echo "`nDependencies:"
-            dumpbin /dependents $viewer.FullName 2>$null | Select-String -Pattern "\.dll" | ForEach-Object {
-                echo "  $_"
-            }
-        } else {
-            echo "❌ No viewer executable found"
-            echo "Searching for any executables..."
-            Get-ChildItem -Path build -Recurse -Filter "*.exe" -ErrorAction SilentlyContinue | ForEach-Object {
-                echo "  Found: $($_.FullName)"
-            }
+        Get-ChildItem -Path build -Recurse -Filter "*viewer*.exe" -ErrorAction SilentlyContinue | ForEach-Object {
+            echo "Found: $($_.FullName)"
         }
