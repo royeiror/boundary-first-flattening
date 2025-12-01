@@ -18,103 +18,130 @@ jobs:
         .\vcpkg\vcpkg install suitesparse:x64-windows
         .\vcpkg\vcpkg install lapack-reference:x64-windows
         
-    - name: Create proper FindSuiteSparse.cmake
+    - name: Debug: Check what vcpkg actually installed
+      run: |
+        $vcpkgPath = "$env:GITHUB_WORKSPACE/vcpkg/installed/x64-windows"
+        echo "VCPKG Path: $vcpkgPath"
+        
+        echo "`n=== Looking for cholmod.h ==="
+        Get-ChildItem "$vcpkgPath" -Filter "cholmod.h" -Recurse | ForEach-Object {
+            echo "Found: $($_.FullName)"
+        }
+        
+        echo "`n=== SuiteSparse files ==="
+        Get-ChildItem "$vcpkgPath/include" -Filter "*" | Where-Object { $_.Name -match "cholmod|SuiteSparse" } | Select-Object -First 10
+        
+    - name: Create a working FindSuiteSparse.cmake
       run: |
         $vcpkgPath = "$env:GITHUB_WORKSPACE/vcpkg/installed/x64-windows" -replace '\\', '/'
         
-        $lines = @()
-        $lines += "# FindSuiteSparse.cmake for vcpkg"
-        $lines += "cmake_minimum_required(VERSION 3.10)"
-        $lines += ""
-        $lines += "# Set paths from vcpkg"
-        $lines += "set(SuiteSparse_FOUND TRUE)"
-        $lines += "set(SuiteSparse_INCLUDE_DIR `"$vcpkgPath/include`")"
-        $lines += "set(SuiteSparse_LIBRARY_DIR `"$vcpkgPath/lib`")"
-        $lines += ""
-        $lines += "# Set individual component paths"
-        $lines += "set(SuiteSparse_AMD_INCLUDE_DIR `"$vcpkgPath/include`")"
-        $lines += "set(SuiteSparse_CAMD_INCLUDE_DIR `"$vcpkgPath/include`")"
-        $lines += "set(SuiteSparse_COLAMD_INCLUDE_DIR `"$vcpkgPath/include`")"
-        $lines += "set(SuiteSparse_CCOLAMD_INCLUDE_DIR `"$vcpkgPath/include`")"
-        $lines += "set(SuiteSparse_CHOLMOD_INCLUDE_DIR `"$vcpkgPath/include`")"
-        $lines += "set(SuiteSparse_UMFPACK_INCLUDE_DIR `"$vcpkgPath/include`")"
-        $lines += "set(SuiteSparse_SPQR_INCLUDE_DIR `"$vcpkgPath/include`")"
-        $lines += "set(SuiteSparse_KLU_INCLUDE_DIR `"$vcpkgPath/include`")"
-        $lines += "set(SuiteSparse_LDL_INCLUDE_DIR `"$vcpkgPath/include`")"
-        $lines += "set(SuiteSparse_BTF_INCLUDE_DIR `"$vcpkgPath/include`")"
-        $lines += "set(SuiteSparse_CXSPARSE_INCLUDE_DIR `"$vcpkgPath/include`")"
-        $lines += "set(SuiteSparse_SUITESPARSECONFIG_INCLUDE_DIR `"$vcpkgPath/include`")"
-        $lines += ""
-        $lines += "# Set library files"
-        $lines += "set(SuiteSparse_AMD_LIBRARY `"$vcpkgPath/lib/amd.lib`")"
-        $lines += "set(SuiteSparse_CAMD_LIBRARY `"$vcpkgPath/lib/camd.lib`")"
-        $lines += "set(SuiteSparse_COLAMD_LIBRARY `"$vcpkgPath/lib/colamd.lib`")"
-        $lines += "set(SuiteSparse_CCOLAMD_LIBRARY `"$vcpkgPath/lib/ccolamd.lib`")"
-        $lines += "set(SuiteSparse_CHOLMOD_LIBRARY `"$vcpkgPath/lib/cholmod.lib`")"
-        $lines += "set(SuiteSparse_UMFPACK_LIBRARY `"$vcpkgPath/lib/umfpack.lib`")"
-        $lines += "set(SuiteSparse_SPQR_LIBRARY `"$vcpkgPath/lib/spqr.lib`")"
-        $lines += "set(SuiteSparse_KLU_LIBRARY `"$vcpkgPath/lib/klu.lib`")"
-        $lines += "set(SuiteSparse_LDL_LIBRARY `"$vcpkgPath/lib/ldl.lib`")"
-        $lines += "set(SuiteSparse_BTF_LIBRARY `"$vcpkgPath/lib/btf.lib`")"
-        $lines += "set(SuiteSparse_CXSPARSE_LIBRARY `"$vcpkgPath/lib/cxsparse.lib`")"
-        $lines += "set(SuiteSparse_SUITESPARSECONFIG_LIBRARY `"$vcpkgPath/lib/suitesparseconfig.lib`")"
-        $lines += ""
-        $lines += "# BLAS/LAPACK"
-        $lines += "set(SuiteSparse_BLAS_LIBRARY `"$vcpkgPath/lib/openblas.lib`")"
-        $lines += "set(SuiteSparse_LAPACK_LIBRARY `"$vcpkgPath/lib/lapack.lib`")"
-        $lines += ""
-        $lines += "# Create imported target"
-        $lines += "if(NOT TARGET SuiteSparse::SuiteSparse)"
-        $lines += "  add_library(SuiteSparse::SuiteSparse INTERFACE IMPORTED)"
-        $lines += "  target_include_directories(SuiteSparse::SuiteSparse INTERFACE `"$vcpkgPath/include`")"
-        $lines += "  target_link_libraries(SuiteSparse::SuiteSparse INTERFACE"
-        $lines += "    `"$vcpkgPath/lib/cholmod.lib`""
-        $lines += "    `"$vcpkgPath/lib/amd.lib`""
-        $lines += "    `"$vcpkgPath/lib/camd.lib`""
-        $lines += "    `"$vcpkgPath/lib/colamd.lib`""
-        $lines += "    `"$vcpkgPath/lib/ccolamd.lib`""
-        $lines += "    `"$vcpkgPath/lib/openblas.lib`""
-        $lines += "    `"$vcpkgPath/lib/lapack.lib`""
-        $lines += "  )"
-        $lines += "endif()"
-        $lines += ""
-        $lines += "message(STATUS `"Found SuiteSparse via vcpkg at $vcpkgPath`")"
+        # First, find where cholmod.h actually is
+        $cholmodFile = Get-ChildItem "$env:GITHUB_WORKSPACE/vcpkg/installed/x64-windows" -Filter "cholmod.h" -Recurse | Select-Object -First 1
+        if ($cholmodFile) {
+            $cholmodDir = $cholmodFile.Directory.FullName -replace '\\', '/'
+            echo "cholmod.h found at: $cholmodDir"
+        } else {
+            $cholmodDir = "$vcpkgPath/include"
+            echo "cholmod.h not found, using default: $cholmodDir"
+        }
         
-        $content = $lines -join "`n"
+        # Create the CMake file
+        $content = @"
+# FindSuiteSparse.cmake - Simple version
+set(SuiteSparse_FOUND TRUE)
+
+# Include directory (where cholmod.h is)
+set(SuiteSparse_INCLUDE_DIR "$cholmodDir")
+set(SuiteSparse_INCLUDE_DIRS "$cholmodDir")
+
+# Library directory
+set(SuiteSparse_LIBRARY_DIR "$vcpkgPath/lib")
+
+# Individual libraries
+set(SuiteSparse_CHOLMOD_LIBRARY "$vcpkgPath/lib/cholmod.lib")
+set(SuiteSparse_AMD_LIBRARY "$vcpkgPath/lib/amd.lib")
+set(SuiteSparse_CAMD_LIBRARY "$vcpkgPath/lib/camd.lib")
+set(SuiteSparse_COLAMD_LIBRARY "$vcpkgPath/lib/colamd.lib")
+set(SuiteSparse_CCOLAMD_LIBRARY "$vcpkgPath/lib/ccolamd.lib")
+set(SuiteSparse_BLAS_LIBRARY "$vcpkgPath/lib/openblas.lib")
+set(SuiteSparse_LAPACK_LIBRARY "$vcpkgPath/lib/lapack.lib")
+
+# Create imported target
+if(NOT TARGET SuiteSparse::SuiteSparse)
+  add_library(SuiteSparse::SuiteSparse INTERFACE IMPORTED)
+  target_include_directories(SuiteSparse::SuiteSparse INTERFACE "$cholmodDir")
+  target_link_libraries(SuiteSparse::SuiteSparse INTERFACE
+    "$vcpkgPath/lib/cholmod.lib"
+    "$vcpkgPath/lib/amd.lib"
+    "$vcpkgPath/lib/camd.lib"
+    "$vcpkgPath/lib/colamd.lib"
+    "$vcpkgPath/lib/ccolamd.lib"
+    "$vcpkgPath/lib/openblas.lib"
+    "$vcpkgPath/lib/lapack.lib"
+  )
+endif()
+
+message(STATUS "Found SuiteSparse: $cholmodDir")
+"@
+        
         $content | Set-Content "cmake/FindSuiteSparse.cmake" -Encoding UTF8
-        
         echo "Created FindSuiteSparse.cmake"
+        
+    - name: Also patch the Common.h file to find cholmod
+      run: |
+        # Check what the include actually looks like
+        echo "=== Original Common.h ==="
+        Get-Content "include/bff/linear-algebra/Common.h" -First 5
+        
+        # Create a wrapper header if needed
+        $wrapper = @'
+// cholmod wrapper for CI
+#ifndef CHOLMOD_H
+#define CHOLMOD_H
+
+// Try to find cholmod.h
+#if __has_include("cholmod.h")
+    #include "cholmod.h"
+#elif __has_include("suitesparse/cholmod.h")
+    #include "suitesparse/cholmod.h"
+#else
+    #error "cholmod.h not found. Please install SuiteSparse."
+#endif
+
+#endif // CHOLMOD_H
+'@
+        
+        $wrapper | Set-Content "cholmod_wrapper.h" -Encoding UTF8
+        echo "Created cholmod_wrapper.h"
         
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v1.1
       
-    - name: Configure CMake
+    - name: Configure CMake with manual include
       run: |
         $vcpkgPath = "$env:GITHUB_WORKSPACE/vcpkg/installed/x64-windows" -replace '\\', '/'
+        
+        # Find cholmod.h directory
+        $cholmodFile = Get-ChildItem "$env:GITHUB_WORKSPACE/vcpkg/installed/x64-windows" -Filter "cholmod.h" -Recurse | Select-Object -First 1
+        $cholmodDir = if ($cholmodFile) { 
+            $cholmodFile.Directory.FullName -replace '\\', '/' 
+        } else { 
+            "$vcpkgPath/include" 
+        }
+        
+        echo "Using cholmod directory: $cholmodDir"
         
         cmake -B build `
           -DBFF_BUILD_GUI=ON `
           -DCMAKE_BUILD_TYPE=Release `
           -DCMAKE_TOOLCHAIN_FILE="$env:GITHUB_WORKSPACE/vcpkg/scripts/buildsystems/vcpkg.cmake" `
-          -DSuiteSparse_DIR="$vcpkgPath"
+          -DCMAKE_CXX_FLAGS="/I`"$cholmodDir`"" `
+          -DSuiteSparse_INCLUDE_DIR="$cholmodDir"
         
     - name: Build
       run: |
-        cmake --build build --config Release --parallel 2
+        cmake --build build --config Release
         
     - name: Check results
       run: |
-        if (Test-Path "build/Release/bff-viewer.exe") {
-            echo "✅ SUCCESS: bff-viewer.exe built!"
-            dir "build/Release/bff-viewer.exe"
-            
-            # Try to run it (will fail without display, but that's OK)
-            echo "`nTrying to run viewer..."
-            & "build/Release/bff-viewer.exe" --help 2>&1 | Out-String
-        } else {
-            echo "❌ Viewer not found in build/Release/"
-            echo "Looking in all build directories..."
-            Get-ChildItem -Path build -Recurse -Filter "*.exe" -ErrorAction SilentlyContinue | ForEach-Object {
-                echo "Found: $($_.FullName)"
-            }
-        }
+        Get-ChildItem -Path build -Recurse -Filter "*.exe" -ErrorAction SilentlyContinue
