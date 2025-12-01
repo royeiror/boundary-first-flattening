@@ -1,4 +1,4 @@
-name: Build BFF Windows Binary (Follow Original Instructions)
+name: Build BFF Windows Binary
 
 on: 
   push:
@@ -15,83 +15,60 @@ jobs:
       with:
         submodules: recursive
 
-    - name: Build SuiteSparse as per instructions
+    - name: Build SuiteSparse
       run: |
-        # Clone and build SuiteSparse exactly as the instructions say
         git clone https://github.com/jlblancoc/suitesparse-metis-for-windows.git SuiteSparseWin
         cd SuiteSparseWin
         mkdir build && cd build
         cmake .. -DCMAKE_INSTALL_PREFIX="$pwd/install" -DCMAKE_BUILD_TYPE=Release -G "Visual Studio 17 2022" -A x64
-        cmake --build . --config Release --target install --parallel
-        
-        echo "=== SuiteSparse installed ==="
-        dir install/include/suitesparse | Select-Object -First 10
-        dir install/lib/*.lib | Select-Object -First 10
+        cmake --build . --config Release --target install
 
-    - name: Configure BFF with ALL required variables
+    - name: Create simple build script
       run: |
-        $SuiteSparseDir = "$pwd/SuiteSparseWin/build/install"
-        $OpenBLASDir = "$pwd/deps/openblas-windows"
-        
-        echo "=== Setting ALL CMake variables as per Windows instructions ==="
-        echo "SuiteSparse directory: $SuiteSparseDir"
-        echo "OpenBLAS directory: $OpenBLASDir"
-        
-        mkdir build
-        cd build
-        
-        # Set EVERY variable mentioned in the Windows instructions
-        cmake .. `
-          -DCMAKE_BUILD_TYPE=Release `
-          # SuiteSparse paths
-          -DSuiteSparse_DIR="$SuiteSparseDir" `
-          -DSuiteSparse_CHOLMOD_DIR="$SuiteSparseDir/lib" `
-          -DSuiteSparse_CHOLMOD_INCLUDE_DIR="$SuiteSparseDir/include/suitesparse" `
-          -DSuiteSparse_CHOLMOD_LIBRARY_DEBUG="$SuiteSparseDir/lib/libcholmod.lib" `
-          -DSuiteSparse_CHOLMOD_LIBRARY_RELEASE="$SuiteSparseDir/lib/libcholmod.lib" `
-          -DSuiteSparse_AMD_DIR="$SuiteSparseDir/lib" `
-          -DSuiteSparse_AMD_INCLUDE_DIR="$SuiteSparseDir/include/suitesparse" `
-          -DSuiteSparse_AMD_LIBRARY_DEBUG="$SuiteSparseDir/lib/libamd.lib" `
-          -DSuiteSparse_AMD_LIBRARY_RELEASE="$SuiteSparseDir/lib/libamd.lib" `
-          -DSuiteSparse_CAMD_DIR="$SuiteSparseDir/lib" `
-          -DSuiteSparse_CAMD_INCLUDE_DIR="$SuiteSparseDir/include/suitesparse" `
-          -DSuiteSparse_CAMD_LIBRARY_DEBUG="$SuiteSparseDir/lib/libcamd.lib" `
-          -DSuiteSparse_CAMD_LIBRARY_RELEASE="$SuiteSparseDir/lib/libcamd.lib" `
-          -DSuiteSparse_CCOLAMD_DIR="$SuiteSparseDir/lib" `
-          -DSuiteSparse_CCOLAMD_INCLUDE_DIR="$SuiteSparseDir/include/suitesparse" `
-          -DSuiteSparse_CCOLAMD_LIBRARY_DEBUG="$SuiteSparseDir/lib/libccolamd.lib" `
-          -DSuiteSparse_CCOLAMD_LIBRARY_RELEASE="$SuiteSparseDir/lib/libccolamd.lib" `
-          -DSuiteSparse_COLAMD_DIR="$SuiteSparseDir/lib" `
-          -DSuiteSparse_COLAMD_INCLUDE_DIR="$SuiteSparseDir/include/suitesparse" `
-          -DSuiteSparse_COLAMD_LIBRARY_DEBUG="$SuiteSparseDir/lib/libcolamd.lib" `
-          -DSuiteSparse_COLAMD_LIBRARY_RELEASE="$SuiteSparseDir/lib/libcolamd.lib" `
-          # BLAS/LAPACK paths
-          -DSuiteSparse_BLAS_LIBRARY="$OpenBLASDir/lib/libopenblas.lib" `
-          -DSuiteSparse_LAPACK_LIBRARY="$OpenBLASDir/lib/libopenblas.lib" `
-          # Generator
-          -G "Visual Studio 17 2022" -A x64
+        # Create a PowerShell script to build BFF with all required variables
+        $buildScript = @'
+$SuiteSparseDir = "$pwd/SuiteSparseWin/build/install"
+$OpenBLASDir = "$pwd/deps/openblas-windows"
 
-    - name: Build BFF command line tool
-      run: |
-        cd build
-        cmake --build . --config Release --target bff-command-line --parallel
+mkdir build
+cd build
 
-    - name: Copy DLLs and package
+# Configure with ALL required variables
+cmake .. `
+  -DCMAKE_BUILD_TYPE=Release `
+  -DSuiteSparse_DIR="$SuiteSparseDir" `
+  -DSuiteSparse_CHOLMOD_DIR="$SuiteSparseDir/lib" `
+  -DSuiteSparse_CHOLMOD_INCLUDE_DIR="$SuiteSparseDir/include/suitesparse" `
+  -DSuiteSparse_CHOLMOD_LIBRARY_RELEASE="$SuiteSparseDir/lib/libcholmod.lib" `
+  -DSuiteSparse_AMD_LIBRARY_RELEASE="$SuiteSparseDir/lib/libamd.lib" `
+  -DSuiteSparse_CAMD_LIBRARY_RELEASE="$SuiteSparseDir/lib/libcamd.lib" `
+  -DSuiteSparse_CCOLAMD_LIBRARY_RELEASE="$SuiteSparseDir/lib/libccolamd.lib" `
+  -DSuiteSparse_COLAMD_LIBRARY_RELEASE="$SuiteSparseDir/lib/libcolamd.lib" `
+  -DSuiteSparse_BTF_LIBRARY_RELEASE="$SuiteSparseDir/lib/libbtf.lib" `
+  -DSuiteSparse_KLU_LIBRARY_RELEASE="$SuiteSparseDir/lib/libklu.lib" `
+  -DSuiteSparse_UMFPACK_LIBRARY_RELEASE="$SuiteSparseDir/lib/libumfpack.lib" `
+  -DSuiteSparse_CXSPARSE_LIBRARY_RELEASE="$SuiteSparseDir/lib/libcxsparse.lib" `
+  -DSuiteSparse_SUITESPARSECONFIG_LIBRARY_RELEASE="$SuiteSparseDir/lib/libsuitesparseconfig.lib" `
+  -DSuiteSparse_BLAS_LIBRARY="$OpenBLASDir/lib/libopenblas.lib" `
+  -DSuiteSparse_LAPACK_LIBRARY="$OpenBLASDir/lib/libopenblas.lib" `
+  -G "Visual Studio 17 2022" -A x64
+
+cmake --build . --config Release --target bff-command-line
+'@
+        $buildScript | Out-File -FilePath "build-bff.ps1" -Encoding UTF8
+        echo "Created build script"
+
+    - name: Run build script
       run: |
-        # Copy all required DLLs
+        ./build-bff.ps1
+
+    - name: Copy DLLs
+      run: |
         Copy-Item "SuiteSparseWin/build/install/bin/*.dll" "build/Release/" -ErrorAction SilentlyContinue
         Copy-Item "deps/openblas-windows/bin/*.dll" "build/Release/" -ErrorAction SilentlyContinue
-        
-        # Package
-        mkdir dist
-        Copy-Item "build/Release/bff-command-line.exe" "dist/"
-        Copy-Item "build/Release/*.dll" "dist/" -ErrorAction SilentlyContinue
-        echo "=== Final package ==="
-        dir dist
 
-    - name: Upload artifacts
+    - name: Upload binary
       uses: actions/upload-artifact@v4
       with:
-        name: bff-windows-following-instructions
-        path: dist/*
-        retention-days: 30
+        name: bff-windows
+        path: build/Release/bff-command-line.exe
