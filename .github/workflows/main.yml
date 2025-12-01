@@ -18,10 +18,11 @@ jobs:
         .\vcpkg\vcpkg install suitesparse:x64-windows
         .\vcpkg\vcpkg install lapack-reference:x64-windows
         
-    - name: Create new FindSuiteSparse.cmake (NO @ SYMBOLS)
+    - name: Create proper FindSuiteSparse.cmake with CMake syntax
       run: |
-        # Build the content as a string without @
         $vcpkgPath = "$env:GITHUB_WORKSPACE/vcpkg/installed/x64-windows"
+        # Convert to forward slashes for CMake
+        $vcpkgPath = $vcpkgPath -replace '\\', '/'
         
         $lines = @()
         $lines += "# Simplified FindSuiteSparse.cmake for CI"
@@ -52,30 +53,42 @@ jobs:
         $lines += "set(SuiteSparse_BLAS_LIBRARY `"$vcpkgPath/lib/openblas.lib`")"
         $lines += "set(SuiteSparse_LAPACK_LIBRARY `"$vcpkgPath/lib/lapack.lib`")"
         $lines += ""
-        $lines += "message(STATUS `"CI: Using vcpkg SuiteSparse at $vcpkgPath`")"
+        $lines += "# Create a dummy target if needed"
+        $lines += "if(NOT TARGET SuiteSparse::SuiteSparse)"
+        $lines += "  add_library(SuiteSparse::SuiteSparse INTERFACE IMPORTED)"
+        $lines += "  target_include_directories(SuiteSparse::SuiteSparse INTERFACE `${SuiteSparse_INCLUDE_DIR}`)"
+        $lines += "  target_link_libraries(SuiteSparse::SuiteSparse INTERFACE `${SuiteSparse_BLAS_LIBRARY}` `${SuiteSparse_LAPACK_LIBRARY}`)"
+        $lines += "endif()"
+        $lines += ""
+        $lines += "message(STATUS `"CI: Using vcpkg SuiteSparse`")"
         
-        # Write to file
         $content = $lines -join "`n"
         $content | Set-Content "cmake/FindSuiteSparse.cmake" -Encoding UTF8
-        
-        echo "Created new FindSuiteSparse.cmake"
         
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v1.1
       
     - name: Configure CMake
       run: |
-        $vcpkgPath = "$env:GITHUB_WORKSPACE/vcpkg/installed/x64-windows"
+        $vcpkgPath = "$env:GITHUB_WORKSPACE/vcpkg/installed/x64-windows" -replace '\\', '/'
         
         cmake -B build `
           -DBFF_BUILD_GUI=ON `
           -DCMAKE_BUILD_TYPE=Release `
-          -DCMAKE_TOOLCHAIN_FILE="$env:GITHUB_WORKSPACE/vcpkg/scripts/buildsystems/vcpkg.cmake"
+          -DCMAKE_TOOLCHAIN_FILE="$env:GITHUB_WORKSPACE/vcpkg/scripts/buildsystems/vcpkg.cmake" `
+          -DSuiteSparse_DIR="$vcpkgPath" `
+          -DSuiteSparse_ROOT="$vcpkgPath"
         
     - name: Build
       run: |
-        cmake --build build --config Release
+        cmake --build build --config Release --parallel 2
         
-    - name: Check for viewer
+    - name: Check results
       run: |
-        Get-ChildItem -Path build -Recurse -Filter "*viewer*.exe" -ErrorAction SilentlyContinue
+        if (Test-Path "build/Release/bff-viewer.exe") {
+            echo "✅ SUCCESS: bff-viewer.exe built!"
+            dir "build/Release/bff-viewer.exe"
+        } else {
+            echo "❌ Viewer not found"
+            Get-ChildItem -Path build -Recurse -Filter "*.exe" -ErrorAction SilentlyContinue
+        }
