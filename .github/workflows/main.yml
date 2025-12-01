@@ -18,52 +18,72 @@ jobs:
         .\vcpkg\vcpkg install suitesparse:x64-windows
         .\vcpkg\vcpkg install lapack-reference:x64-windows
         
-    - name: Create proper FindSuiteSparse.cmake with CMake syntax
+    - name: Create proper FindSuiteSparse.cmake
       run: |
-        $vcpkgPath = "$env:GITHUB_WORKSPACE/vcpkg/installed/x64-windows"
-        # Convert to forward slashes for CMake
-        $vcpkgPath = $vcpkgPath -replace '\\', '/'
+        $vcpkgPath = "$env:GITHUB_WORKSPACE/vcpkg/installed/x64-windows" -replace '\\', '/'
         
         $lines = @()
-        $lines += "# Simplified FindSuiteSparse.cmake for CI"
+        $lines += "# FindSuiteSparse.cmake for vcpkg"
         $lines += "cmake_minimum_required(VERSION 3.10)"
         $lines += ""
-        $lines += "# Always succeed"
-        $lines += "set(SuiteSparse_FOUND TRUE)"
-        $lines += ""
         $lines += "# Set paths from vcpkg"
+        $lines += "set(SuiteSparse_FOUND TRUE)"
         $lines += "set(SuiteSparse_INCLUDE_DIR `"$vcpkgPath/include`")"
         $lines += "set(SuiteSparse_LIBRARY_DIR `"$vcpkgPath/lib`")"
         $lines += ""
-        $lines += "# Mark all components as found"
-        $lines += "set(SuiteSparse_AMD_FOUND TRUE)"
-        $lines += "set(SuiteSparse_CAMD_FOUND TRUE)"
-        $lines += "set(SuiteSparse_COLAMD_FOUND TRUE)"
-        $lines += "set(SuiteSparse_CCOLAMD_FOUND TRUE)"
-        $lines += "set(SuiteSparse_CHOLMOD_FOUND TRUE)"
-        $lines += "set(SuiteSparse_UMFPACK_FOUND TRUE)"
-        $lines += "set(SuiteSparse_SPQR_FOUND TRUE)"
-        $lines += "set(SuiteSparse_KLU_FOUND TRUE)"
-        $lines += "set(SuiteSparse_LDL_FOUND TRUE)"
-        $lines += "set(SuiteSparse_BTF_FOUND TRUE)"
-        $lines += "set(SuiteSparse_CXSPARSE_FOUND TRUE)"
-        $lines += "set(SuiteSparse_SUITESPARSECONFIG_FOUND TRUE)"
+        $lines += "# Set individual component paths"
+        $lines += "set(SuiteSparse_AMD_INCLUDE_DIR `"$vcpkgPath/include`")"
+        $lines += "set(SuiteSparse_CAMD_INCLUDE_DIR `"$vcpkgPath/include`")"
+        $lines += "set(SuiteSparse_COLAMD_INCLUDE_DIR `"$vcpkgPath/include`")"
+        $lines += "set(SuiteSparse_CCOLAMD_INCLUDE_DIR `"$vcpkgPath/include`")"
+        $lines += "set(SuiteSparse_CHOLMOD_INCLUDE_DIR `"$vcpkgPath/include`")"
+        $lines += "set(SuiteSparse_UMFPACK_INCLUDE_DIR `"$vcpkgPath/include`")"
+        $lines += "set(SuiteSparse_SPQR_INCLUDE_DIR `"$vcpkgPath/include`")"
+        $lines += "set(SuiteSparse_KLU_INCLUDE_DIR `"$vcpkgPath/include`")"
+        $lines += "set(SuiteSparse_LDL_INCLUDE_DIR `"$vcpkgPath/include`")"
+        $lines += "set(SuiteSparse_BTF_INCLUDE_DIR `"$vcpkgPath/include`")"
+        $lines += "set(SuiteSparse_CXSPARSE_INCLUDE_DIR `"$vcpkgPath/include`")"
+        $lines += "set(SuiteSparse_SUITESPARSECONFIG_INCLUDE_DIR `"$vcpkgPath/include`")"
+        $lines += ""
+        $lines += "# Set library files"
+        $lines += "set(SuiteSparse_AMD_LIBRARY `"$vcpkgPath/lib/amd.lib`")"
+        $lines += "set(SuiteSparse_CAMD_LIBRARY `"$vcpkgPath/lib/camd.lib`")"
+        $lines += "set(SuiteSparse_COLAMD_LIBRARY `"$vcpkgPath/lib/colamd.lib`")"
+        $lines += "set(SuiteSparse_CCOLAMD_LIBRARY `"$vcpkgPath/lib/ccolamd.lib`")"
+        $lines += "set(SuiteSparse_CHOLMOD_LIBRARY `"$vcpkgPath/lib/cholmod.lib`")"
+        $lines += "set(SuiteSparse_UMFPACK_LIBRARY `"$vcpkgPath/lib/umfpack.lib`")"
+        $lines += "set(SuiteSparse_SPQR_LIBRARY `"$vcpkgPath/lib/spqr.lib`")"
+        $lines += "set(SuiteSparse_KLU_LIBRARY `"$vcpkgPath/lib/klu.lib`")"
+        $lines += "set(SuiteSparse_LDL_LIBRARY `"$vcpkgPath/lib/ldl.lib`")"
+        $lines += "set(SuiteSparse_BTF_LIBRARY `"$vcpkgPath/lib/btf.lib`")"
+        $lines += "set(SuiteSparse_CXSPARSE_LIBRARY `"$vcpkgPath/lib/cxsparse.lib`")"
+        $lines += "set(SuiteSparse_SUITESPARSECONFIG_LIBRARY `"$vcpkgPath/lib/suitesparseconfig.lib`")"
         $lines += ""
         $lines += "# BLAS/LAPACK"
         $lines += "set(SuiteSparse_BLAS_LIBRARY `"$vcpkgPath/lib/openblas.lib`")"
         $lines += "set(SuiteSparse_LAPACK_LIBRARY `"$vcpkgPath/lib/lapack.lib`")"
         $lines += ""
-        $lines += "# Create a dummy target if needed"
+        $lines += "# Create imported target"
         $lines += "if(NOT TARGET SuiteSparse::SuiteSparse)"
         $lines += "  add_library(SuiteSparse::SuiteSparse INTERFACE IMPORTED)"
-        $lines += "  target_include_directories(SuiteSparse::SuiteSparse INTERFACE `${SuiteSparse_INCLUDE_DIR}`)"
-        $lines += "  target_link_libraries(SuiteSparse::SuiteSparse INTERFACE `${SuiteSparse_BLAS_LIBRARY}` `${SuiteSparse_LAPACK_LIBRARY}`)"
+        $lines += "  target_include_directories(SuiteSparse::SuiteSparse INTERFACE `"$vcpkgPath/include`")"
+        $lines += "  target_link_libraries(SuiteSparse::SuiteSparse INTERFACE"
+        $lines += "    `"$vcpkgPath/lib/cholmod.lib`""
+        $lines += "    `"$vcpkgPath/lib/amd.lib`""
+        $lines += "    `"$vcpkgPath/lib/camd.lib`""
+        $lines += "    `"$vcpkgPath/lib/colamd.lib`""
+        $lines += "    `"$vcpkgPath/lib/ccolamd.lib`""
+        $lines += "    `"$vcpkgPath/lib/openblas.lib`""
+        $lines += "    `"$vcpkgPath/lib/lapack.lib`""
+        $lines += "  )"
         $lines += "endif()"
         $lines += ""
-        $lines += "message(STATUS `"CI: Using vcpkg SuiteSparse`")"
+        $lines += "message(STATUS `"Found SuiteSparse via vcpkg at $vcpkgPath`")"
         
         $content = $lines -join "`n"
         $content | Set-Content "cmake/FindSuiteSparse.cmake" -Encoding UTF8
+        
+        echo "Created FindSuiteSparse.cmake"
         
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v1.1
@@ -76,8 +96,7 @@ jobs:
           -DBFF_BUILD_GUI=ON `
           -DCMAKE_BUILD_TYPE=Release `
           -DCMAKE_TOOLCHAIN_FILE="$env:GITHUB_WORKSPACE/vcpkg/scripts/buildsystems/vcpkg.cmake" `
-          -DSuiteSparse_DIR="$vcpkgPath" `
-          -DSuiteSparse_ROOT="$vcpkgPath"
+          -DSuiteSparse_DIR="$vcpkgPath"
         
     - name: Build
       run: |
@@ -88,7 +107,14 @@ jobs:
         if (Test-Path "build/Release/bff-viewer.exe") {
             echo "✅ SUCCESS: bff-viewer.exe built!"
             dir "build/Release/bff-viewer.exe"
+            
+            # Try to run it (will fail without display, but that's OK)
+            echo "`nTrying to run viewer..."
+            & "build/Release/bff-viewer.exe" --help 2>&1 | Out-String
         } else {
-            echo "❌ Viewer not found"
-            Get-ChildItem -Path build -Recurse -Filter "*.exe" -ErrorAction SilentlyContinue
+            echo "❌ Viewer not found in build/Release/"
+            echo "Looking in all build directories..."
+            Get-ChildItem -Path build -Recurse -Filter "*.exe" -ErrorAction SilentlyContinue | ForEach-Object {
+                echo "Found: $($_.FullName)"
+            }
         }
