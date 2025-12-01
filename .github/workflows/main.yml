@@ -1,9 +1,9 @@
-name: Analyze BFF Viewer Structure
+name: Build and Test BFF Viewer
 
 on: workflow_dispatch
 
 jobs:
-  analyze:
+  build-test:
     runs-on: windows-latest
     
     steps:
@@ -11,27 +11,101 @@ jobs:
       with:
         submodules: recursive
         
-    - name: Analyze source for viewer
+    - name: Setup MSBuild
+      uses: microsoft/setup-msbuild@v1.1
+      
+    - name: Configure CMake with GUI enabled
       run: |
-        echo "=== Looking for viewer source files ==="
-        if (Test-Path "src/viewer") {
-            echo "Viewer directory found:"
-            dir src/viewer -Recurse
-        }
-        if (Test-Path "src/gui") {
-            echo "GUI directory found:"
-            dir src/gui -Recurse
-        }
+        echo "Configuring CMake with GUI support..."
+        cmake -B build -DBFF_BUILD_GUI=ON
         
-        echo "=== Searching for viewer in CMakeLists ==="
-        Get-ChildItem -Path . -Recurse -Filter "CMakeLists.txt" | ForEach-Object {
-            echo "Checking: $($_.FullName)"
-            Get-Content $_ | Select-String -Pattern "viewer|gui|visualizer" | ForEach-Object {
-                echo "  Found: $_"
+    - name: Build the project
+      run: |
+        echo "Building project..."
+        cmake --build build --config Release
+        
+    - name: Check if viewer was built
+      run: |
+        echo "=== Looking for built viewer executable ==="
+        if (Test-Path "build/Release/bff-viewer.exe") {
+            echo "✅ Viewer found at: build/Release/bff-viewer.exe"
+            Get-Item "build/Release/bff-viewer.exe"
+        } elseif (Test-Path "build/bff-viewer.exe") {
+            echo "✅ Viewer found at: build/bff-viewer.exe"
+            Get-Item "build/bff-viewer.exe"
+        } else {
+            echo "❌ Viewer not found in expected locations"
+            echo "Searching for any executable..."
+            Get-ChildItem -Path build -Recurse -Filter "*.exe" | ForEach-Object {
+                echo "Found executable: $($_.FullName)"
             }
         }
         
-        echo "=== Possible viewer entry points ==="
-        Get-ChildItem -Path . -Recurse -Filter "*.cpp" | Select-String -Pattern "main.*\(.*argc.*argv" | ForEach-Object {
-            echo "Main function in: $($_.Filename)"
+    - name: Test viewer (basic check)
+      run: |
+        echo "=== Testing viewer executable ==="
+        $viewerPath = ""
+        
+        if (Test-Path "build/Release/bff-viewer.exe") {
+            $viewerPath = "build/Release/bff-viewer.exe"
+        } elseif (Test-Path "build/bff-viewer.exe") {
+            $viewerPath = "build/bff-viewer.exe"
+        }
+        
+        if ($viewerPath -ne "") {
+            echo "Found viewer at: $viewerPath"
+            
+            # Check file information
+            echo "File info:"
+            Get-Item $viewerPath | Format-List *
+            
+            # Try to run with --help or --version (common flags)
+            echo "`nTrying to run viewer with --help flag..."
+            & $viewerPath --help 2>&1 | Out-String
+            
+            echo "`nTrying to run viewer with --version flag..."
+            & $viewerPath --version 2>&1 | Out-String
+            
+            # Just running it without args (it might fail without display, but that's OK)
+            echo "`nTrying to run viewer (will likely fail without display)..."
+            & $viewerPath 2>&1 | Out-String
+            
+        } else {
+            echo "No viewer executable found to test"
+        }
+        
+    - name: Analyze dependencies
+      run: |
+        echo "=== Analyzing what the viewer needs ==="
+        $viewerPath = ""
+        
+        if (Test-Path "build/Release/bff-viewer.exe") {
+            $viewerPath = "build/Release/bff-viewer.exe"
+        } elseif (Test-Path "build/bff-viewer.exe") {
+            $viewerPath = "build/bff-viewer.exe"
+        }
+        
+        if ($viewerPath -ne "") {
+            echo "Checking dependencies with dumpbin..."
+            dumpbin /dependents $viewerPath
+            
+            echo "`nChecking if required DLLs exist..."
+            # Common required DLLs for GUI apps
+            $requiredDlls = @(
+                "glfw3.dll",
+                "opengl32.dll",
+                "glu32.dll",
+                "user32.dll",
+                "gdi32.dll"
+            )
+            
+            foreach ($dll in $requiredDlls) {
+                if (Test-Path "build/$dll") {
+                    echo "✅ Found: $dll in build/"
+                } elseif (Test-Path "build/Release/$dll") {
+                    echo "✅ Found: $dll in build/Release/"
+                } else {
+                    echo "⚠️  Missing: $dll (may be in system path)"
+                }
+            }
         }
