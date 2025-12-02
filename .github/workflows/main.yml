@@ -18,67 +18,45 @@ jobs:
         .\vcpkg\vcpkg install suitesparse:x64-windows
         .\vcpkg\vcpkg install lapack-reference:x64-windows
         
-    - name: Create FindSuiteSparse.cmake via PowerShell script
+    - name: Create FindSuiteSparse.cmake (NO complex strings)
       run: |
-        # Create a PowerShell script that writes the file
-        $script = @'
-$vcpkgPath = "$env:GITHUB_WORKSPACE/vcpkg/installed/x64-windows" -replace '\\', '/'
-
-$cmakeContent = @"
-# FindSuiteSparse.cmake for vcpkg
-set(SuiteSparse_FOUND TRUE)
-
-# Base directories
-set(SuiteSparse_INCLUDE_DIR "$vcpkgPath/include")
-set(SuiteSparse_LIBRARY_DIR "$vcpkgPath/lib")
-
-# Mark all components as found
-set(SuiteSparse_AMD_FOUND TRUE)
-set(SuiteSparse_CAMD_FOUND TRUE)
-set(SuiteSparse_COLAMD_FOUND TRUE)
-set(SuiteSparse_CCOLAMD_FOUND TRUE)
-set(SuiteSparse_CHOLMOD_FOUND TRUE)
-set(SuiteSparse_UMFPACK_FOUND TRUE)
-set(SuiteSparse_SPQR_FOUND TRUE)
-set(SuiteSparse_KLU_FOUND TRUE)
-set(SuiteSparse_LDL_FOUND TRUE)
-set(SuiteSparse_BTF_FOUND TRUE)
-set(SuiteSparse_CXSPARSE_FOUND TRUE)
-set(SuiteSparse_SUITESPARSECONFIG_FOUND TRUE)
-
-# Libraries
-set(SuiteSparse_CHOLMOD_LIBRARY "$vcpkgPath/lib/cholmod.lib")
-set(SuiteSparse_AMD_LIBRARY "$vcpkgPath/lib/amd.lib")
-set(SuiteSparse_CAMD_LIBRARY "$vcpkgPath/lib/camd.lib")
-set(SuiteSparse_COLAMD_LIBRARY "$vcpkgPath/lib/colamd.lib")
-set(SuiteSparse_CCOLAMD_LIBRARY "$vcpkgPath/lib/ccolamd.lib")
-set(SuiteSparse_UMFPACK_LIBRARY "$vcpkgPath/lib/umfpack.lib")
-set(SuiteSparse_SPQR_LIBRARY "$vcpkgPath/lib/spqr.lib")
-
-# BLAS/LAPACK
-set(SuiteSparse_BLAS_LIBRARY "$vcpkgPath/lib/openblas.lib")
-set(SuiteSparse_LAPACK_LIBRARY "$vcpkgPath/lib/lapack.lib")
-
-message(STATUS "SuiteSparse configured via vcpkg")
-"@
-
-$cmakeContent | Set-Content "cmake/FindSuiteSparse.cmake" -Encoding UTF8
-Write-Host "Created FindSuiteSparse.cmake"
-'@
+        $vcpkgPath = "$env:GITHUB_WORKSPACE/vcpkg/installed/x64-windows"
+        $vcpkgPath = $vcpkgPath -replace '\\', '/'
         
-        $script | Out-File create_findsuitesparse.ps1 -Encoding UTF8
-        .\create_findsuitesparse.ps1
+        # Write file line by line with no complex escaping
+        $file = "cmake/FindSuiteSparse.cmake"
+        
+        # Clear file
+        "" | Set-Content $file
+        
+        # Append lines one by one
+        "# FindSuiteSparse.cmake for CI" | Add-Content $file
+        "set(SuiteSparse_FOUND TRUE)" | Add-Content $file
+        "set(SuiteSparse_INCLUDE_DIR `"$vcpkgPath/include`")" | Add-Content $file
+        "set(SuiteSparse_LIBRARY_DIR `"$vcpkgPath/lib`")" | Add-Content $file
+        "set(SuiteSparse_CHOLMOD_FOUND TRUE)" | Add-Content $file
+        "set(SuiteSparse_AMD_FOUND TRUE)" | Add-Content $file
+        "set(SuiteSparse_CAMD_FOUND TRUE)" | Add-Content $file
+        "set(SuiteSparse_COLAMD_FOUND TRUE)" | Add-Content $file
+        "set(SuiteSparse_CCOLAMD_FOUND TRUE)" | Add-Content $file
+        "set(SuiteSparse_UMFPACK_FOUND TRUE)" | Add-Content $file
+        "set(SuiteSparse_SPQR_FOUND TRUE)" | Add-Content $file
+        "set(SuiteSparse_CHOLMOD_LIBRARY `"$vcpkgPath/lib/cholmod.lib`")" | Add-Content $file
+        "set(SuiteSparse_AMD_LIBRARY `"$vcpkgPath/lib/amd.lib`")" | Add-Content $file
+        "set(SuiteSparse_BLAS_LIBRARY `"$vcpkgPath/lib/openblas.lib`")" | Add-Content $file
+        "set(SuiteSparse_LAPACK_LIBRARY `"$vcpkgPath/lib/lapack.lib`")" | Add-Content $file
+        "message(STATUS `"SuiteSparse configured`")" | Add-Content $file
+        
+        echo "Created $file"
         
     - name: Copy headers
       run: |
+        mkdir include -Force
         $vcpkgPath = "$env:GITHUB_WORKSPACE/vcpkg/installed/x64-windows"
         
-        # Create include directory
-        mkdir include -Force
-        
-        # Copy all headers we can find
-        Get-ChildItem "$vcpkgPath/include" -Filter "*.h" -Recurse | ForEach-Object {
-            Copy-Item $_.FullName "include/$($_.Name)" -Force
+        # Simple copy of any .h files
+        Get-ChildItem $vcpkgPath -Filter "*.h" -Recurse | ForEach-Object {
+            Copy-Item $_.FullName "include/$($_.Name)" -Force -ErrorAction SilentlyContinue
         }
         
     - name: Setup MSBuild
@@ -94,4 +72,9 @@ Write-Host "Created FindSuiteSparse.cmake"
         
     - name: Check results
       run: |
-        dir build -Recurse -Filter *.exe
+        if (Test-Path "build/Release/bff-viewer.exe") {
+            echo "✅ Viewer built!"
+        } else {
+            echo "❌ No viewer found"
+            dir build -Recurse -Filter *.exe
+        }
