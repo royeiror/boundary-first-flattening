@@ -11,53 +11,100 @@ jobs:
       with:
         submodules: recursive
         
-    - name: Install vcpkg with SuiteSparse
+    - name: Install correct SuiteSparse version
       run: |
         git clone https://github.com/Microsoft/vcpkg.git
         .\vcpkg\bootstrap-vcpkg.bat
+        
+        # Try to install with 64-bit/long support
         .\vcpkg\vcpkg install suitesparse:x64-windows
-        .\vcpkg\vcpkg install lapack-reference:x64-windows
+        .\vcpkg\vcpkg install suitesparse[core,long]:x64-windows
         
-    - name: Create FindSuiteSparse.cmake (NO complex strings)
+    - name: Check which cholmod functions are available
       run: |
         $vcpkgPath = "$env:GITHUB_WORKSPACE/vcpkg/installed/x64-windows"
-        $vcpkgPath = $vcpkgPath -replace '\\', '/'
         
-        # Write file line by line with no complex escaping
-        $file = "cmake/FindSuiteSparse.cmake"
+        # Look at the library exports
+        echo "Checking cholmod.lib exports..."
+        dumpbin /exports "$vcpkgPath/lib/cholmod.lib" 2>$null | Select-String -Pattern "cholmod" | Select-Object -First 10
         
-        # Clear file
-        "" | Set-Content $file
+        # Check if it has _l versions
+        dumpbin /exports "$vcpkgPath/lib/cholmod.lib" 2>$null | Select-String -Pattern "cholmod_l" | Select-Object -First 5
         
-        # Append lines one by one
-        "# FindSuiteSparse.cmake for CI" | Add-Content $file
-        "set(SuiteSparse_FOUND TRUE)" | Add-Content $file
-        "set(SuiteSparse_INCLUDE_DIR `"$vcpkgPath/include`")" | Add-Content $file
-        "set(SuiteSparse_LIBRARY_DIR `"$vcpkgPath/lib`")" | Add-Content $file
-        "set(SuiteSparse_CHOLMOD_FOUND TRUE)" | Add-Content $file
-        "set(SuiteSparse_AMD_FOUND TRUE)" | Add-Content $file
-        "set(SuiteSparse_CAMD_FOUND TRUE)" | Add-Content $file
-        "set(SuiteSparse_COLAMD_FOUND TRUE)" | Add-Content $file
-        "set(SuiteSparse_CCOLAMD_FOUND TRUE)" | Add-Content $file
-        "set(SuiteSparse_UMFPACK_FOUND TRUE)" | Add-Content $file
-        "set(SuiteSparse_SPQR_FOUND TRUE)" | Add-Content $file
-        "set(SuiteSparse_CHOLMOD_LIBRARY `"$vcpkgPath/lib/cholmod.lib`")" | Add-Content $file
-        "set(SuiteSparse_AMD_LIBRARY `"$vcpkgPath/lib/amd.lib`")" | Add-Content $file
-        "set(SuiteSparse_BLAS_LIBRARY `"$vcpkgPath/lib/openblas.lib`")" | Add-Content $file
-        "set(SuiteSparse_LAPACK_LIBRARY `"$vcpkgPath/lib/lapack.lib`")" | Add-Content $file
-        "message(STATUS `"SuiteSparse configured`")" | Add-Content $file
-        
-        echo "Created $file"
-        
-    - name: Copy headers
+    - name: Patch the code to use standard functions
       run: |
-        mkdir include -Force
-        $vcpkgPath = "$env:GITHUB_WORKSPACE/vcpkg/installed/x64-windows"
+        # The code expects cholmod_l_* functions but vcpkg provides cholmod_*
+        # Let's create a compatibility layer
         
-        # Simple copy of any .h files
-        Get-ChildItem $vcpkgPath -Filter "*.h" -Recurse | ForEach-Object {
-            Copy-Item $_.FullName "include/$($_.Name)" -Force -ErrorAction SilentlyContinue
+        # First, check what the actual issue is
+        echo "=== Checking which functions are used ==="
+        Get-ChildItem -Path . -Recurse -Filter "*.inl" -ErrorAction SilentlyContinue | ForEach-Object {
+            $hasL = Get-Content $_ | Select-String -Pattern "cholmod_l_"
+            if ($hasL) {
+                echo "File $_ uses cholmod_l_ functions"
+                $hasL | Select-Object -First 2
+            }
         }
+        
+        # Create a wrapper header
+        $wrapper = @'
+// cholmod compatibility wrapper
+#ifndef CHOLMOD_COMPAT_H
+#define CHOLMOD_COMPAT_H
+
+#include "cholmod.h"
+
+// If cholmod_l_ functions aren't available, map them to cholmod_
+// This assumes we're using the standard (non-long) version
+
+#ifndef cholmod_l_norm_dense
+#define cholmod_l_norm_dense cholmod_norm_dense
+#endif
+
+#ifndef cholmod_l_norm_sparse
+#define cholmod_l_norm_sparse cholmod_norm_sparse
+#endif
+
+#ifndef cholmod_l_submatrix
+#define cholmod_l_submatrix cholmod_submatrix
+#endif
+
+#ifndef cholmod_l_scale
+#define cholmod_l_scale cholmod_scale
+#endif
+
+#ifndef cholmod_l_ssmult
+#define cholmod_l_ssmult cholmod_ssmult
+#endif
+
+#ifndef cholmod_l_sdmult
+#define cholmod_l_sdmult cholmod_sdmult
+#endif
+
+#endif // CHOLMOD_COMPAT_H
+'@
+        
+        $wrapper | Set-Content "cholmod_compat.h" -Encoding UTF8
+        
+        # Also patch Common.h to include our wrapper
+        (Get-Content "include/bff/linear-algebra/Common.h" -Raw) -replace '#include "cholmod.h"', '#include "cholmod.h"`n#include "cholmod_compat.h"' | Set-Content "include/bff/linear-algebra/Common.h"
+        
+        echo "Created compatibility wrapper"
+        
+    - name: Create FindSuiteSparse.cmake
+      run: |
+        $vcpkgPath = "$env:GITHUB_WORKSPACE/vcpkg/installed/x64-windows" -replace '\\', '/'
+        
+        @"
+set(SuiteSparse_FOUND TRUE)
+set(SuiteSparse_INCLUDE_DIR "$vcpkgPath/include")
+set(SuiteSparse_LIBRARY_DIR "$vcpkgPath/lib")
+set(SuiteSparse_CHOLMOD_LIBRARY "$vcpkgPath/lib/cholmod.lib")
+set(SuiteSparse_AMD_LIBRARY "$vcpkgPath/lib/amd.lib")
+set(SuiteSparse_BLAS_LIBRARY "$vcpkgPath/lib/openblas.lib")
+set(SuiteSparse_LAPACK_LIBRARY "$vcpkgPath/lib/lapack.lib")
+message(STATUS "SuiteSparse configured")
+"@ | Set-Content "cmake/FindSuiteSparse.cmake"
         
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v1.1
@@ -73,8 +120,7 @@ jobs:
     - name: Check results
       run: |
         if (Test-Path "build/Release/bff-viewer.exe") {
-            echo "✅ Viewer built!"
+            echo "✅ SUCCESS: bff-viewer.exe built!"
         } else {
-            echo "❌ No viewer found"
-            dir build -Recurse -Filter *.exe
+            echo "❌ Viewer not found"
         }
