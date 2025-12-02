@@ -18,125 +18,54 @@ jobs:
         .\vcpkg\vcpkg install suitesparse:x64-windows
         .\vcpkg\vcpkg install lapack-reference:x64-windows
         
-    - name: Debug: Check what vcpkg actually installed
+    - name: Check what vcpkg installed
       run: |
         $vcpkgPath = "$env:GITHUB_WORKSPACE/vcpkg/installed/x64-windows"
         echo "VCPKG Path: $vcpkgPath"
         
-        echo "`n=== Looking for cholmod.h ==="
-        Get-ChildItem "$vcpkgPath" -Filter "cholmod.h" -Recurse | ForEach-Object {
-            echo "Found: $($_.FullName)"
-        }
+        echo "Looking for cholmod.h..."
+        Get-ChildItem "$vcpkgPath" -Filter "cholmod.h" -Recurse
         
-        echo "`n=== SuiteSparse files ==="
-        Get-ChildItem "$vcpkgPath/include" -Filter "*" | Where-Object { $_.Name -match "cholmod|SuiteSparse" } | Select-Object -First 10
-        
-    - name: Create a working FindSuiteSparse.cmake
+    - name: Copy headers to expected location
       run: |
-        $vcpkgPath = "$env:GITHUB_WORKSPACE/vcpkg/installed/x64-windows" -replace '\\', '/'
+        $vcpkgPath = "$env:GITHUB_WORKSPACE/vcpkg/installed/x64-windows"
         
-        # First, find where cholmod.h actually is
-        $cholmodFile = Get-ChildItem "$env:GITHUB_WORKSPACE/vcpkg/installed/x64-windows" -Filter "cholmod.h" -Recurse | Select-Object -First 1
+        # Find cholmod.h
+        $cholmodFile = Get-ChildItem "$vcpkgPath" -Filter "cholmod.h" -Recurse | Select-Object -First 1
+        
         if ($cholmodFile) {
-            $cholmodDir = $cholmodFile.Directory.FullName -replace '\\', '/'
-            echo "cholmod.h found at: $cholmodDir"
+            echo "Found cholmod.h at: $($cholmodFile.FullName)"
+            
+            # Copy it to include directory
+            $targetDir = "$env:GITHUB_WORKSPACE/include"
+            New-Item -ItemType Directory -Path $targetDir -Force
+            
+            # Copy cholmod.h
+            Copy-Item $cholmodFile.FullName "$targetDir/cholmod.h" -Force
+            echo "Copied cholmod.h to: $targetDir/cholmod.h"
+            
+            # Copy all SuiteSparse headers from the same directory
+            $suiteDir = $cholmodFile.Directory.FullName
+            Get-ChildItem $suiteDir -Filter "*.h" | ForEach-Object {
+                Copy-Item $_.FullName "$targetDir/$($_.Name)" -Force
+                echo "Copied header: $($_.Name)"
+            }
         } else {
-            $cholmodDir = "$vcpkgPath/include"
-            echo "cholmod.h not found, using default: $cholmodDir"
+            echo "ERROR: cholmod.h not found!"
+            # List what's in vcpkg/include
+            echo "Contents of vcpkg/include:"
+            Get-ChildItem "$vcpkgPath/include" -Recurse -Filter "*.h" | Select-Object -First 20
         }
-        
-        # Create the CMake file
-        $content = @"
-# FindSuiteSparse.cmake - Simple version
-set(SuiteSparse_FOUND TRUE)
-
-# Include directory (where cholmod.h is)
-set(SuiteSparse_INCLUDE_DIR "$cholmodDir")
-set(SuiteSparse_INCLUDE_DIRS "$cholmodDir")
-
-# Library directory
-set(SuiteSparse_LIBRARY_DIR "$vcpkgPath/lib")
-
-# Individual libraries
-set(SuiteSparse_CHOLMOD_LIBRARY "$vcpkgPath/lib/cholmod.lib")
-set(SuiteSparse_AMD_LIBRARY "$vcpkgPath/lib/amd.lib")
-set(SuiteSparse_CAMD_LIBRARY "$vcpkgPath/lib/camd.lib")
-set(SuiteSparse_COLAMD_LIBRARY "$vcpkgPath/lib/colamd.lib")
-set(SuiteSparse_CCOLAMD_LIBRARY "$vcpkgPath/lib/ccolamd.lib")
-set(SuiteSparse_BLAS_LIBRARY "$vcpkgPath/lib/openblas.lib")
-set(SuiteSparse_LAPACK_LIBRARY "$vcpkgPath/lib/lapack.lib")
-
-# Create imported target
-if(NOT TARGET SuiteSparse::SuiteSparse)
-  add_library(SuiteSparse::SuiteSparse INTERFACE IMPORTED)
-  target_include_directories(SuiteSparse::SuiteSparse INTERFACE "$cholmodDir")
-  target_link_libraries(SuiteSparse::SuiteSparse INTERFACE
-    "$vcpkgPath/lib/cholmod.lib"
-    "$vcpkgPath/lib/amd.lib"
-    "$vcpkgPath/lib/camd.lib"
-    "$vcpkgPath/lib/colamd.lib"
-    "$vcpkgPath/lib/ccolamd.lib"
-    "$vcpkgPath/lib/openblas.lib"
-    "$vcpkgPath/lib/lapack.lib"
-  )
-endif()
-
-message(STATUS "Found SuiteSparse: $cholmodDir")
-"@
-        
-        $content | Set-Content "cmake/FindSuiteSparse.cmake" -Encoding UTF8
-        echo "Created FindSuiteSparse.cmake"
-        
-    - name: Also patch the Common.h file to find cholmod
-      run: |
-        # Check what the include actually looks like
-        echo "=== Original Common.h ==="
-        Get-Content "include/bff/linear-algebra/Common.h" -First 5
-        
-        # Create a wrapper header if needed
-        $wrapper = @'
-// cholmod wrapper for CI
-#ifndef CHOLMOD_H
-#define CHOLMOD_H
-
-// Try to find cholmod.h
-#if __has_include("cholmod.h")
-    #include "cholmod.h"
-#elif __has_include("suitesparse/cholmod.h")
-    #include "suitesparse/cholmod.h"
-#else
-    #error "cholmod.h not found. Please install SuiteSparse."
-#endif
-
-#endif // CHOLMOD_H
-'@
-        
-        $wrapper | Set-Content "cholmod_wrapper.h" -Encoding UTF8
-        echo "Created cholmod_wrapper.h"
         
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v1.1
       
-    - name: Configure CMake with manual include
+    - name: Configure CMake
       run: |
-        $vcpkgPath = "$env:GITHUB_WORKSPACE/vcpkg/installed/x64-windows" -replace '\\', '/'
-        
-        # Find cholmod.h directory
-        $cholmodFile = Get-ChildItem "$env:GITHUB_WORKSPACE/vcpkg/installed/x64-windows" -Filter "cholmod.h" -Recurse | Select-Object -First 1
-        $cholmodDir = if ($cholmodFile) { 
-            $cholmodFile.Directory.FullName -replace '\\', '/' 
-        } else { 
-            "$vcpkgPath/include" 
-        }
-        
-        echo "Using cholmod directory: $cholmodDir"
-        
         cmake -B build `
           -DBFF_BUILD_GUI=ON `
           -DCMAKE_BUILD_TYPE=Release `
-          -DCMAKE_TOOLCHAIN_FILE="$env:GITHUB_WORKSPACE/vcpkg/scripts/buildsystems/vcpkg.cmake" `
-          -DCMAKE_CXX_FLAGS="/I`"$cholmodDir`"" `
-          -DSuiteSparse_INCLUDE_DIR="$cholmodDir"
+          -DCMAKE_TOOLCHAIN_FILE="$env:GITHUB_WORKSPACE/vcpkg/scripts/buildsystems/vcpkg.cmake"
         
     - name: Build
       run: |
