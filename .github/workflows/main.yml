@@ -18,25 +18,21 @@ jobs:
         .\vcpkg\vcpkg install suitesparse:x64-windows
         .\vcpkg\vcpkg install lapack-reference:x64-windows
         
-    - name: Create complete FindSuiteSparse.cmake
+    - name: Create FindSuiteSparse.cmake via PowerShell script
       run: |
-        $vcpkgPath = "$env:GITHUB_WORKSPACE/vcpkg/installed/x64-windows" -replace '\\', '/'
-        
-        # Create a proper FindSuiteSparse.cmake
-        $content = @"
-# FindSuiteSparse.cmake for vcpkg
-cmake_minimum_required(VERSION 3.10)
+        # Create a PowerShell script that writes the file
+        $script = @'
+$vcpkgPath = "$env:GITHUB_WORKSPACE/vcpkg/installed/x64-windows" -replace '\\', '/'
 
-# Always return success
+$cmakeContent = @"
+# FindSuiteSparse.cmake for vcpkg
 set(SuiteSparse_FOUND TRUE)
 
-# Set base directories
+# Base directories
 set(SuiteSparse_INCLUDE_DIR "$vcpkgPath/include")
 set(SuiteSparse_LIBRARY_DIR "$vcpkgPath/lib")
-set(SuiteSparse_INCLUDE_DIRS "$vcpkgPath/include")
-set(SuiteSparse_LIBRARY_DIRS "$vcpkgPath/lib")
 
-# Set ALL component variables to avoid errors
+# Mark all components as found
 set(SuiteSparse_AMD_FOUND TRUE)
 set(SuiteSparse_CAMD_FOUND TRUE)
 set(SuiteSparse_COLAMD_FOUND TRUE)
@@ -50,102 +46,52 @@ set(SuiteSparse_BTF_FOUND TRUE)
 set(SuiteSparse_CXSPARSE_FOUND TRUE)
 set(SuiteSparse_SUITESPARSECONFIG_FOUND TRUE)
 
-# Set library paths (vcpkg provides these)
+# Libraries
+set(SuiteSparse_CHOLMOD_LIBRARY "$vcpkgPath/lib/cholmod.lib")
 set(SuiteSparse_AMD_LIBRARY "$vcpkgPath/lib/amd.lib")
 set(SuiteSparse_CAMD_LIBRARY "$vcpkgPath/lib/camd.lib")
 set(SuiteSparse_COLAMD_LIBRARY "$vcpkgPath/lib/colamd.lib")
 set(SuiteSparse_CCOLAMD_LIBRARY "$vcpkgPath/lib/ccolamd.lib")
-set(SuiteSparse_CHOLMOD_LIBRARY "$vcpkgPath/lib/cholmod.lib")
 set(SuiteSparse_UMFPACK_LIBRARY "$vcpkgPath/lib/umfpack.lib")
 set(SuiteSparse_SPQR_LIBRARY "$vcpkgPath/lib/spqr.lib")
-set(SuiteSparse_KLU_LIBRARY "$vcpkgPath/lib/klu.lib")
-set(SuiteSparse_LDL_LIBRARY "$vcpkgPath/lib/ldl.lib")
-set(SuiteSparse_BTF_LIBRARY "$vcpkgPath/lib/btf.lib")
-set(SuiteSparse_CXSPARSE_LIBRARY "$vcpkgPath/lib/cxsparse.lib")
-set(SuiteSparse_SUITESPARSECONFIG_LIBRARY "$vcpkgPath/lib/suitesparseconfig.lib")
 
 # BLAS/LAPACK
 set(SuiteSparse_BLAS_LIBRARY "$vcpkgPath/lib/openblas.lib")
 set(SuiteSparse_LAPACK_LIBRARY "$vcpkgPath/lib/lapack.lib")
 
-# Collect all libraries
-set(SuiteSparse_LIBRARIES
-    \${SuiteSparse_AMD_LIBRARY}
-    \${SuiteSparse_CAMD_LIBRARY}
-    \${SuiteSparse_COLAMD_LIBRARY}
-    \${SuiteSparse_CCOLAMD_LIBRARY}
-    \${SuiteSparse_CHOLMOD_LIBRARY}
-    \${SuiteSparse_UMFPACK_LIBRARY}
-    \${SuiteSparse_SPQR_LIBRARY}
-    \${SuiteSparse_KLU_LIBRARY}
-    \${SuiteSparse_LDL_LIBRARY}
-    \${SuiteSparse_BTF_LIBRARY}
-    \${SuiteSparse_CXSPARSE_LIBRARY}
-    \${SuiteSparse_SUITESPARSECONFIG_LIBRARY}
-    \${SuiteSparse_BLAS_LIBRARY}
-    \${SuiteSparse_LAPACK_LIBRARY}
-)
-
-# Create imported target
-if(NOT TARGET SuiteSparse::SuiteSparse)
-  add_library(SuiteSparse::SuiteSparse INTERFACE IMPORTED)
-  target_include_directories(SuiteSparse::SuiteSparse INTERFACE "$vcpkgPath/include")
-  target_link_libraries(SuiteSparse::SuiteSparse INTERFACE \${SuiteSparse_LIBRARIES})
-endif()
-
-message(STATUS "SuiteSparse configured for vcpkg installation")
+message(STATUS "SuiteSparse configured via vcpkg")
 "@
+
+$cmakeContent | Set-Content "cmake/FindSuiteSparse.cmake" -Encoding UTF8
+Write-Host "Created FindSuiteSparse.cmake"
+'@
         
-        # Fix the escaping for CMake
-        $content = $content -replace '\\\$', '$'
-        $content | Set-Content "cmake/FindSuiteSparse.cmake" -Encoding UTF8
+        $script | Out-File create_findsuitesparse.ps1 -Encoding UTF8
+        .\create_findsuitesparse.ps1
         
-        echo "Created FindSuiteSparse.cmake"
-        
-    - name: Copy ALL SuiteSparse headers to include directory
+    - name: Copy headers
       run: |
         $vcpkgPath = "$env:GITHUB_WORKSPACE/vcpkg/installed/x64-windows"
         
         # Create include directory
-        $targetDir = "$env:GITHUB_WORKSPACE/include"
-        New-Item -ItemType Directory -Path $targetDir -Force
+        mkdir include -Force
         
-        # Copy all headers from vcpkg
+        # Copy all headers we can find
         Get-ChildItem "$vcpkgPath/include" -Filter "*.h" -Recurse | ForEach-Object {
-            $targetPath = "$targetDir/$($_.Name)"
-            Copy-Item $_.FullName $targetPath -Force
-            echo "Copied: $($_.Name)"
-        }
-        
-        # Also look for SuiteSparse headers in other locations
-        Get-ChildItem "$vcpkgPath" -Filter "*.h" -Recurse | Where-Object {
-            $_.Directory.Name -match "suitesparse|SuiteSparse"
-        } | ForEach-Object {
-            $targetPath = "$targetDir/$($_.Name)"
-            Copy-Item $_.FullName $targetPath -Force
-            echo "Copied from subdir: $($_.Name)"
+            Copy-Item $_.FullName "include/$($_.Name)" -Force
         }
         
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v1.1
       
-    - name: Configure CMake with forced variables
+    - name: Configure CMake
       run: |
-        $vcpkgPath = "$env:GITHUB_WORKSPACE/vcpkg/installed/x64-windows" -replace '\\', '/'
-        
-        cmake -B build `
-          -DBFF_BUILD_GUI=ON `
-          -DCMAKE_BUILD_TYPE=Release `
-          -DCMAKE_TOOLCHAIN_FILE="$env:GITHUB_WORKSPACE/vcpkg/scripts/buildsystems/vcpkg.cmake" `
-          -DSuiteSparse_FOUND=TRUE `
-          -DSuiteSparse_INCLUDE_DIR="$vcpkgPath/include" `
-          -DSuiteSparse_LIBRARY_DIR="$vcpkgPath/lib" `
-          -DSuiteSparse_BLAS_LIBRARY="$vcpkgPath/lib/openblas.lib" `
-          -DSuiteSparse_LAPACK_LIBRARY="$vcpkgPath/lib/lapack.lib"
+        cmake -B build -DBFF_BUILD_GUI=ON -DCMAKE_BUILD_TYPE=Release
         
     - name: Build
       run: |
         cmake --build build --config Release
         
-    - name: Check for viewer
+    - name: Check results
       run: |
+        dir build -Recurse -Filter *.exe
