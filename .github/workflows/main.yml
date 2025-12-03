@@ -17,71 +17,53 @@ jobs:
         .\vcpkg\bootstrap-vcpkg.bat
         .\vcpkg\vcpkg install suitesparse:x64-windows
         
-    - name: Copy SuiteSparse headers to include directory
+    - name: Copy headers
       run: |
         $vcpkgPath = "$env:GITHUB_WORKSPACE/vcpkg/installed/x64-windows"
         
-        # Create include directory in workspace root
+        # Create include directory
         mkdir include -Force
         
-        # Copy ALL headers from vcpkg
-        echo "Copying headers from $vcpkgPath..."
+        # Copy cholmod.h and other headers
         Get-ChildItem "$vcpkgPath" -Filter "*.h" -Recurse | ForEach-Object {
-            $target = "include/$($_.Name)"
-            Copy-Item $_.FullName $target -Force
-            echo "Copied: $($_.Name)"
+            Copy-Item $_.FullName "include/$($_.Name)" -Force
         }
         
-        # Also look specifically for cholmod.h
-        $cholmod = Get-ChildItem "$vcpkgPath" -Filter "cholmod.h" -Recurse | Select-Object -First 1
-        if ($cholmod) {
-            echo "cholmod.h found at: $($cholmod.FullName)"
-            Copy-Item $cholmod.FullName "include/cholmod.h" -Force
-            echo "✅ cholmod.h copied to include/"
-        } else {
-            echo "❌ cholmod.h not found!"
-            echo "Contents of vcpkg/include:"
-            Get-ChildItem "$vcpkgPath/include" -Recurse | Select-Object -First 10
-        }
+        echo "Headers copied to include/"
         
     - name: Patch source files
       run: |
-        # Patch the two .inl files
+        # Patch the .inl files
         $file1 = "include/bff/linear-algebra/DenseMatrix.inl"
         $file2 = "include/bff/linear-algebra/SparseMatrix.inl"
         
         if (Test-Path $file1) {
             (Get-Content $file1) -replace 'cholmod_l_', 'cholmod_' | Set-Content $file1
-            echo "Patched $file1"
         }
         
         if (Test-Path $file2) {
             (Get-Content $file2) -replace 'cholmod_l_', 'cholmod_' | Set-Content $file2
-            echo "Patched $file2"
         }
         
-    - name: Create simple CMake config
+    - name: Create FindSuiteSparse.cmake with forward slashes
       run: |
-        $path = "$env:GITHUB_WORKSPACE/vcpkg/installed/x64-windows" -replace '\\', '/'
+        # Convert paths to forward slashes for CMake
+        $workspace = "$env:GITHUB_WORKSPACE" -replace '\\', '/'
+        $vcpkgPath = "$env:GITHUB_WORKSPACE/vcpkg/installed/x64-windows" -replace '\\', '/'
         
-        # Write minimal FindSuiteSparse.cmake
+        # Write file with forward slashes
         echo "set(SuiteSparse_FOUND TRUE)" | Out-File cmake/FindSuiteSparse.cmake
-        echo "set(SuiteSparse_INCLUDE_DIR `"$env:GITHUB_WORKSPACE/include`")" | Out-File -Append cmake/FindSuiteSparse.cmake
-        echo "set(SuiteSparse_LIBRARY_DIR `"$path/lib`")" | Out-File -Append cmake/FindSuiteSparse.cmake
-        echo "set(SuiteSparse_CHOLMOD_LIBRARY `"$path/lib/cholmod.lib`")" | Out-File -Append cmake/FindSuiteSparse.cmake
-        echo "set(SuiteSparse_AMD_LIBRARY `"$path/lib/amd.lib`")" | Out-File -Append cmake/FindSuiteSparse.cmake
-        echo "message(STATUS `"SuiteSparse configured`")" | Out-File -Append cmake/FindSuiteSparse.cmake
+        echo "set(SuiteSparse_INCLUDE_DIR `"$workspace/include`")" | Out-File -Append cmake/FindSuiteSparse.cmake
+        echo "set(SuiteSparse_LIBRARY_DIR `"$vcpkgPath/lib`")" | Out-File -Append cmake/FindSuiteSparse.cmake
+        echo "set(SuiteSparse_CHOLMOD_LIBRARY `"$vcpkgPath/lib/cholmod.lib`")" | Out-File -Append cmake/FindSuiteSparse.cmake
+        echo "set(SuiteSparse_AMD_LIBRARY `"$vcpkgPath/lib/amd.lib`")" | Out-File -Append cmake/FindSuiteSparse.cmake
         
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v1.1
       
     - name: Configure CMake
       run: |
-        # Add the include directory to CMake
-        cmake -B build `
-          -DBFF_BUILD_GUI=ON `
-          -DCMAKE_BUILD_TYPE=Release `
-          -DCMAKE_CXX_FLAGS="/I`"$env:GITHUB_WORKSPACE/include`""
+        cmake -B build -DBFF_BUILD_GUI=ON -DCMAKE_BUILD_TYPE=Release
         
     - name: Build
       run: |
@@ -91,10 +73,7 @@ jobs:
       run: |
         if (Test-Path "build/Release/bff-viewer.exe") {
             echo "✅ SUCCESS: bff-viewer.exe built!"
-            echo "File info:"
-            dir "build/Release/bff-viewer.exe"
+            echo "Size: $((Get-Item 'build/Release/bff-viewer.exe').Length) bytes"
         } else {
             echo "❌ Viewer not found"
-            echo "Looking for executables..."
-            Get-ChildItem -Path build -Recurse -Filter "*.exe" -ErrorAction SilentlyContinue
         }
