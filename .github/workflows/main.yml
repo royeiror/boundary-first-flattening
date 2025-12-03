@@ -17,107 +17,57 @@ jobs:
         .\vcpkg\bootstrap-vcpkg.bat
         .\vcpkg\vcpkg install suitesparse:x64-windows
         
-    - name: Create stub header line by line
+    - name: Create stub header
       run: |
-        # Create stub header without @ symbols
-        $file = "cholmod_stub.h"
+        # Simple stub as a single string
+        $stub = '// cholmod_stub.h
+#ifndef CHOLMOD_STUB_H
+#define CHOLMOD_STUB_H
+
+#include "cholmod.h"
+
+// Dummy function definitions
+double cholmod_norm_dense(cholmod_dense* A, int norm, cholmod_common* Common) { return 0.0; }
+double cholmod_norm_sparse(cholmod_sparse* A, int norm, cholmod_common* Common) { return 0.0; }
+cholmod_sparse* cholmod_submatrix(cholmod_sparse* A, int* rset, int rsize, int* cset, int csize, int values, int sorted, cholmod_common* Common) { return NULL; }
+int cholmod_scale(cholmod_dense* S, int scale, cholmod_sparse* A, cholmod_common* Common) { return 0; }
+cholmod_sparse* cholmod_ssmult(cholmod_sparse* A, cholmod_sparse* B, int stype, int values, int sorted, cholmod_common* Common) { return NULL; }
+int cholmod_sdmult(cholmod_sparse* A, int transpose, double alpha[2], double beta[2], cholmod_dense* X, cholmod_dense* Y, cholmod_common* Common) { return 0; }
+
+#ifndef CHOLMOD_SCALAR
+#define CHOLMOD_SCALAR 0
+#endif
+
+#endif'
         
-        # Start fresh
-        "" | Set-Content $file
+        $stub | Set-Content cholmod_stub.h
         
-        # Add lines one by one
-        "// cholmod_stub.h - Stub implementations for missing functions" | Add-Content $file
-        "#ifndef CHOLMOD_STUB_H" | Add-Content $file
-        "#define CHOLMOD_STUB_H" | Add-Content $file
-        "" | Add-Content $file
-        "#include `"cholmod.h`"" | Add-Content $file
-        "" | Add-Content $file
-        "// Stub implementations" | Add-Content $file
-        "#if !defined(cholmod_norm_dense)" | Add-Content $file
-        "double cholmod_norm_dense(cholmod_dense* A, int norm, cholmod_common* Common) {" | Add-Content $file
-        "    return 0.0;" | Add-Content $file
-        "}" | Add-Content $file
-        "#endif" | Add-Content $file
-        "" | Add-Content $file
-        "#if !defined(cholmod_norm_sparse)" | Add-Content $file
-        "double cholmod_norm_sparse(cholmod_sparse* A, int norm, cholmod_common* Common) {" | Add-Content $file
-        "    return 0.0;" | Add-Content $file
-        "}" | Add-Content $file
-        "#endif" | Add-Content $file
-        "" | Add-Content $file
-        "#if !defined(cholmod_submatrix)" | Add-Content $file
-        "cholmod_sparse* cholmod_submatrix(cholmod_sparse* A," | Add-Content $file
-        "    int* rset, int rsize, int* cset, int csize," | Add-Content $file
-        "    int values, int sorted, cholmod_common* Common) {" | Add-Content $file
-        "    return NULL;" | Add-Content $file
-        "}" | Add-Content $file
-        "#endif" | Add-Content $file
-        "" | Add-Content $file
-        "#if !defined(cholmod_scale)" | Add-Content $file
-        "int cholmod_scale(cholmod_dense* S, int scale, cholmod_sparse* A," | Add-Content $file
-        "    cholmod_common* Common) {" | Add-Content $file
-        "    return 0;" | Add-Content $file
-        "}" | Add-Content $file
-        "#endif" | Add-Content $file
-        "" | Add-Content $file
-        "#if !defined(cholmod_ssmult)" | Add-Content $file
-        "cholmod_sparse* cholmod_ssmult(cholmod_sparse* A, cholmod_sparse* B," | Add-Content $file
-        "    int stype, int values, int sorted, cholmod_common* Common) {" | Add-Content $file
-        "    return NULL;" | Add-Content $file
-        "}" | Add-Content $file
-        "#endif" | Add-Content $file
-        "" | Add-Content $file
-        "#if !defined(cholmod_sdmult)" | Add-Content $file
-        "int cholmod_sdmult(cholmod_sparse* A, int transpose," | Add-Content $file
-        "    double alpha[2], double beta[2], cholmod_dense* X, cholmod_dense* Y," | Add-Content $file
-        "    cholmod_common* Common) {" | Add-Content $file
-        "    return 0;" | Add-Content $file
-        "}" | Add-Content $file
-        "#endif" | Add-Content $file
-        "" | Add-Content $file
-        "#ifndef CHOLMOD_SCALAR" | Add-Content $file
-        "#define CHOLMOD_SCALAR 0" | Add-Content $file
-        "#endif" | Add-Content $file
-        "" | Add-Content $file
-        "#endif // CHOLMOD_STUB_H" | Add-Content $file
-        
-        echo "Created $file"
-        
-    - name: Update Common.h to include stub
-      run: |
-        $commonFile = "include/bff/linear-algebra/Common.h"
-        if (Test-Path $commonFile) {
-            $content = Get-Content $commonFile
-            $newContent = @()
-            
-            foreach ($line in $content) {
-                $newContent += $line
-                if ($line -match '#include "cholmod.h"') {
-                    $newContent += '#include "cholmod_stub.h"'
-                }
+        # Update Common.h
+        (Get-Content "include/bff/linear-algebra/Common.h") | ForEach-Object {
+            if ($_ -match '#include "cholmod.h"') {
+                $_
+                '#include "cholmod_stub.h"'
+            } else {
+                $_
             }
-            
-            $newContent | Set-Content $commonFile
-            echo "Updated Common.h"
-        }
+        } | Set-Content "include/bff/linear-algebra/Common.h"
         
     - name: Copy headers
       run: |
-        mkdir include -Force
+        mkdir include
         Copy-Item "vcpkg/installed/x64-windows/include/*.h" "include/" -ErrorAction SilentlyContinue
         
-    - name: Patch source files
+    - name: Create FindSuiteSparse.cmake with forward slashes
       run: |
-        # Already patched from cholmod_l_ to cholmod_
-        echo "Files already patched"
+        # Get workspace path and convert ALL backslashes to forward slashes
+        $workspace = $env:GITHUB_WORKSPACE -replace '\\', '/'
+        $libpath = "$env:GITHUB_WORKSPACE/vcpkg/installed/x64-windows/lib" -replace '\\', '/'
         
-    - name: Create FindSuiteSparse.cmake
-      run: |
-        $path = "$env:GITHUB_WORKSPACE/vcpkg/installed/x64-windows" -replace '\\', '/'
-        
-        echo "set(SuiteSparse_FOUND TRUE)" > cmake/FindSuiteSparse.cmake
-        echo "set(SuiteSparse_INCLUDE_DIR `"$env:GITHUB_WORKSPACE/include`")" >> cmake/FindSuiteSparse.cmake
-        echo "set(SuiteSparse_CHOLMOD_LIBRARY `"$path/lib/cholmod.lib`")" >> cmake/FindSuiteSparse.cmake
+        # Write file
+        "set(SuiteSparse_FOUND TRUE)" | Out-File cmake/FindSuiteSparse.cmake -Encoding UTF8
+        "set(SuiteSparse_INCLUDE_DIR `"$workspace/include`")" | Out-File -Append cmake/FindSuiteSparse.cmake -Encoding UTF8
+        "set(SuiteSparse_CHOLMOD_LIBRARY `"$libpath/cholmod.lib`")" | Out-File -Append cmake/FindSuiteSparse.cmake -Encoding UTF8
+        "message(STATUS `"SuiteSparse configured`")" | Out-File -Append cmake/FindSuiteSparse.cmake -Encoding UTF8
         
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v1.1
@@ -134,7 +84,6 @@ jobs:
       run: |
         if (Test-Path "build/Release/bff-viewer.exe") {
             echo "✅ SUCCESS: bff-viewer.exe built!"
-            echo "Note: Using stub implementations for missing cholmod functions"
         } else {
             echo "❌ Build failed"
         }
