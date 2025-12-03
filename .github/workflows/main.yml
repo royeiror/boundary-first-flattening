@@ -11,74 +11,77 @@ jobs:
       with:
         submodules: recursive
         
-    - name: Setup Visual Studio tools
-      run: |
-        # Initialize VS Dev Command Prompt
-        echo "Setting up Visual Studio tools..."
-        # This should make dumpbin available
-        $vsPath = "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build"
-        if (Test-Path $vsPath) {
-            cmd.exe /c "call `"$vsPath\vcvarsall.bat`" x64 && set" | ForEach-Object {
-                if ($_ -match "^(.*?)=(.*)$") {
-                    $name = $matches[1]
-                    $value = $matches[2]
-                    [Environment]::SetEnvironmentVariable($name, $value)
-                }
-            }
-        }
-        
     - name: Install vcpkg
       run: |
         git clone https://github.com/Microsoft/vcpkg.git
         .\vcpkg\bootstrap-vcpkg.bat
         .\vcpkg\vcpkg install suitesparse:x64-windows
         
-    - name: Simple patch - replace cholmod_l_ with cholmod_
+    - name: Copy SuiteSparse headers to include directory
       run: |
-        echo "Patching cholmod_l_ to cholmod_..."
+        $vcpkgPath = "$env:GITHUB_WORKSPACE/vcpkg/installed/x64-windows"
         
-        # Just patch the specific files we know have issues
-        $filesToPatch = @(
-            "include/bff/linear-algebra/DenseMatrix.inl",
-            "include/bff/linear-algebra/SparseMatrix.inl"
-        )
+        # Create include directory in workspace root
+        mkdir include -Force
         
-        foreach ($file in $filesToPatch) {
-            if (Test-Path $file) {
-                echo "Patching $file"
-                (Get-Content $file -Raw) -replace 'cholmod_l_', 'cholmod_' | Set-Content $file
-            }
+        # Copy ALL headers from vcpkg
+        echo "Copying headers from $vcpkgPath..."
+        Get-ChildItem "$vcpkgPath" -Filter "*.h" -Recurse | ForEach-Object {
+            $target = "include/$($_.Name)"
+            Copy-Item $_.FullName $target -Force
+            echo "Copied: $($_.Name)"
         }
         
-        # Also check Common.h
-        if (Test-Path "include/bff/linear-algebra/Common.h") {
-            echo "Checking Common.h"
-            (Get-Content "include/bff/linear-algebra/Common.h" -Raw) -replace 'cholmod_l_', 'cholmod_' | Set-Content "include/bff/linear-algebra/Common.h"
+        # Also look specifically for cholmod.h
+        $cholmod = Get-ChildItem "$vcpkgPath" -Filter "cholmod.h" -Recurse | Select-Object -First 1
+        if ($cholmod) {
+            echo "cholmod.h found at: $($cholmod.FullName)"
+            Copy-Item $cholmod.FullName "include/cholmod.h" -Force
+            echo "✅ cholmod.h copied to include/"
+        } else {
+            echo "❌ cholmod.h not found!"
+            echo "Contents of vcpkg/include:"
+            Get-ChildItem "$vcpkgPath/include" -Recurse | Select-Object -First 10
         }
         
-    - name: Create FindSuiteSparse.cmake
+    - name: Patch source files
+      run: |
+        # Patch the two .inl files
+        $file1 = "include/bff/linear-algebra/DenseMatrix.inl"
+        $file2 = "include/bff/linear-algebra/SparseMatrix.inl"
+        
+        if (Test-Path $file1) {
+            (Get-Content $file1) -replace 'cholmod_l_', 'cholmod_' | Set-Content $file1
+            echo "Patched $file1"
+        }
+        
+        if (Test-Path $file2) {
+            (Get-Content $file2) -replace 'cholmod_l_', 'cholmod_' | Set-Content $file2
+            echo "Patched $file2"
+        }
+        
+    - name: Create simple CMake config
       run: |
         $path = "$env:GITHUB_WORKSPACE/vcpkg/installed/x64-windows" -replace '\\', '/'
         
-        # Write simple file
-        $lines = @(
-            "set(SuiteSparse_FOUND TRUE)",
-            "set(SuiteSparse_INCLUDE_DIR `"$path/include`")",
-            "set(SuiteSparse_LIBRARY_DIR `"$path/lib`")",
-            "set(SuiteSparse_CHOLMOD_LIBRARY `"$path/lib/cholmod.lib`")",
-            "set(SuiteSparse_AMD_LIBRARY `"$path/lib/amd.lib`")",
-            "message(STATUS `"SuiteSparse configured`")"
-        )
-        
-        $content = $lines -join "`n"
-        $content | Set-Content "cmake/FindSuiteSparse.cmake" -Encoding UTF8
+        # Write minimal FindSuiteSparse.cmake
+        echo "set(SuiteSparse_FOUND TRUE)" | Out-File cmake/FindSuiteSparse.cmake
+        echo "set(SuiteSparse_INCLUDE_DIR `"$env:GITHUB_WORKSPACE/include`")" | Out-File -Append cmake/FindSuiteSparse.cmake
+        echo "set(SuiteSparse_LIBRARY_DIR `"$path/lib`")" | Out-File -Append cmake/FindSuiteSparse.cmake
+        echo "set(SuiteSparse_CHOLMOD_LIBRARY `"$path/lib/cholmod.lib`")" | Out-File -Append cmake/FindSuiteSparse.cmake
+        echo "set(SuiteSparse_AMD_LIBRARY `"$path/lib/amd.lib`")" | Out-File -Append cmake/FindSuiteSparse.cmake
+        echo "message(STATUS `"SuiteSparse configured`")" | Out-File -Append cmake/FindSuiteSparse.cmake
         
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v1.1
       
     - name: Configure CMake
       run: |
-        cmake -B build -DBFF_BUILD_GUI=ON -DCMAKE_BUILD_TYPE=Release
+        # Add the include directory to CMake
+        cmake -B build `
+          -DBFF_BUILD_GUI=ON `
+          -DCMAKE_BUILD_TYPE=Release `
+          -DCMAKE_CXX_FLAGS="/I`"$env:GITHUB_WORKSPACE/include`""
         
     - name: Build
       run: |
@@ -88,11 +91,10 @@ jobs:
       run: |
         if (Test-Path "build/Release/bff-viewer.exe") {
             echo "✅ SUCCESS: bff-viewer.exe built!"
-            # Try to run it (will fail without display, but that's OK)
-            echo "Trying to run viewer..."
-            & "build/Release/bff-viewer.exe" --help 2>&1 | Out-String
+            echo "File info:"
+            dir "build/Release/bff-viewer.exe"
         } else {
             echo "❌ Viewer not found"
-            echo "Looking for any executables..."
+            echo "Looking for executables..."
             Get-ChildItem -Path build -Recurse -Filter "*.exe" -ErrorAction SilentlyContinue
         }
