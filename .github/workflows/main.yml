@@ -17,61 +17,58 @@ jobs:
         .\vcpkg\bootstrap-vcpkg.bat
         .\vcpkg\vcpkg install suitesparse:x64-windows
         
-    - name: Create stub header
+    - name: Copy ALL headers from vcpkg
       run: |
-        # Check if include exists, create if not
-        if (-not (Test-Path "include")) {
-            mkdir include
+        # Clean and create include directory
+        if (Test-Path "include") {
+            Remove-Item -Recurse -Force include
         }
+        mkdir include
         
-        # Write stub directly
-        "// cholmod_stub.h" | Out-File cholmod_stub.h
-        "#ifndef CHOLMOD_STUB_H" | Out-File -Append cholmod_stub.h
-        "#define CHOLMOD_STUB_H" | Out-File -Append cholmod_stub.h
-        "" | Out-File -Append cholmod_stub.h
-        "#include `"cholmod.h`"" | Out-File -Append cholmod_stub.h
-        "" | Out-File -Append cholmod_stub.h
-        "// Dummy definitions" | Out-File -Append cholmod_stub.h
-        "#define cholmod_norm_dense 0" | Out-File -Append cholmod_stub.h
-        "#define cholmod_norm_sparse 0" | Out-File -Append cholmod_stub.h
-        "#define cholmod_submatrix 0" | Out-File -Append cholmod_stub.h
-        "#define cholmod_scale 0" | Out-File -Append cholmod_stub.h
-        "#define cholmod_ssmult 0" | Out-File -Append cholmod_stub.h
-        "#define cholmod_sdmult 0" | Out-File -Append cholmod_stub.h
-        "#define CHOLMOD_SCALAR 0" | Out-File -Append cholmod_stub.h
-        "" | Out-File -Append cholmod_stub.h
-        "#endif" | Out-File -Append cholmod_stub.h
-        
-    - name: Update Common.h
-      run: |
-        $file = "include/bff/linear-algebra/Common.h"
-        if (Test-Path $file) {
-            $lines = Get-Content $file
-            $newLines = @()
+        # Copy ALL headers recursively
+        $vcpkgInclude = "vcpkg/installed/x64-windows/include"
+        if (Test-Path $vcpkgInclude) {
+            echo "Copying headers from $vcpkgInclude..."
             
-            foreach ($line in $lines) {
-                $newLines += $line
-                if ($line -match '#include "cholmod.h"') {
-                    $newLines += '#include "cholmod_stub.h"'
-                }
+            # Find all .h files
+            $headers = Get-ChildItem $vcpkgInclude -Filter "*.h" -Recurse
+            echo "Found $($headers.Count) header files"
+            
+            foreach ($header in $headers) {
+                $target = "include/$($header.Name)"
+                Copy-Item $header.FullName $target -Force
             }
             
-            $newLines | Set-Content $file
+            # Also check for cholmod.h specifically
+            $cholmod = Get-ChildItem $vcpkgInclude -Filter "cholmod.h" -Recurse | Select -First 1
+            if ($cholmod) {
+                echo "✅ cholmod.h copied to include/"
+            } else {
+                echo "❌ cholmod.h not found in vcpkg!"
+                echo "Available headers:"
+                Get-ChildItem "include" | Select -First 10 Name
+            }
+        } else {
+            echo "❌ vcpkg include directory not found!"
         }
         
-    - name: Copy vcpkg headers
+    - name: Patch Common.h to look in current directory
       run: |
-        # Copy headers if they exist
-        $source = "vcpkg/installed/x64-windows/include"
-        if (Test-Path $source) {
-            Copy-Item "$source/*.h" "include/" -ErrorAction SilentlyContinue
+        # Make Common.h look for cholmod.h in the same directory
+        $commonFile = "include/bff/linear-algebra/Common.h"
+        if (Test-Path $commonFile) {
+            $content = Get-Content $commonFile -Raw
+            # Change to look in parent directories
+            $newContent = $content -replace '#include "cholmod.h"', '#include "../../../cholmod.h"'
+            $newContent | Set-Content $commonFile
+            echo "Updated Common.h to look in workspace root"
         }
         
     - name: Create FindSuiteSparse.cmake
       run: |
-        # Use simple relative paths
+        # Use CMAKE_CURRENT_SOURCE_DIR to avoid path issues
         "set(SuiteSparse_FOUND TRUE)" | Out-File cmake/FindSuiteSparse.cmake -Encoding UTF8
-        "set(SuiteSparse_INCLUDE_DIR `"\${CMAKE_CURRENT_SOURCE_DIR}/include`")" | Out-File -Append cmake/FindSuiteSparse.cmake -Encoding UTF8
+        "set(SuiteSparse_INCLUDE_DIR `"\${CMAKE_CURRENT_SOURCE_DIR}`")" | Out-File -Append cmake/FindSuiteSparse.cmake -Encoding UTF8
         "set(SuiteSparse_CHOLMOD_LIBRARY `"cholmod`")" | Out-File -Append cmake/FindSuiteSparse.cmake -Encoding UTF8
         
     - name: Setup MSBuild
@@ -89,13 +86,6 @@ jobs:
       run: |
         if (Test-Path "build/Release/bff-viewer.exe") {
             echo "✅ SUCCESS: bff-viewer.exe built!"
-            echo "File size: $((Get-Item 'build/Release/bff-viewer.exe').Length) bytes"
-            
-            # Try to run with --help
-            echo "Trying to run viewer..."
-            & "build/Release/bff-viewer.exe" --help 2>&1 | Out-String
         } else {
             echo "❌ Viewer not found"
-            echo "Looking for executables..."
-            Get-ChildItem -Path build -Recurse -Filter "*.exe" -ErrorAction SilentlyContinue
         }
