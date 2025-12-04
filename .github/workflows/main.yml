@@ -60,7 +60,7 @@ jobs:
           rd /s /q openblas-src
         )
         
-    - name: Build SuiteSparse
+      - name: Build SuiteSparse
       shell: cmd
       run: |
         mkdir suitesparse
@@ -81,26 +81,13 @@ jobs:
         powershell -Command "Invoke-WebRequest -Uri 'http://glaros.dtc.umn.edu/gkhome/fetch/sw/metis/metis-5.1.0.tar.gz' -OutFile 'metis.tar.gz'"
         tar -xzf metis.tar.gz --strip-components=1 -C metis
         
-        # Fix METIS CMakeLists.txt
-        (Get-Content metis/CMakeLists.txt) -replace 'project\(METIS\)', 'project(METIS)
-cmake_policy(SET CMP0022 NEW)' | Set-Content metis/CMakeLists.txt
-        
-        # Configure SuiteSparse
-        mkdir build
-        cd build
-        cmake .. -G "Visual Studio 17 2022" -A x64 ^
-          -DCMAKE_BUILD_TYPE=Release ^
-          -DCMAKE_INSTALL_PREFIX=%cd%\install ^
-          -DWITH_OPENBLAS=ON ^
-          -DOPENBLAS_LIBRARY=%GITHUB_WORKSPACE%\deps\openblas-windows\lib\libopenblas.lib ^
-          -DOPENBLAS_INCLUDE_DIR=%GITHUB_WORKSPACE%\deps\openblas-windows\include
-        
-        # Build and install
-        cmake --build . --config Release --target install
-        
-        # Create lib directory structure expected by BFF
-        mkdir install\lib
-        copy install\lib64\*.lib install\lib\
+        # Fix METIS CMakeLists.txt using PowerShell properly
+        powershell -Command "
+          \$content = Get-Content 'metis/CMakeLists.txt' -Raw
+          \$newContent = \$content -replace 'project\(METIS\)', 'project(METIS)
+cmake_policy(SET CMP0022 NEW)'
+          Set-Content 'metis/CMakeLists.txt' \$newContent -Encoding ASCII
+        "
         
     - name: Configure BFF with CMake
       shell: cmd
