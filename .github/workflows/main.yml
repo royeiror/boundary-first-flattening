@@ -11,28 +11,44 @@ jobs:
       with:
         submodules: recursive
         
-    - name: Install vcpkg
+    - name: Debug: Check what's in Common.h
       run: |
-        git clone https://github.com/Microsoft/vcpkg.git
-        .\vcpkg\bootstrap-vcpkg.bat
-        .\vcpkg\vcpkg install suitesparse:x64-windows
-        
-    - name: Check Common.h
-      run: |
-        echo "Checking Common.h..."
-        $common = "include/bff/linear-algebra/Common.h"
-        if (Test-Path $common) {
-            echo "First 5 lines:"
-            Get-Content $common -First 5
+        echo "=== Checking Common.h ==="
+        $file = "include/bff/linear-algebra/Common.h"
+        if (Test-Path $file) {
+            echo "File exists"
+            echo "First 10 lines:"
+            Get-Content $file -First 10
+            
+            echo "`nChecking for cholmod.h include:"
+            Get-Content $file | Select-String "cholmod.h"
+        } else {
+            echo "File not found!"
         }
         
-    - name: Fix Common.h
+    - name: Force replace cholmod.h include
       run: |
-        $common = "include/bff/linear-algebra/Common.h"
-        if (Test-Path $common) {
-            # Simply comment out the cholmod.h include
-            (Get-Content $common) -replace '#include "cholmod.h"', '// #include "cholmod.h"' | Set-Content $common
-            echo "Commented out cholmod.h include"
+        $file = "include/bff/linear-algebra/Common.h"
+        if (Test-Path $file) {
+            # Read entire file as single string
+            $content = Get-Content $file -Raw
+            
+            # Force replace - handle different possible formats
+            $newContent = $content -replace '#include\s+"cholmod\.h"', '// #include "cholmod.h" // Removed for CI'
+            
+            # Also check if it worked
+            if ($newContent -eq $content) {
+                echo "⚠️ Replacement didn't change anything"
+                echo "Trying alternative pattern..."
+                $newContent = $content -replace 'cholmod\.h', '// cholmod.h'
+            }
+            
+            $newContent | Set-Content $file -Encoding UTF8
+            echo "Applied replacement"
+            
+            # Verify
+            echo "After replacement (first 5 lines):"
+            Get-Content $file -First 5
         }
         
     - name: Create FindSuiteSparse.cmake
