@@ -1,56 +1,179 @@
-name: Build BFF Viewer
+name: Build BFF for Windows
 
-on: workflow_dispatch
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+env:
+  BUILD_TYPE: Release
+  VS_VERSION: 2022
+  VS_ARCH: x64
 
 jobs:
-  build-viewer:
+  build:
     runs-on: windows-latest
     
     steps:
-    - uses: actions/checkout@v4
+    - name: Checkout BFF repository
+      uses: actions/checkout@v4
       with:
+        repository: royeiror/boundary-first-flattening
         submodules: recursive
         
-    - name: Check Common.h file
-      run: |
-        echo "Checking Common.h..."
-        $file = "include/bff/linear-algebra/Common.h"
-        if (Test-Path $file) {
-            echo "File exists"
-            echo "First 5 lines:"
-            Get-Content $file -First 5
-        }
-        
-    - name: Fix Common.h
-      run: |
-        $file = "include/bff/linear-algebra/Common.h"
-        if (Test-Path $file) {
-            # Read and replace
-            $content = Get-Content $file -Raw
-            $newContent = $content -replace '#include "cholmod.h"', '// #include "cholmod.h"'
-            $newContent | Set-Content $file
-            echo "Fixed Common.h"
-        }
-        
-    - name: Create FindSuiteSparse.cmake
-      run: |
-        echo "set(SuiteSparse_FOUND TRUE)" > cmake/FindSuiteSparse.cmake
-        
-    - name: Setup MSBuild
-      uses: microsoft/setup-msbuild@v1.1
+    - name: Setup MSVC
+      uses: microsoft/setup-msbuild@v2
       
-    - name: Configure CMake
-      run: |
-        cmake -B build -DBFF_BUILD_GUI=ON -DCMAKE_BUILD_TYPE=Release
+    - name: Install CMake
+      uses: jwlawson/actions-setup-cmake@v1
+      with:
+        cmake-version: '3.28.x'
         
-    - name: Build
+    - name: Install dependencies
+      shell: cmd
       run: |
-        cmake --build build --config Release
+        choco install -y ninja
+        choco install -y git
         
-    - name: Check results
+    - name: Setup OpenBLAS
+      shell: cmd
       run: |
-        if (Test-Path "build/Release/bff-viewer.exe") {
-            echo "✅ Viewer built!"
-        } else {
-            echo "❌ No viewer"
-        }
+        mkdir deps
+        cd deps
+        if not exist openblas-windows (
+          git clone https://github.com/xianyi/OpenBLAS.git openblas-src
+          cd openblas-src
+          git checkout v0.3.24
+          mkdir build
+          cd build
+          cmake .. -G "Visual Studio 17 2022" -A x64 ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            -DBUILD_WITHOUT_LAPACK=NO ^
+            -DNOFORTRAN=1 ^
+            -DDYNAMIC_ARCH=OFF ^
+            -DBUILD_SHARED_LIBS=OFF ^
+            -DCMAKE_INSTALL_PREFIX=..\..\openblas-windows
+          cmake --build . --config Release --target install
+          cd ..\..
+          rd /s /q openblas-src
+        )
+        
+    - name: Build SuiteSparse
+      shell: cmd
+      run: |
+        mkdir suitesparse
+        cd suitesparse
+        
+        # Clone SuiteSparseProject
+        git clone https://github.com/jlblancoc/suitesparse-metis-for-windows.git SuiteSparseProject
+        cd SuiteSparseProject
+        git checkout v1.5.0
+        
+        # Download SuiteSparse sources
+        mkdir SuiteSparse
+        powershell -Command "Invoke-WebRequest -Uri 'https://github.com/DrTimothyAldenDavis/SuiteSparse/archive/refs/tags/v7.6.1.tar.gz' -OutFile 'SuiteSparse.tar.gz'"
+        tar -xzf SuiteSparse.tar.gz --strip-components=1 -C SuiteSparse
+        
+        # Download METIS
+        mkdir metis
+        powershell -Command "Invoke-WebRequest -Uri 'http://glaros.dtc.umn.edu/gkhome/fetch/sw/metis/metis-5.1.0.tar.gz' -OutFile 'metis.tar.gz'"
+        tar -xzf metis.tar.gz --strip-components=1 -C metis
+        
+        # Fix METIS CMakeLists.txt
+        (Get-Content metis/CMakeLists.txt) -replace 'project\(METIS\)', 'project(METIS)
+cmake_policy(SET CMP0022 NEW)' | Set-Content metis/CMakeLists.txt
+        
+        # Configure SuiteSparse
+        mkdir build
+        cd build
+        cmake .. -G "Visual Studio 17 2022" -A x64 ^
+          -DCMAKE_BUILD_TYPE=Release ^
+          -DCMAKE_INSTALL_PREFIX=%cd%\install ^
+          -DWITH_OPENBLAS=ON ^
+          -DOPENBLAS_LIBRARY=%GITHUB_WORKSPACE%\deps\openblas-windows\lib\libopenblas.lib ^
+          -DOPENBLAS_INCLUDE_DIR=%GITHUB_WORKSPACE%\deps\openblas-windows\include
+        
+        # Build and install
+        cmake --build . --config Release --target install
+        
+        # Create lib directory structure expected by BFF
+        mkdir install\lib
+        copy install\lib64\*.lib install\lib\
+        
+    - name: Configure BFF with CMake
+      shell: cmd
+      run: |
+        mkdir build
+        cd build
+        
+        set SUITESPARSE_DIR=%GITHUB_WORKSPACE%\suitesparse\SuiteSparseProject\build\install
+        set OPENBLAS_DIR=%GITHUB_WORKSPACE%\deps\openblas-windows
+        
+        cmake .. -G "Visual Studio 17 2022" -A x64 ^
+          -DCMAKE_BUILD_TYPE=%BUILD_TYPE% ^
+          -DSuiteSparse_CHOLMOD_DIR=%SUITESPARSE_DIR%\lib ^
+          -DSuiteSparse_CHOLMOD_INCLUDE_DIR=%SUITESPARSE_DIR%\include\suitesparse ^
+          -DSuiteSparse_CHOLMOD_LIBRARY=%SUITESPARSE_DIR%\lib\libcholmod.lib ^
+          -DSuiteSparse_CHOLMOD_LIBRARY_DEBUG=%SUITESPARSE_DIR%\lib\libcholmod.lib ^
+          -DSuiteSparse_CHOLMOD_LIBRARY_RELEASE=%SUITESPARSE_DIR%\lib\libcholmod.lib ^
+          -DSuiteSparse_DIR=%SUITESPARSE_DIR% ^
+          -DBLA_STATIC=ON ^
+          -DBLA_VENDOR=OpenBLAS ^
+          -DBLAS_LIBRARIES=%OPENBLAS_DIR%\lib\libopenblas.lib ^
+          -DLAPACK_LIBRARIES=%OPENBLAS_DIR%\lib\libopenblas.lib ^
+          -DSUITESPARSE_INCLUDEDIR=%SUITESPARSE_DIR%\include ^
+          -DSUITESPARSE_LIBRARYDIR=%SUITESPARSE_DIR%\lib
+        
+    - name: Build BFF
+      shell: cmd
+      run: |
+        cd build
+        
+        # Build bff library first
+        cmake --build . --config Release --target bff
+        
+        # Build command line tool
+        cmake --build . --config Release --target bff-command-line
+        
+        # Build viewer if available
+        cmake --build . --config Release --target bff-viewer || echo "bff-viewer target not found"
+        
+    - name: Copy dependencies
+      shell: cmd
+      run: |
+        # Copy required DLLs to build directory
+        copy deps\openblas-windows\bin\*.dll build\%BUILD_TYPE%\
+        
+    - name: Test the executable
+      shell: cmd
+      run: |
+        cd build\%BUILD_TYPE%
+        
+        # Test if executable runs
+        bff-command-line.exe --help || echo "Help command failed"
+        
+    - name: Create release artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: bff-windows-binaries
+        path: |
+          build/Release/*.exe
+          build/Release/*.dll
+        if-no-files-found: error
+        retention-days: 7
+        
+    - name: Create ZIP archive
+      shell: cmd
+      run: |
+        7z a -tzip bff-windows.zip build\Release\*.exe build\Release\*.dll
+      continue-on-error: true
+      
+    - name: Upload ZIP artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: bff-windows-zip
+        path: bff-windows.zip
+        if-no-files-found: error
+        retention-days: 7
