@@ -48,7 +48,7 @@ jobs:
         Remove-Item $openblasZip
         
         Write-Host "OpenBLAS downloaded and extracted!"
-        
+
     - name: Build SuiteSparse from source
       shell: cmd
       run: |
@@ -82,6 +82,36 @@ jobs:
           -DBLAS_LIBRARIES=%OPENBLAS_LIB% ^
           -DLAPACK_LIBRARIES=%OPENBLAS_LIB% ^
           -DBLAS_INCLUDE_DIR=%OPENBLAS_INCLUDE%
+        
+        cmake --build . --config Release
+        cd ../..
+        
+        rem Build CAMD
+        echo Building CAMD...
+        cd CAMD
+        if exist build rd /s /q build
+        mkdir build
+        cd build
+        
+        cmake .. -G "Visual Studio 17 2022" -A x64 ^
+          -DCMAKE_BUILD_TYPE=Release ^
+          -DBUILD_SHARED_LIBS=OFF ^
+          -DCMAKE_PREFIX_PATH=../../SuiteSparse_config/build
+        
+        cmake --build . --config Release
+        cd ../..
+        
+        rem Build CCOLAMD
+        echo Building CCOLAMD...
+        cd CCOLAMD
+        if exist build rd /s /q build
+        mkdir build
+        cd build
+        
+        cmake .. -G "Visual Studio 17 2022" -A x64 ^
+          -DCMAKE_BUILD_TYPE=Release ^
+          -DBUILD_SHARED_LIBS=OFF ^
+          -DCMAKE_PREFIX_PATH=../../SuiteSparse_config/build
         
         cmake --build . --config Release
         cd ../..
@@ -126,7 +156,7 @@ jobs:
         cmake .. -G "Visual Studio 17 2022" -A x64 ^
           -DCMAKE_BUILD_TYPE=Release ^
           -DBUILD_SHARED_LIBS=OFF ^
-          -DCMAKE_PREFIX_PATH=../../SuiteSparse_config/build;../../AMD/build;../../COLAMD/build ^
+          -DCMAKE_PREFIX_PATH=../../SuiteSparse_config/build;../../CAMD/build;../../CCOLAMD/build;../../AMD/build;../../COLAMD/build ^
           -DBLAS_LIBRARIES=%OPENBLAS_LIB% ^
           -DLAPACK_LIBRARIES=%OPENBLAS_LIB% ^
           -DBLAS_INCLUDE_DIR=%OPENBLAS_INCLUDE% ^
@@ -146,17 +176,23 @@ jobs:
         rem Copy libraries
         copy Release\*.lib %GITHUB_WORKSPACE%\suitesparse\install\lib\
         
-        rem Copy headers
+        rem Copy headers from all components
         if exist ..\Include copy ..\Include\*.h %GITHUB_WORKSPACE%\suitesparse\install\include\suitesparse\
+        if exist ..\..\CAMD\Include copy ..\..\CAMD\Include\*.h %GITHUB_WORKSPACE%\suitesparse\install\include\suitesparse\
+        if exist ..\..\CCOLAMD\Include copy ..\..\CCOLAMD\Include\*.h %GITHUB_WORKSPACE%\suitesparse\install\include\suitesparse\
         if exist ..\..\AMD\Include copy ..\..\AMD\Include\*.h %GITHUB_WORKSPACE%\suitesparse\install\include\suitesparse\
         if exist ..\..\COLAMD\Include copy ..\..\COLAMD\Include\*.h %GITHUB_WORKSPACE%\suitesparse\install\include\suitesparse\
         if exist ..\..\SuiteSparse_config\Include copy ..\..\SuiteSparse_config\Include\*.h %GITHUB_WORKSPACE%\suitesparse\install\include\suitesparse\
+        
+        rem Copy libraries from all components
+        if exist ..\..\CAMD\build\Release copy ..\..\CAMD\build\Release\*.lib %GITHUB_WORKSPACE%\suitesparse\install\lib\
+        if exist ..\..\CCOLAMD\build\Release copy ..\..\CCOLAMD\build\Release\*.lib %GITHUB_WORKSPACE%\suitesparse\install\lib\
         if exist ..\..\AMD\build\Release copy ..\..\AMD\build\Release\*.lib %GITHUB_WORKSPACE%\suitesparse\install\lib\
         if exist ..\..\COLAMD\build\Release copy ..\..\COLAMD\build\Release\*.lib %GITHUB_WORKSPACE%\suitesparse\install\lib\
         if exist ..\..\SuiteSparse_config\build\Release copy ..\..\SuiteSparse_config\build\Release\*.lib %GITHUB_WORKSPACE%\suitesparse\install\lib\
         
         echo SuiteSparse built successfully!
-        
+         
     - name: Fix library names
       shell: cmd
       run: |
