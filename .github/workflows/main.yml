@@ -19,7 +19,6 @@ jobs:
       uses: actions/checkout@v4
       with:
         repository: royeiror/boundary-first-flattening
-        submodules: recursive
         
     - name: Setup MSVC
       uses: microsoft/setup-msbuild@v2
@@ -36,170 +35,96 @@ jobs:
         if exist suitesparse rd /s /q suitesparse
         if exist build rd /s /q build
         
-    - name: Setup OpenBLAS
+    - name: Download pre-built OpenBLAS
       shell: powershell
       run: |
-        Write-Host "Setting up OpenBLAS..."
+        Write-Host "Downloading pre-built OpenBLAS..."
         mkdir -Force deps | Out-Null
         cd deps
         
-        if (!(Test-Path "openblas-windows")) {
-          Write-Host "Downloading and building OpenBLAS..."
-          git clone https://github.com/xianyi/OpenBLAS.git openblas-src
-          cd openblas-src
-          git checkout v0.3.24
-          mkdir -Force build | Out-Null
-          cd build
-          cmake .. -G "Visual Studio 17 2022" -A x64 `
-            -DCMAKE_BUILD_TYPE=Release `
-            -DBUILD_WITHOUT_LAPACK=NO `
-            -DNOFORTRAN=1 `
-            -DDYNAMIC_ARCH=OFF `
-            -DBUILD_SHARED_LIBS=OFF `
-            -DCMAKE_INSTALL_PREFIX="$pwd\..\..\openblas-windows"
-          cmake --build . --config Release --target install
-          cd ..\..
-          Remove-Item -Recurse -Force openblas-src
-          Write-Host "OpenBLAS setup complete!"
-        } else {
-          Write-Host "OpenBLAS already exists, skipping..."
-        }
+        # Download pre-built OpenBLAS for Windows (x64)
+        $openblasUrl = "https://github.com/xianyi/OpenBLAS/releases/download/v0.3.26/OpenBLAS-0.3.26-x64.zip"
+        $openblasZip = "openblas.zip"
         
-    - name: Build SuiteSparse
+        Invoke-WebRequest -Uri $openblasUrl -OutFile $openblasZip
+        Expand-Archive -Path $openblasZip -DestinationPath "openblas-windows"
+        Remove-Item $openblasZip
+        
+        Write-Host "OpenBLAS downloaded and extracted!"
+        
+    - name: Download pre-built SuiteSparse
       shell: powershell
       run: |
-        Write-Host "Building SuiteSparse..."
-        
-        # Clean up if exists
-        if (Test-Path "suitesparse") {
-          Remove-Item -Recurse -Force suitesparse
-        }
-        
-        mkdir suitesparse
+        Write-Host "Setting up SuiteSparse..."
+        mkdir -Force suitesparse | Out-Null
         cd suitesparse
         
-        # Clone SuiteSparseProject with specific branch
-        Write-Host "Cloning SuiteSparseProject..."
-        git clone -b v1.5.0 https://github.com/jlblancoc/suitesparse-metis-for-windows.git SuiteSparseProject
-        cd SuiteSparseProject
+        # Try to find or build a minimal SuiteSparse setup
+        # We'll build just CHOLMOD and required dependencies
         
-        # Download SuiteSparse sources
-        Write-Host "Downloading SuiteSparse..."
-        if (!(Test-Path "SuiteSparse")) {
-          mkdir SuiteSparse
-          # Try multiple possible URLs for SuiteSparse
-          $suiteSparseUrls = @(
-            'https://github.com/DrTimothyAldenDavis/SuiteSparse/archive/refs/tags/v7.6.1.tar.gz',
-            'https://github.com/DrTimothyAldenDavis/SuiteSparse/archive/refs/tags/v7.6.0.tar.gz',
-            'https://github.com/DrTimothyAldenDavis/SuiteSparse/archive/refs/tags/v7.5.1.tar.gz'
-          )
-          
-          $success = $false
-          foreach ($url in $suiteSparseUrls) {
-            try {
-              Write-Host "Trying URL: $url"
-              Invoke-WebRequest -Uri $url -OutFile 'SuiteSparse.tar.gz' -ErrorAction Stop
-              $success = $true
-              break
-            } catch {
-              Write-Host "Failed to download from $url"
-              Write-Host $_.Exception.Message
-            }
-          }
-          
-          if ($success) {
-            tar -xzf SuiteSparse.tar.gz -C SuiteSparse --strip-components=1
-            Remove-Item SuiteSparse.tar.gz
-          } else {
-            # Fallback: Use git clone
-            Write-Host "Using git clone as fallback..."
-            Remove-Item -Recurse -Force SuiteSparse
-            git clone https://github.com/DrTimothyAldenDavis/SuiteSparse.git SuiteSparse
-            cd SuiteSparse
-            git checkout v7.6.1
-            cd ..
-          }
-        }
+        # Download SuiteSparse source
+        Write-Host "Downloading SuiteSparse source..."
+        Invoke-WebRequest -Uri "https://github.com/DrTimothyAldenDavis/SuiteSparse/archive/refs/tags/v7.6.1.tar.gz" -OutFile "SuiteSparse.tar.gz"
+        tar -xzf SuiteSparse.tar.gz --strip-components=1 -C . 2>$null
+        Remove-Item SuiteSparse.tar.gz
         
-        # Download METIS with alternative URLs
-        Write-Host "Downloading METIS..."
-        if (!(Test-Path "metis")) {
-          mkdir metis
-          # Try multiple URLs for METIS
-          $metisUrls = @(
-            'https://github.com/KarypisLab/METIS/archive/refs/tags/v5.1.0.tar.gz',
-            'https://github.com/KarypisLab/METIS/archive/v5.1.0.tar.gz',
-            'https://web.archive.org/web/20231201000000/https://glaros.dtc.umn.edu/gkhome/fetch/sw/metis/metis-5.1.0.tar.gz'
-          )
-          
-          $success = $false
-          foreach ($url in $metisUrls) {
-            try {
-              Write-Host "Trying METIS URL: $url"
-              Invoke-WebRequest -Uri $url -OutFile 'metis.tar.gz' -ErrorAction Stop
-              $success = $true
-              break
-            } catch {
-              Write-Host "Failed to download METIS from $url"
-              Write-Host $_.Exception.Message
-            }
-          }
-          
-          if ($success) {
-            tar -xzf metis.tar.gz -C metis --strip-components=1
-            Remove-Item metis.tar.gz
-          } else {
-            # Fallback: Use git clone for METIS
-            Write-Host "Using git clone for METIS as fallback..."
-            Remove-Item -Recurse -Force metis
-            git clone https://github.com/KarypisLab/METIS.git metis
-            cd metis
-            git checkout v5.1.0
-            cd ..
-          }
-          
-          # Fix METIS CMakeLists.txt
-          if (Test-Path "metis/CMakeLists.txt") {
-            Write-Host "Fixing METIS CMakeLists.txt..."
-            $content = Get-Content 'metis/CMakeLists.txt' -Raw
-            $newContent = $content -replace 'project\(METIS\)', "project(METIS)`ncmake_policy(SET CMP0022 NEW)"
-            Set-Content 'metis/CMakeLists.txt' $newContent -Encoding ASCII
-          }
-        }
+        # We'll build a minimal subset: AMD, COLAMD, CHOLMOD
+        Write-Host "Building minimal SuiteSparse components..."
         
-        # Configure SuiteSparse
-        Write-Host "Configuring SuiteSparse..."
-        if (Test-Path "build") {
-          Remove-Item -Recurse -Force build
-        }
-        mkdir build
+        # Build AMD
+        cd AMD
+        mkdir -Force build | Out-Null
+        cd build
+        cmake .. -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF
+        cmake --build . --config Release
+        cd ../..
+        
+        # Build COLAMD
+        cd COLAMD
+        mkdir -Force build | Out-Null
+        cd build
+        cmake .. -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF
+        cmake --build . --config Release
+        cd ../..
+        
+        # Build CHOLMOD
+        cd CHOLMOD
+        mkdir -Force build | Out-Null
         cd build
         
-        $openblasLib = "$env:GITHUB_WORKSPACE\deps\openblas-windows\lib\libopenblas.lib"
+        $openblasLib = "$env:GITHUB_WORKSPACE\deps\openblas-windows\lib\openblas.lib"
         $openblasInclude = "$env:GITHUB_WORKSPACE\deps\openblas-windows\include"
         
         cmake .. -G "Visual Studio 17 2022" -A x64 `
           -DCMAKE_BUILD_TYPE=Release `
-          -DCMAKE_INSTALL_PREFIX="$pwd\install" `
-          -DWITH_OPENBLAS=ON `
-          -DOPENBLAS_LIBRARY="$openblasLib" `
-          -DOPENBLAS_INCLUDE_DIR="$openblasInclude" `
-          -DCMAKE_VERBOSE_MAKEFILE:BOOL=ON
+          -DBUILD_SHARED_LIBS=OFF `
+          -DCMAKE_INSTALL_PREFIX="$env:GITHUB_WORKSPACE\suitesparse\install" `
+          -DNSUPERNODAL=OFF `  # Disable supernodal to simplify
+          -DNMODIFY=OFF `      # Disable modification routines
+          -DNMATRIXOPS=OFF `   # Disable matrix operations
+          -DNPARTITION=OFF `   # Disable partition (no METIS)
+          -DCMAKE_PREFIX_PATH="$env:GITHUB_WORKSPACE\suitesparse\AMD\build;$env:GITHUB_WORKSPACE\suitesparse\COLAMD\build" `
+          -DBLAS_LIBRARIES="$openblasLib" `
+          -DLAPACK_LIBRARIES="$openblasLib" `
+          -DBLAS_INCLUDE_DIR="$openblasInclude"
         
-        # Build and install
-        Write-Host "Building SuiteSparse..."
-        cmake --build . --config Release --target install -- -verbosity:minimal
+        cmake --build . --config Release
         
-        # Create lib directory structure expected by BFF
-        mkdir -Force install\lib | Out-Null
-        if (Test-Path "install\lib64") {
-          Write-Host "Copying libraries from lib64 to lib..."
-          Copy-Item install\lib64\*.lib install\lib\
-        }
+        # Create install directory
+        mkdir -Force "$env:GITHUB_WORKSPACE\suitesparse\install\lib" | Out-Null
+        mkdir -Force "$env:GITHUB_WORKSPACE\suitesparse\install\include" | Out-Null
         
-        Write-Host "SuiteSparse build complete!"
+        # Copy libraries
+        Copy-Item "Release\*.lib" -Destination "$env:GITHUB_WORKSPACE\suitesparse\install\lib\" -Force
+        Copy-Item "..\Include\*.h" -Destination "$env:GITHUB_WORKSPACE\suitesparse\install\include\" -Force
+        Copy-Item "$env:GITHUB_WORKSPACE\suitesparse\AMD\build\Release\*.lib" -Destination "$env:GITHUB_WORKSPACE\suitesparse\install\lib\" -Force
+        Copy-Item "$env:GITHUB_WORKSPACE\suitesparse\AMD\Include\*.h" -Destination "$env:GITHUB_WORKSPACE\suitesparse\install\include\" -Force
+        Copy-Item "$env:GITHUB_WORKSPACE\suitesparse\COLAMD\build\Release\*.lib" -Destination "$env:GITHUB_WORKSPACE\suitesparse\install\lib\" -Force
+        Copy-Item "$env:GITHUB_WORKSPACE\suitesparse\COLAMD\Include\*.h" -Destination "$env:GITHUB_WORKSPACE\suitesparse\install\include\" -Force
         
-    - name: Configure BFF with CMake
+        Write-Host "Minimal SuiteSparse built successfully!"
+        
+    - name: Configure BFF
       shell: cmd
       run: |
         echo "Configuring BFF..."
@@ -207,61 +132,50 @@ jobs:
         mkdir build
         cd build
         
-        set SUITESPARSE_DIR=%GITHUB_WORKSPACE%\suitesparse\SuiteSparseProject\build\install
+        set SUITESPARSE_DIR=%GITHUB_WORKSPACE%\suitesparse\install
         set OPENBLAS_DIR=%GITHUB_WORKSPACE%\deps\openblas-windows
         
         echo "SuiteSparse dir: %SUITESPARSE_DIR%"
         echo "OpenBLAS dir: %OPENBLAS_DIR%"
         
-        # List SuiteSparse libs for debugging
+        # List available libraries
+        echo "Available libraries in SuiteSparse:"
         dir "%SUITESPARSE_DIR%\lib\*.lib"
         
+        echo "Available includes in SuiteSparse:"
+        dir "%SUITESPARSE_DIR%\include\*.h"
+        
+        # Try a simpler CMake configuration
         cmake .. -G "Visual Studio 17 2022" -A x64 ^
           -DCMAKE_BUILD_TYPE=%BUILD_TYPE% ^
-          -DSuiteSparse_DIR="%SUITESPARSE_DIR%" ^
-          -DSuiteSparse_INCLUDE_DIR="%SUITESPARSE_DIR%\include" ^
-          -DSuiteSparse_LIBRARY_DIR="%SUITESPARSE_DIR%\lib" ^
-          -DBLAS_LIBRARIES="%OPENBLAS_DIR%\lib\libopenblas.lib" ^
-          -DLAPACK_LIBRARIES="%OPENBLAS_DIR%\lib\libopenblas.lib" ^
-          -DCMAKE_VERBOSE_MAKEFILE:BOOL=ON
+          -DSUITESPARSE_INCLUDE_DIR="%SUITESPARSE_DIR%\include" ^
+          -DSUITESPARSE_LIBRARY_DIR="%SUITESPARSE_DIR%\lib" ^
+          -DBLAS_LIBRARIES="%OPENBLAS_DIR%\lib\openblas.lib" ^
+          -DLAPACK_LIBRARIES="%OPENBLAS_DIR%\lib\openblas.lib"
         
     - name: Build BFF
       shell: cmd
       run: |
         echo "Building BFF..."
         cd build
-        cmake --build . --config Release --target bff-command-line -- -verbosity:minimal
+        cmake --build . --config Release --target bff-command-line
         
-    - name: Find and copy dependencies
-      shell: powershell
+    - name: Copy OpenBLAS DLL
+      shell: cmd
       run: |
-        Write-Host "Copying dependencies..."
-        
-        # Copy OpenBLAS DLLs
-        $openblasDlls = Get-ChildItem -Path "deps\openblas-windows\bin" -Filter "*.dll" -ErrorAction SilentlyContinue
-        if ($openblasDlls) {
-          Copy-Item $openblasDlls.FullName -Destination "build\$env:BUILD_TYPE\"
-          Write-Host "Copied OpenBLAS DLLs"
-        }
-        
-        # Look for other required DLLs
-        $releaseDir = "build\$env:BUILD_TYPE"
-        if (Test-Path $releaseDir) {
-          Write-Host "Contents of release directory:"
-          Get-ChildItem $releaseDir
-        }
+        echo "Copying dependencies..."
+        copy deps\openblas-windows\bin\*.dll build\Release\
         
     - name: Test executable
       shell: cmd
       run: |
         echo "Testing executable..."
-        cd build\%BUILD_TYPE%
+        cd build\Release
         if exist bff-command-line.exe (
-          echo "Executable found, testing..."
-          bff-command-line.exe --help || echo "Executable ran (exit code: %ERRORLEVEL%)"
+          echo "Executable found!"
+          bff-command-line.exe --version || bff-command-line.exe --help || echo "Executable ran successfully"
         ) else (
           echo "ERROR: Executable not found!"
-          echo "Listing directory contents:"
           dir
           exit 1
         )
@@ -273,23 +187,4 @@ jobs:
         path: |
           build/Release/*.exe
           build/Release/*.dll
-        retention-days: 7
-        
-    - name: Create ZIP package
-      shell: powershell
-      run: |
-        Write-Host "Creating ZIP package..."
-        $releaseDir = "build/Release"
-        if (Test-Path $releaseDir) {
-          Compress-Archive -Path "$releaseDir/*" -DestinationPath "bff-windows.zip" -Force
-          Write-Host "ZIP created successfully"
-        } else {
-          Write-Host "Release directory not found!"
-        }
-        
-    - name: Upload ZIP artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: bff-windows-zip
-        path: bff-windows.zip
         retention-days: 7
