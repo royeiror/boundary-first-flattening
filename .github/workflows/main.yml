@@ -9,7 +9,6 @@ on:
 
 env:
   BUILD_TYPE: Release
-  VS_VERSION: 2022
 
 jobs:
   build:
@@ -30,32 +29,45 @@ jobs:
       with:
         cmake-version: '3.28.x'
         
-    - name: Setup OpenBLAS
+    - name: Clean workspace
       shell: cmd
       run: |
-        mkdir deps
+        if exist deps rd /s /q deps
+        if exist suitesparse rd /s /q suitesparse
+        if exist build rd /s /q build
+        
+    - name: Setup OpenBLAS
+      shell: powershell
+      run: |
+        mkdir -Force deps | Out-Null
         cd deps
-        if not exist openblas-windows (
+        
+        if (!(Test-Path "openblas-windows")) {
           git clone https://github.com/xianyi/OpenBLAS.git openblas-src
           cd openblas-src
           git checkout v0.3.24
-          mkdir build
+          mkdir -Force build | Out-Null
           cd build
-          cmake .. -G "Visual Studio 17 2022" -A x64 ^
-            -DCMAKE_BUILD_TYPE=Release ^
-            -DBUILD_WITHOUT_LAPACK=NO ^
-            -DNOFORTRAN=1 ^
-            -DDYNAMIC_ARCH=OFF ^
-            -DBUILD_SHARED_LIBS=OFF ^
-            -DCMAKE_INSTALL_PREFIX=..\..\openblas-windows
+          cmake .. -G "Visual Studio 17 2022" -A x64 `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DBUILD_WITHOUT_LAPACK=NO `
+            -DNOFORTRAN=1 `
+            -DDYNAMIC_ARCH=OFF `
+            -DBUILD_SHARED_LIBS=OFF `
+            -DCMAKE_INSTALL_PREFIX="$pwd\..\..\openblas-windows"
           cmake --build . --config Release --target install
           cd ..\..
-          rd /s /q openblas-src
-        )
+          Remove-Item -Recurse -Force openblas-src
+        }
         
     - name: Build SuiteSparse
       shell: powershell
       run: |
+        # Clean up if exists
+        if (Test-Path "suitesparse") {
+          Remove-Item -Recurse -Force suitesparse
+        }
+        
         mkdir suitesparse
         cd suitesparse
         
@@ -64,24 +76,34 @@ jobs:
         cd SuiteSparseProject
         git checkout v1.5.0
         
-        # Download SuiteSparse sources
-        mkdir SuiteSparse
-        Invoke-WebRequest -Uri 'https://github.com/DrTimothyAldenDavis/SuiteSparse/archive/refs/tags/v7.6.1.tar.gz' -OutFile 'SuiteSparse.tar.gz'
-        tar -xzf SuiteSparse.tar.gz -C SuiteSparse --strip-components=1
+        # Download SuiteSparse sources (only if directory doesn't exist)
+        if (!(Test-Path "SuiteSparse")) {
+          mkdir SuiteSparse
+          Invoke-WebRequest -Uri 'https://github.com/DrTimothyAldenDavis/SuiteSparse/archive/refs/tags/v7.6.1.tar.gz' -OutFile 'SuiteSparse.tar.gz'
+          tar -xzf SuiteSparse.tar.gz -C SuiteSparse --strip-components=1
+          Remove-Item SuiteSparse.tar.gz
+        }
         
-        # Download METIS
-        mkdir metis
-        Invoke-WebRequest -Uri 'http://glaros.dtc.umn.edu/gkhome/fetch/sw/metis/metis-5.1.0.tar.gz' -OutFile 'metis.tar.gz'
-        tar -xzf metis.tar.gz -C metis --strip-components=1
-        
-        # Fix METIS CMakeLists.txt
-        $content = Get-Content 'metis/CMakeLists.txt' -Raw
-        $newContent = $content -replace 'project\(METIS\)', "project(METIS)`ncmake_policy(SET CMP0022 NEW)"
-        Set-Content 'metis/CMakeLists.txt' $newContent -Encoding ASCII
+        # Download METIS (only if directory doesn't exist)
+        if (!(Test-Path "metis")) {
+          mkdir metis
+          Invoke-WebRequest -Uri 'http://glaros.dtc.umn.edu/gkhome/fetch/sw/metis/metis-5.1.0.tar.gz' -OutFile 'metis.tar.gz'
+          tar -xzf metis.tar.gz -C metis --strip-components=1
+          Remove-Item metis.tar.gz
+          
+          # Fix METIS CMakeLists.txt
+          $content = Get-Content 'metis/CMakeLists.txt' -Raw
+          $newContent = $content -replace 'project\(METIS\)', "project(METIS)`ncmake_policy(SET CMP0022 NEW)"
+          Set-Content 'metis/CMakeLists.txt' $newContent -Encoding ASCII
+        }
         
         # Configure SuiteSparse
+        if (Test-Path "build") {
+          Remove-Item -Recurse -Force build
+        }
         mkdir build
         cd build
+        
         cmake .. -G "Visual Studio 17 2022" -A x64 `
           -DCMAKE_BUILD_TYPE=Release `
           -DCMAKE_INSTALL_PREFIX="$pwd\install" `
@@ -93,12 +115,15 @@ jobs:
         cmake --build . --config Release --target install
         
         # Create lib directory structure expected by BFF
-        mkdir install\lib
-        Copy-Item install\lib64\*.lib install\lib\
+        mkdir -Force install\lib | Out-Null
+        if (Test-Path "install\lib64") {
+          Copy-Item install\lib64\*.lib install\lib\
+        }
         
     - name: Configure BFF with CMake
       shell: cmd
       run: |
+        if exist build rd /s /q build
         mkdir build
         cd build
         
@@ -110,10 +135,6 @@ jobs:
           -DSuiteSparse_CHOLMOD_DIR=%SUITESPARSE_DIR%\lib ^
           -DSuiteSparse_CHOLMOD_INCLUDE_DIR=%SUITESPARSE_DIR%\include\suitesparse ^
           -DSuiteSparse_CHOLMOD_LIBRARY=%SUITESPARSE_DIR%\lib\libcholmod.lib ^
-          -DSuiteSparse_AMD_LIBRARY=%SUITESPARSE_DIR%\lib\libamd.lib ^
-          -DSuiteSparse_CAMD_LIBRARY=%SUITESPARSE_DIR%\lib\libcamd.lib ^
-          -DSuiteSparse_CCOLAMD_LIBRARY=%SUITESPARSE_DIR%\lib\libccolamd.lib ^
-          -DSuiteSparse_COLAMD_LIBRARY=%SUITESPARSE_DIR%\lib\libcolamd.lib ^
           -DSuiteSparse_DIR=%SUITESPARSE_DIR% ^
           -DBLAS_LIBRARIES=%OPENBLAS_DIR%\lib\libopenblas.lib ^
           -DLAPACK_LIBRARIES=%OPENBLAS_DIR%\lib\libopenblas.lib
@@ -127,13 +148,21 @@ jobs:
     - name: Copy dependencies
       shell: cmd
       run: |
-        copy deps\openblas-windows\bin\*.dll build\%BUILD_TYPE%\
+        if exist deps\openblas-windows\bin\*.dll (
+          copy deps\openblas-windows\bin\*.dll build\%BUILD_TYPE%\
+        )
         
     - name: Test executable
       shell: cmd
       run: |
         cd build\%BUILD_TYPE%
-        bff-command-line.exe --help || echo "Executable test completed"
+        if exist bff-command-line.exe (
+          bff-command-line.exe --help || echo "Executable ran (help may not be available)"
+        ) else (
+          echo "Executable not found!"
+          dir *.exe
+          exit 1
+        )
         
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
