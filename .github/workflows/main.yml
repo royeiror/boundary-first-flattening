@@ -37,10 +37,9 @@ jobs:
       shell: powershell
       run: |
         Write-Host "Downloading pre-built OpenBLAS..."
-        mkdir -Force deps | Out-Null
-        cd deps
+        New-Item -ItemType Directory -Force -Path "deps" | Out-Null
+        Set-Location "deps"
         
-        # Download pre-built OpenBLAS for Windows (x64)
         $openblasUrl = "https://github.com/xianyi/OpenBLAS/releases/download/v0.3.26/OpenBLAS-0.3.26-x64.zip"
         $openblasZip = "openblas.zip"
         
@@ -158,6 +157,21 @@ jobs:
         
         echo SuiteSparse built successfully!
         
+    - name: Fix library names
+      shell: cmd
+      run: |
+        echo Fixing library names...
+        cd suitesparse\install\lib
+        
+        rem Create copies without _static suffix
+        if exist amd_static.lib copy amd_static.lib amd.lib
+        if exist cholmod_static.lib copy cholmod_static.lib cholmod.lib
+        if exist colamd_static.lib copy colamd_static.lib colamd.lib
+        if exist suitesparseconfig_static.lib copy suitesparseconfig_static.lib suitesparseconfig.lib
+        
+        echo Libraries available:
+        dir *.lib
+        
     - name: Configure BFF
       shell: cmd
       run: |
@@ -171,14 +185,30 @@ jobs:
         
         echo SuiteSparse dir: %SUITESPARSE_DIR%
         echo Available libraries:
-        if exist "%SUITESPARSE_DIR%\lib\*.lib" dir "%SUITESPARSE_DIR%\lib\*.lib"
+        dir "%SUITESPARSE_DIR%\lib\*.lib"
         
-        rem Try to configure BFF
+        rem Configure with all required variables
         cmake .. -G "Visual Studio 17 2022" -A x64 ^
           -DCMAKE_BUILD_TYPE=%BUILD_TYPE% ^
           -DSuiteSparse_DIR="%SUITESPARSE_DIR%" ^
-          -DSuiteSparse_INCLUDE_DIR="%SUITESPARSE_DIR%\include\suitesparse" ^
-          -DSuiteSparse_LIBRARY_DIR="%SUITESPARSE_DIR%\lib" ^
+          -DSuiteSparse_INCLUDE_DIR_HINTS="%SUITESPARSE_DIR%\include\suitesparse" ^
+          -DSuiteSparse_LIBRARY_DIR_HINTS="%SUITESPARSE_DIR%\lib" ^
+          -DSuiteSparse_CHOLMOD_DIR="%SUITESPARSE_DIR%\lib" ^
+          -DSuiteSparse_CHOLMOD_INCLUDE_DIR="%SUITESPARSE_DIR%\include\suitesparse" ^
+          -DSuiteSparse_CHOLMOD_LIBRARY="%SUITESPARSE_DIR%\lib\cholmod.lib" ^
+          -DSuiteSparse_CHOLMOD_LIBRARY_DEBUG="%SUITESPARSE_DIR%\lib\cholmod.lib" ^
+          -DSuiteSparse_CHOLMOD_LIBRARY_RELEASE="%SUITESPARSE_DIR%\lib\cholmod.lib" ^
+          -DSuiteSparse_AMD_INCLUDE_DIR="%SUITESPARSE_DIR%\include\suitesparse" ^
+          -DSuiteSparse_AMD_LIBRARY_DEBUG="%SUITESPARSE_DIR%\lib\amd.lib" ^
+          -DSuiteSparse_AMD_LIBRARY_RELEASE="%SUITESPARSE_DIR%\lib\amd.lib" ^
+          -DSuiteSparse_COLAMD_INCLUDE_DIR="%SUITESPARSE_DIR%\include\suitesparse" ^
+          -DSuiteSparse_COLAMD_LIBRARY_DEBUG="%SUITESPARSE_DIR%\lib\colamd.lib" ^
+          -DSuiteSparse_COLAMD_LIBRARY_RELEASE="%SUITESPARSE_DIR%\lib\colamd.lib" ^
+          -DSuiteSparse_SUITESPARSECONFIG_INCLUDE_DIR="%SUITESPARSE_DIR%\include\suitesparse" ^
+          -DSuiteSparse_SUITESPARSECONFIG_LIBRARY_DEBUG="%SUITESPARSE_DIR%\lib\suitesparseconfig.lib" ^
+          -DSuiteSparse_SUITESPARSECONFIG_LIBRARY_RELEASE="%SUITESPARSE_DIR%\lib\suitesparseconfig.lib" ^
+          -DSuiteSparse_BLAS_LIBRARY="%OPENBLAS_DIR%\lib\openblas.lib" ^
+          -DSuiteSparse_LAPACK_LIBRARY="%OPENBLAS_DIR%\lib\openblas.lib" ^
           -DBLAS_LIBRARIES="%OPENBLAS_DIR%\lib\openblas.lib" ^
           -DLAPACK_LIBRARIES="%OPENBLAS_DIR%\lib\openblas.lib" ^
           -DCMAKE_VERBOSE_MAKEFILE:BOOL=ON
@@ -191,7 +221,13 @@ jobs:
         cmake --build . --config Release --target bff-command-line
         
         echo Checking for executables...
-        if exist Release\*.exe dir Release\*.exe
+        if exist Release\*.exe (
+          dir Release\*.exe
+        ) else (
+          echo No executables found in Release directory
+          echo Build directory contents:
+          dir /s
+        )
         
     - name: Copy dependencies
       shell: cmd
