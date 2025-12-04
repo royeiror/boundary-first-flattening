@@ -39,10 +39,12 @@ jobs:
     - name: Setup OpenBLAS
       shell: powershell
       run: |
+        Write-Host "Setting up OpenBLAS..."
         mkdir -Force deps | Out-Null
         cd deps
         
         if (!(Test-Path "openblas-windows")) {
+          Write-Host "Downloading and building OpenBLAS..."
           git clone https://github.com/xianyi/OpenBLAS.git openblas-src
           cd openblas-src
           git checkout v0.3.24
@@ -58,11 +60,16 @@ jobs:
           cmake --build . --config Release --target install
           cd ..\..
           Remove-Item -Recurse -Force openblas-src
+          Write-Host "OpenBLAS setup complete!"
+        } else {
+          Write-Host "OpenBLAS already exists, skipping..."
         }
         
     - name: Build SuiteSparse
       shell: powershell
       run: |
+        Write-Host "Building SuiteSparse..."
+        
         # Clean up if exists
         if (Test-Path "suitesparse") {
           Remove-Item -Recurse -Force suitesparse
@@ -71,58 +78,131 @@ jobs:
         mkdir suitesparse
         cd suitesparse
         
-        # Clone SuiteSparseProject
-        git clone https://github.com/jlblancoc/suitesparse-metis-for-windows.git SuiteSparseProject
+        # Clone SuiteSparseProject with specific branch
+        Write-Host "Cloning SuiteSparseProject..."
+        git clone -b v1.5.0 https://github.com/jlblancoc/suitesparse-metis-for-windows.git SuiteSparseProject
         cd SuiteSparseProject
-        git checkout v1.5.0
         
-        # Download SuiteSparse sources (only if directory doesn't exist)
+        # Download SuiteSparse sources
+        Write-Host "Downloading SuiteSparse..."
         if (!(Test-Path "SuiteSparse")) {
           mkdir SuiteSparse
-          Invoke-WebRequest -Uri 'https://github.com/DrTimothyAldenDavis/SuiteSparse/archive/refs/tags/v7.6.1.tar.gz' -OutFile 'SuiteSparse.tar.gz'
-          tar -xzf SuiteSparse.tar.gz -C SuiteSparse --strip-components=1
-          Remove-Item SuiteSparse.tar.gz
+          # Try multiple possible URLs for SuiteSparse
+          $suiteSparseUrls = @(
+            'https://github.com/DrTimothyAldenDavis/SuiteSparse/archive/refs/tags/v7.6.1.tar.gz',
+            'https://github.com/DrTimothyAldenDavis/SuiteSparse/archive/refs/tags/v7.6.0.tar.gz',
+            'https://github.com/DrTimothyAldenDavis/SuiteSparse/archive/refs/tags/v7.5.1.tar.gz'
+          )
+          
+          $success = $false
+          foreach ($url in $suiteSparseUrls) {
+            try {
+              Write-Host "Trying URL: $url"
+              Invoke-WebRequest -Uri $url -OutFile 'SuiteSparse.tar.gz' -ErrorAction Stop
+              $success = $true
+              break
+            } catch {
+              Write-Host "Failed to download from $url"
+              Write-Host $_.Exception.Message
+            }
+          }
+          
+          if ($success) {
+            tar -xzf SuiteSparse.tar.gz -C SuiteSparse --strip-components=1
+            Remove-Item SuiteSparse.tar.gz
+          } else {
+            # Fallback: Use git clone
+            Write-Host "Using git clone as fallback..."
+            Remove-Item -Recurse -Force SuiteSparse
+            git clone https://github.com/DrTimothyAldenDavis/SuiteSparse.git SuiteSparse
+            cd SuiteSparse
+            git checkout v7.6.1
+            cd ..
+          }
         }
         
-        # Download METIS (only if directory doesn't exist)
+        # Download METIS with alternative URLs
+        Write-Host "Downloading METIS..."
         if (!(Test-Path "metis")) {
           mkdir metis
-          Invoke-WebRequest -Uri 'http://glaros.dtc.umn.edu/gkhome/fetch/sw/metis/metis-5.1.0.tar.gz' -OutFile 'metis.tar.gz'
-          tar -xzf metis.tar.gz -C metis --strip-components=1
-          Remove-Item metis.tar.gz
+          # Try multiple URLs for METIS
+          $metisUrls = @(
+            'https://github.com/KarypisLab/METIS/archive/refs/tags/v5.1.0.tar.gz',
+            'https://github.com/KarypisLab/METIS/archive/v5.1.0.tar.gz',
+            'https://web.archive.org/web/20231201000000/https://glaros.dtc.umn.edu/gkhome/fetch/sw/metis/metis-5.1.0.tar.gz'
+          )
+          
+          $success = $false
+          foreach ($url in $metisUrls) {
+            try {
+              Write-Host "Trying METIS URL: $url"
+              Invoke-WebRequest -Uri $url -OutFile 'metis.tar.gz' -ErrorAction Stop
+              $success = $true
+              break
+            } catch {
+              Write-Host "Failed to download METIS from $url"
+              Write-Host $_.Exception.Message
+            }
+          }
+          
+          if ($success) {
+            tar -xzf metis.tar.gz -C metis --strip-components=1
+            Remove-Item metis.tar.gz
+          } else {
+            # Fallback: Use git clone for METIS
+            Write-Host "Using git clone for METIS as fallback..."
+            Remove-Item -Recurse -Force metis
+            git clone https://github.com/KarypisLab/METIS.git metis
+            cd metis
+            git checkout v5.1.0
+            cd ..
+          }
           
           # Fix METIS CMakeLists.txt
-          $content = Get-Content 'metis/CMakeLists.txt' -Raw
-          $newContent = $content -replace 'project\(METIS\)', "project(METIS)`ncmake_policy(SET CMP0022 NEW)"
-          Set-Content 'metis/CMakeLists.txt' $newContent -Encoding ASCII
+          if (Test-Path "metis/CMakeLists.txt") {
+            Write-Host "Fixing METIS CMakeLists.txt..."
+            $content = Get-Content 'metis/CMakeLists.txt' -Raw
+            $newContent = $content -replace 'project\(METIS\)', "project(METIS)`ncmake_policy(SET CMP0022 NEW)"
+            Set-Content 'metis/CMakeLists.txt' $newContent -Encoding ASCII
+          }
         }
         
         # Configure SuiteSparse
+        Write-Host "Configuring SuiteSparse..."
         if (Test-Path "build") {
           Remove-Item -Recurse -Force build
         }
         mkdir build
         cd build
         
+        $openblasLib = "$env:GITHUB_WORKSPACE\deps\openblas-windows\lib\libopenblas.lib"
+        $openblasInclude = "$env:GITHUB_WORKSPACE\deps\openblas-windows\include"
+        
         cmake .. -G "Visual Studio 17 2022" -A x64 `
           -DCMAKE_BUILD_TYPE=Release `
           -DCMAKE_INSTALL_PREFIX="$pwd\install" `
           -DWITH_OPENBLAS=ON `
-          -DOPENBLAS_LIBRARY="$env:GITHUB_WORKSPACE\deps\openblas-windows\lib\libopenblas.lib" `
-          -DOPENBLAS_INCLUDE_DIR="$env:GITHUB_WORKSPACE\deps\openblas-windows\include"
+          -DOPENBLAS_LIBRARY="$openblasLib" `
+          -DOPENBLAS_INCLUDE_DIR="$openblasInclude" `
+          -DCMAKE_VERBOSE_MAKEFILE:BOOL=ON
         
         # Build and install
-        cmake --build . --config Release --target install
+        Write-Host "Building SuiteSparse..."
+        cmake --build . --config Release --target install -- -verbosity:minimal
         
         # Create lib directory structure expected by BFF
         mkdir -Force install\lib | Out-Null
         if (Test-Path "install\lib64") {
+          Write-Host "Copying libraries from lib64 to lib..."
           Copy-Item install\lib64\*.lib install\lib\
         }
+        
+        Write-Host "SuiteSparse build complete!"
         
     - name: Configure BFF with CMake
       shell: cmd
       run: |
+        echo "Configuring BFF..."
         if exist build rd /s /q build
         mkdir build
         cd build
@@ -130,45 +210,86 @@ jobs:
         set SUITESPARSE_DIR=%GITHUB_WORKSPACE%\suitesparse\SuiteSparseProject\build\install
         set OPENBLAS_DIR=%GITHUB_WORKSPACE%\deps\openblas-windows
         
+        echo "SuiteSparse dir: %SUITESPARSE_DIR%"
+        echo "OpenBLAS dir: %OPENBLAS_DIR%"
+        
+        # List SuiteSparse libs for debugging
+        dir "%SUITESPARSE_DIR%\lib\*.lib"
+        
         cmake .. -G "Visual Studio 17 2022" -A x64 ^
           -DCMAKE_BUILD_TYPE=%BUILD_TYPE% ^
-          -DSuiteSparse_CHOLMOD_DIR=%SUITESPARSE_DIR%\lib ^
-          -DSuiteSparse_CHOLMOD_INCLUDE_DIR=%SUITESPARSE_DIR%\include\suitesparse ^
-          -DSuiteSparse_CHOLMOD_LIBRARY=%SUITESPARSE_DIR%\lib\libcholmod.lib ^
-          -DSuiteSparse_DIR=%SUITESPARSE_DIR% ^
-          -DBLAS_LIBRARIES=%OPENBLAS_DIR%\lib\libopenblas.lib ^
-          -DLAPACK_LIBRARIES=%OPENBLAS_DIR%\lib\libopenblas.lib
+          -DSuiteSparse_DIR="%SUITESPARSE_DIR%" ^
+          -DSuiteSparse_INCLUDE_DIR="%SUITESPARSE_DIR%\include" ^
+          -DSuiteSparse_LIBRARY_DIR="%SUITESPARSE_DIR%\lib" ^
+          -DBLAS_LIBRARIES="%OPENBLAS_DIR%\lib\libopenblas.lib" ^
+          -DLAPACK_LIBRARIES="%OPENBLAS_DIR%\lib\libopenblas.lib" ^
+          -DCMAKE_VERBOSE_MAKEFILE:BOOL=ON
         
     - name: Build BFF
       shell: cmd
       run: |
+        echo "Building BFF..."
         cd build
-        cmake --build . --config Release --target bff-command-line
+        cmake --build . --config Release --target bff-command-line -- -verbosity:minimal
         
-    - name: Copy dependencies
-      shell: cmd
+    - name: Find and copy dependencies
+      shell: powershell
       run: |
-        if exist deps\openblas-windows\bin\*.dll (
-          copy deps\openblas-windows\bin\*.dll build\%BUILD_TYPE%\
-        )
+        Write-Host "Copying dependencies..."
+        
+        # Copy OpenBLAS DLLs
+        $openblasDlls = Get-ChildItem -Path "deps\openblas-windows\bin" -Filter "*.dll" -ErrorAction SilentlyContinue
+        if ($openblasDlls) {
+          Copy-Item $openblasDlls.FullName -Destination "build\$env:BUILD_TYPE\"
+          Write-Host "Copied OpenBLAS DLLs"
+        }
+        
+        # Look for other required DLLs
+        $releaseDir = "build\$env:BUILD_TYPE"
+        if (Test-Path $releaseDir) {
+          Write-Host "Contents of release directory:"
+          Get-ChildItem $releaseDir
+        }
         
     - name: Test executable
       shell: cmd
       run: |
+        echo "Testing executable..."
         cd build\%BUILD_TYPE%
         if exist bff-command-line.exe (
-          bff-command-line.exe --help || echo "Executable ran (help may not be available)"
+          echo "Executable found, testing..."
+          bff-command-line.exe --help || echo "Executable ran (exit code: %ERRORLEVEL%)"
         ) else (
-          echo "Executable not found!"
-          dir *.exe
+          echo "ERROR: Executable not found!"
+          echo "Listing directory contents:"
+          dir
           exit 1
         )
         
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: bff-windows
+        name: bff-windows-binaries
         path: |
           build/Release/*.exe
           build/Release/*.dll
+        retention-days: 7
+        
+    - name: Create ZIP package
+      shell: powershell
+      run: |
+        Write-Host "Creating ZIP package..."
+        $releaseDir = "build/Release"
+        if (Test-Path $releaseDir) {
+          Compress-Archive -Path "$releaseDir/*" -DestinationPath "bff-windows.zip" -Force
+          Write-Host "ZIP created successfully"
+        } else {
+          Write-Host "Release directory not found!"
+        }
+        
+    - name: Upload ZIP artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: bff-windows-zip
+        path: bff-windows.zip
         retention-days: 7
