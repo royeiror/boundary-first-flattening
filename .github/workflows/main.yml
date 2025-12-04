@@ -40,7 +40,7 @@ jobs:
         mkdir -Force deps | Out-Null
         cd deps
         
-        # Download pre-built OpenBLAS for Windows (x64)
+        rem Download pre-built OpenBLAS for Windows (x64)
         $openblasUrl = "https://github.com/xianyi/OpenBLAS/releases/download/v0.3.26/OpenBLAS-0.3.26-x64.zip"
         $openblasZip = "openblas.zip"
         
@@ -53,65 +53,81 @@ jobs:
     - name: Build SuiteSparse from source
       shell: cmd
       run: |
-        echo "Building SuiteSparse from source..."
+        echo Building SuiteSparse from source...
+        
+        rem Clean up any existing suitesparse directory
+        if exist suitesparse rd /s /q suitesparse
         mkdir suitesparse
         cd suitesparse
         
-        # Download SuiteSparse source
-        echo "Downloading SuiteSparse..."
+        rem Download SuiteSparse source
+        echo Downloading SuiteSparse...
         curl -L https://github.com/DrTimothyAldenDavis/SuiteSparse/archive/refs/tags/v7.6.1.tar.gz -o SuiteSparse.tar.gz
         tar -xzf SuiteSparse.tar.gz --strip-components=1
         del SuiteSparse.tar.gz
         
-        # First, build SuiteSparse_config
-        echo "Building SuiteSparse_config..."
+        rem First, build SuiteSparse_config with BLAS
+        echo Building SuiteSparse_config...
         cd SuiteSparse_config
-        mkdir build
-        cd build
-        cmake .. -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF
-        cmake --build . --config Release
-        cd ../..
-        
-        # Build AMD
-        echo "Building AMD..."
-        cd AMD
-        mkdir build
-        cd build
-        cmake .. -G "Visual Studio 17 2022" -A x64 ^
-          -DCMAKE_BUILD_TYPE=Release ^
-          -DBUILD_SHARED_LIBS=OFF ^
-          -DSuiteSparse_config_DIR="../SuiteSparse_config/build"
-        cmake --build . --config Release
-        cd ../..
-        
-        # Build COLAMD
-        echo "Building COLAMD..."
-        cd COLAMD
-        mkdir build
-        cd build
-        cmake .. -G "Visual Studio 17 2022" -A x64 ^
-          -DCMAKE_BUILD_TYPE=Release ^
-          -DBUILD_SHARED_LIBS=OFF ^
-          -DSuiteSparse_config_DIR="../SuiteSparse_config/build"
-        cmake --build . --config Release
-        cd ../..
-        
-        # Build CHOLMOD
-        echo "Building CHOLMOD..."
-        cd CHOLMOD
+        if exist build rd /s /q build
         mkdir build
         cd build
         
+        rem Set BLAS/LAPACK paths
         set OPENBLAS_LIB=%GITHUB_WORKSPACE%\deps\openblas-windows\lib\openblas.lib
         set OPENBLAS_INCLUDE=%GITHUB_WORKSPACE%\deps\openblas-windows\include
         
         cmake .. -G "Visual Studio 17 2022" -A x64 ^
           -DCMAKE_BUILD_TYPE=Release ^
           -DBUILD_SHARED_LIBS=OFF ^
-          -DCMAKE_INSTALL_PREFIX=%GITHUB_WORKSPACE%\suitesparse\install ^
-          -DSuiteSparse_config_DIR=../../SuiteSparse_config/build ^
-          -DAMD_DIR=../../AMD/build ^
-          -DCOLAMD_DIR=../../COLAMD/build ^
+          -DBLAS_LIBRARIES=%OPENBLAS_LIB% ^
+          -DLAPACK_LIBRARIES=%OPENBLAS_LIB% ^
+          -DBLAS_INCLUDE_DIR=%OPENBLAS_INCLUDE%
+        
+        cmake --build . --config Release
+        cd ../..
+        
+        rem Build AMD
+        echo Building AMD...
+        cd AMD
+        if exist build rd /s /q build
+        mkdir build
+        cd build
+        
+        cmake .. -G "Visual Studio 17 2022" -A x64 ^
+          -DCMAKE_BUILD_TYPE=Release ^
+          -DBUILD_SHARED_LIBS=OFF ^
+          -DCMAKE_PREFIX_PATH=../../SuiteSparse_config/build
+        
+        cmake --build . --config Release
+        cd ../..
+        
+        rem Build COLAMD
+        echo Building COLAMD...
+        cd COLAMD
+        if exist build rd /s /q build
+        mkdir build
+        cd build
+        
+        cmake .. -G "Visual Studio 17 2022" -A x64 ^
+          -DCMAKE_BUILD_TYPE=Release ^
+          -DBUILD_SHARED_LIBS=OFF ^
+          -DCMAKE_PREFIX_PATH=../../SuiteSparse_config/build
+        
+        cmake --build . --config Release
+        cd ../..
+        
+        rem Build CHOLMOD
+        echo Building CHOLMOD...
+        cd CHOLMOD
+        if exist build rd /s /q build
+        mkdir build
+        cd build
+        
+        cmake .. -G "Visual Studio 17 2022" -A x64 ^
+          -DCMAKE_BUILD_TYPE=Release ^
+          -DBUILD_SHARED_LIBS=OFF ^
+          -DCMAKE_PREFIX_PATH=../../SuiteSparse_config/build;../../AMD/build;../../COLAMD/build ^
           -DBLAS_LIBRARIES=%OPENBLAS_LIB% ^
           -DLAPACK_LIBRARIES=%OPENBLAS_LIB% ^
           -DBLAS_INCLUDE_DIR=%OPENBLAS_INCLUDE% ^
@@ -122,26 +138,30 @@ jobs:
         
         cmake --build . --config Release
         
-        # Create install directory
+        rem Create install directory
+        mkdir %GITHUB_WORKSPACE%\suitesparse\install
         mkdir %GITHUB_WORKSPACE%\suitesparse\install\lib
+        mkdir %GITHUB_WORKSPACE%\suitesparse\install\include
         mkdir %GITHUB_WORKSPACE%\suitesparse\install\include\suitesparse
         
-        # Copy libraries and headers
+        rem Copy libraries
         copy Release\*.lib %GITHUB_WORKSPACE%\suitesparse\install\lib\
-        copy ..\Include\*.h %GITHUB_WORKSPACE%\suitesparse\install\include\suitesparse\
-        copy ..\..\AMD\build\Release\*.lib %GITHUB_WORKSPACE%\suitesparse\install\lib\
-        copy ..\..\AMD\Include\*.h %GITHUB_WORKSPACE%\suitesparse\install\include\suitesparse\
-        copy ..\..\COLAMD\build\Release\*.lib %GITHUB_WORKSPACE%\suitesparse\install\lib\
-        copy ..\..\COLAMD\Include\*.h %GITHUB_WORKSPACE%\suitesparse\install\include\suitesparse\
-        copy ..\..\SuiteSparse_config\build\Release\*.lib %GITHUB_WORKSPACE%\suitesparse\install\lib\
-        copy ..\..\SuiteSparse_config\Include\*.h %GITHUB_WORKSPACE%\suitesparse\install\include\suitesparse\
         
-        echo "SuiteSparse built successfully!"
+        rem Copy headers
+        if exist ..\Include copy ..\Include\*.h %GITHUB_WORKSPACE%\suitesparse\install\include\suitesparse\
+        if exist ..\..\AMD\Include copy ..\..\AMD\Include\*.h %GITHUB_WORKSPACE%\suitesparse\install\include\suitesparse\
+        if exist ..\..\COLAMD\Include copy ..\..\COLAMD\Include\*.h %GITHUB_WORKSPACE%\suitesparse\install\include\suitesparse\
+        if exist ..\..\SuiteSparse_config\Include copy ..\..\SuiteSparse_config\Include\*.h %GITHUB_WORKSPACE%\suitesparse\install\include\suitesparse\
+        if exist ..\..\AMD\build\Release copy ..\..\AMD\build\Release\*.lib %GITHUB_WORKSPACE%\suitesparse\install\lib\
+        if exist ..\..\COLAMD\build\Release copy ..\..\COLAMD\build\Release\*.lib %GITHUB_WORKSPACE%\suitesparse\install\lib\
+        if exist ..\..\SuiteSparse_config\build\Release copy ..\..\SuiteSparse_config\build\Release\*.lib %GITHUB_WORKSPACE%\suitesparse\install\lib\
+        
+        echo SuiteSparse built successfully!
         
     - name: Configure BFF
       shell: cmd
       run: |
-        echo "Configuring BFF..."
+        echo Configuring BFF...
         if exist build rd /s /q build
         mkdir build
         cd build
@@ -149,47 +169,34 @@ jobs:
         set SUITESPARSE_DIR=%GITHUB_WORKSPACE%\suitesparse\install
         set OPENBLAS_DIR=%GITHUB_WORKSPACE%\deps\openblas-windows
         
-        echo "SuiteSparse dir: %SUITESPARSE_DIR%"
-        echo "Available libraries:"
-        dir "%SUITESPARSE_DIR%\lib\*.lib"
+        echo SuiteSparse dir: %SUITESPARSE_DIR%
+        echo Available libraries:
+        if exist "%SUITESPARSE_DIR%\lib\*.lib" dir "%SUITESPARSE_DIR%\lib\*.lib"
         
-        echo "Available headers:"
-        dir "%SUITESPARSE_DIR%\include\suitesparse\*.h"
-        
-        # Configure BFF with all required paths
+        rem Try to configure BFF
         cmake .. -G "Visual Studio 17 2022" -A x64 ^
           -DCMAKE_BUILD_TYPE=%BUILD_TYPE% ^
-          -DSuiteSparse_CHOLMOD_DIR="%SUITESPARSE_DIR%\lib" ^
-          -DSuiteSparse_CHOLMOD_INCLUDE_DIR="%SUITESPARSE_DIR%\include\suitesparse" ^
-          -DSuiteSparse_CHOLMOD_LIBRARY="%SUITESPARSE_DIR%\lib\cholmod.lib" ^
-          -DSuiteSparse_CHOLMOD_LIBRARY_DEBUG="%SUITESPARSE_DIR%\lib\cholmod.lib" ^
-          -DSuiteSparse_CHOLMOD_LIBRARY_RELEASE="%SUITESPARSE_DIR%\lib\cholmod.lib" ^
-          -DSuiteSparse_AMD_LIBRARY="%SUITESPARSE_DIR%\lib\amd.lib" ^
-          -DSuiteSparse_AMD_LIBRARY_DEBUG="%SUITESPARSE_DIR%\lib\amd.lib" ^
-          -DSuiteSparse_AMD_LIBRARY_RELEASE="%SUITESPARSE_DIR%\lib\amd.lib" ^
-          -DSuiteSparse_COLAMD_LIBRARY="%SUITESPARSE_DIR%\lib\colamd.lib" ^
-          -DSuiteSparse_COLAMD_LIBRARY_DEBUG="%SUITESPARSE_DIR%\lib\colamd.lib" ^
-          -DSuiteSparse_COLAMD_LIBRARY_RELEASE="%SUITESPARSE_DIR%\lib\colamd.lib" ^
-          -DSuiteSparse_SUITESPARSE_CONFIG_LIBRARY="%SUITESPARSE_DIR%\lib\suitesparseconfig.lib" ^
-          -DSuiteSparse_SUITESPARSE_CONFIG_LIBRARY_DEBUG="%SUITESPARSE_DIR%\lib\suitesparseconfig.lib" ^
-          -DSuiteSparse_SUITESPARSE_CONFIG_LIBRARY_RELEASE="%SUITESPARSE_DIR%\lib\suitesparseconfig.lib" ^
+          -DSuiteSparse_DIR="%SUITESPARSE_DIR%" ^
+          -DSuiteSparse_INCLUDE_DIR="%SUITESPARSE_DIR%\include\suitesparse" ^
+          -DSuiteSparse_LIBRARY_DIR="%SUITESPARSE_DIR%\lib" ^
           -DBLAS_LIBRARIES="%OPENBLAS_DIR%\lib\openblas.lib" ^
-          -DLAPACK_LIBRARIES="%OPENBLAS_DIR%\lib\openblas.lib"
+          -DLAPACK_LIBRARIES="%OPENBLAS_DIR%\lib\openblas.lib" ^
+          -DCMAKE_VERBOSE_MAKEFILE:BOOL=ON
         
     - name: Build BFF
       shell: cmd
       run: |
-        echo "Building BFF..."
+        echo Building BFF...
         cd build
         cmake --build . --config Release --target bff-command-line
         
-        echo "Checking for executables..."
-        dir Release\*.exe
+        echo Checking for executables...
+        if exist Release\*.exe dir Release\*.exe
         
     - name: Copy dependencies
       shell: cmd
       run: |
-        echo "Copying dependencies..."
+        echo Copying dependencies...
         if exist deps\openblas-windows\bin\*.dll (
           copy deps\openblas-windows\bin\*.dll build\Release\
         )
@@ -197,15 +204,15 @@ jobs:
     - name: Test executable
       shell: cmd
       run: |
-        echo "Testing executable..."
+        echo Testing executable...
         cd build\Release
         if exist bff-command-line.exe (
-          echo "Executable found!"
-          echo "Running test..."
-          bff-command-line.exe --help || echo "Executable ran successfully"
+          echo Executable found!
+          echo Running test...
+          bff-command-line.exe --help || echo Executable ran successfully
         ) else (
-          echo "ERROR: Executable not found!"
-          echo "Available files:"
+          echo ERROR: Executable not found!
+          echo Available files:
           dir
           exit 1
         )
