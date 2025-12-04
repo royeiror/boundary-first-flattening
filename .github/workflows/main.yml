@@ -40,7 +40,7 @@ jobs:
         mkdir -Force deps | Out-Null
         cd deps
         
-        rem Download pre-built OpenBLAS for Windows (x64)
+        # Download pre-built OpenBLAS for Windows (x64)
         $openblasUrl = "https://github.com/xianyi/OpenBLAS/releases/download/v0.3.26/OpenBLAS-0.3.26-x64.zip"
         $openblasZip = "openblas.zip"
         
