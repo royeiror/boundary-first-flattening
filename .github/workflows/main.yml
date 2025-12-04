@@ -11,44 +11,25 @@ jobs:
       with:
         submodules: recursive
         
-    - name: Debug: Check what's in Common.h
+    - name: Check Common.h file
       run: |
-        echo "=== Checking Common.h ==="
+        echo "Checking Common.h..."
         $file = "include/bff/linear-algebra/Common.h"
         if (Test-Path $file) {
             echo "File exists"
-            echo "First 10 lines:"
-            Get-Content $file -First 10
-            
-            echo "`nChecking for cholmod.h include:"
-            Get-Content $file | Select-String "cholmod.h"
-        } else {
-            echo "File not found!"
+            echo "First 5 lines:"
+            Get-Content $file -First 5
         }
         
-    - name: Force replace cholmod.h include
+    - name: Fix Common.h
       run: |
         $file = "include/bff/linear-algebra/Common.h"
         if (Test-Path $file) {
-            # Read entire file as single string
+            # Read and replace
             $content = Get-Content $file -Raw
-            
-            # Force replace - handle different possible formats
-            $newContent = $content -replace '#include\s+"cholmod\.h"', '// #include "cholmod.h" // Removed for CI'
-            
-            # Also check if it worked
-            if ($newContent -eq $content) {
-                echo "⚠️ Replacement didn't change anything"
-                echo "Trying alternative pattern..."
-                $newContent = $content -replace 'cholmod\.h', '// cholmod.h'
-            }
-            
-            $newContent | Set-Content $file -Encoding UTF8
-            echo "Applied replacement"
-            
-            # Verify
-            echo "After replacement (first 5 lines):"
-            Get-Content $file -First 5
+            $newContent = $content -replace '#include "cholmod.h"', '// #include "cholmod.h"'
+            $newContent | Set-Content $file
+            echo "Fixed Common.h"
         }
         
     - name: Create FindSuiteSparse.cmake
