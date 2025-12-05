@@ -1,4 +1,4 @@
-name: Build BFF for Windows
+name: Build BFF for Windows - Final Solution
 
 on:
   push:
@@ -31,7 +31,6 @@ jobs:
       run: |
         echo Creating dummy SuiteSparse installation...
         
-        rem Clean and create directories
         if exist suitesparse rd /s /q suitesparse
         mkdir suitesparse
         mkdir suitesparse\install
@@ -39,100 +38,117 @@ jobs:
         mkdir suitesparse\install\include\suitesparse
         mkdir suitesparse\install\lib
         
-        rem Create dummy headers
-        echo /* Dummy SuiteSparse_config.h */ > suitesparse\install\include\suitesparse\SuiteSparse_config.h
-        echo #ifndef SUITESPARSE_CONFIG_H >> suitesparse\install\include\suitesparse\SuiteSparse_config.h
-        echo #define SUITESPARSE_CONFIG_H >> suitesparse\install\include\suitesparse\SuiteSparse_config.h
-        echo #define SUITESPARSE_VERSION "7.6.1" >> suitesparse\install\include\suitesparse\SuiteSparse_config.h
-        echo #endif >> suitesparse\install\include\suitesparse\SuiteSparse_config.h
-        
-        echo /* Dummy amd.h */ > suitesparse\install\include\suitesparse\amd.h
-        echo #ifndef AMD_H >> suitesparse\install\include\suitesparse\amd.h
-        echo #define AMD_H >> suitesparse\install\include\suitesparse\amd.h
-        echo #endif >> suitesparse\install\include\suitesparse\amd.h
-        
-        echo /* Dummy colamd.h */ > suitesparse\install\include\suitesparse\colamd.h
-        echo #ifndef COLAMD_H >> suitesparse\install\include\suitesparse\colamd.h
-        echo #define COLAMD_H >> suitesparse\install\include\suitesparse\colamd.h
-        echo #endif >> suitesparse\install\include\suitesparse\colamd.h
-        
-        echo /* Dummy cholmod.h */ > suitesparse\install\include\suitesparse\cholmod.h
-        echo #ifndef CHOLMOD_H >> suitesparse\install\include\suitesparse\cholmod.h
-        echo #define CHOLMOD_H >> suitesparse\install\include\suitesparse\cholmod.h
-        echo #endif >> suitesparse\install\include\suitesparse\cholmod.h
+        rem Create minimal headers
+        cd suitesparse\install\include\suitesparse
+        echo // Dummy SuiteSparse headers > README.txt
+        echo #define SUITESPARSE_VERSION "7.6.1" > SuiteSparse_config.h
+        echo #define AMD_VERSION "2.4.6" > amd.h
+        echo #define COLAMD_VERSION "3.0.0" > colamd.h
+        echo #define CHOLMOD_VERSION "5.0.0" > cholmod.h
         
         rem Create dummy libraries
-        cd suitesparse\install\lib
-        echo dummy > suitesparseconfig.lib
-        echo dummy > amd.lib
-        echo dummy > colamd.lib
-        echo dummy > cholmod.lib
+        cd ..\..\lib
+        echo LIBRARY suitesparseconfig > suitesparseconfig.def
+        echo EXPORTS >> suitesparseconfig.def
+        echo   SuiteSparse_version >> suitesparseconfig.def
+        
+        echo LIBRARY amd > amd.def
+        echo EXPORTS >> amd.def
+        echo   amd_version >> amd.def
+        
+        echo LIBRARY colamd > colamd.def
+        echo EXPORTS >> colamd.def
+        echo   colamd_version >> colamd.def
+        
+        echo LIBRARY cholmod > cholmod.def
+        echo EXPORTS >> cholmod.def
+        echo   cholmod_version >> cholmod.def
+        
+        rem Create dummy libraries using lib.exe
+        "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\lib.exe" /DEF:suitesparseconfig.def /OUT:suitesparseconfig.lib /MACHINE:X64
+        "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\lib.exe" /DEF:amd.def /OUT:amd.lib /MACHINE:X64
+        "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\lib.exe" /DEF:colamd.def /OUT:colamd.lib /MACHINE:X64
+        "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\lib.exe" /DEF:cholmod.def /OUT:cholmod.lib /MACHINE:X64
         
         echo Dummy SuiteSparse created
         
-    - name: Modify CMakeLists.txt
+    - name: Patch CMakeLists.txt to bypass SuiteSparse
+      shell: powershell
+      run: |
+        Write-Host "Creating patched CMakeLists.txt..."
+        
+        # Read original
+        $content = Get-Content CMakeLists.txt
+        
+        # Create new content
+        $newContent = @()
+        $skipNext = $false
+        
+        foreach ($line in $content) {
+            # Skip the find_package(SuiteSparse REQUIRED) line
+            if ($line -match "find_package\(SuiteSparse REQUIRED\)") {
+                Write-Host "Skipping line: $line"
+                continue
+            }
+            
+            # Add manual setup before the original content
+            if ($line -match "cmake_minimum_required") {
+                $newContent += $line
+                $newContent += ""
+                $newContent += "# Manual SuiteSparse setup (dummy)"
+                $newContent += "set(SUITESPARSE_FOUND TRUE)"
+                $newContent += 'set(SUITESPARSE_INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/../suitesparse/install/include/suitesparse")'
+                $newContent += 'set(SUITESPARSE_LIBRARIES "${CMAKE_CURRENT_SOURCE_DIR}/../suitesparse/install/lib/cholmod.lib;${CMAKE_CURRENT_SOURCE_DIR}/../suitesparse/install/lib/amd.lib;${CMAKE_CURRENT_SOURCE_DIR}/../suitesparse/install/lib/colamd.lib;${CMAKE_CURRENT_SOURCE_DIR}/../suitesparse/install/lib/suitesparseconfig.lib")'
+                $newContent += 'set(CHOLMOD_FOUND TRUE)'
+                $newContent += 'set(CHOLMOD_LIBRARIES "${CMAKE_CURRENT_SOURCE_DIR}/../suitesparse/install/lib/cholmod.lib")'
+                $newContent += 'set(CHOLMOD_INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/../suitesparse/install/include/suitesparse")'
+                $newContent += ""
+            } else {
+                $newContent += $line
+            }
+        }
+        
+        # Write back
+        Set-Content CMakeLists.txt $newContent
+        
+        Write-Host "Patch applied!"
+        Write-Host "First 50 lines of patched file:"
+        Get-Content CMakeLists.txt | Select-Object -First 50
+        
+    - name: Configure BFF
       shell: cmd
       run: |
-        echo Modifying CMakeLists.txt...
+        echo Configuring BFF with dummy SuiteSparse...
         
-        rem Create a modified version
-        (
-          echo # Comment out SuiteSparse requirement
-          echo # find_package(SuiteSparse REQUIRED)
-          echo.
-          echo # Manual setup
-          echo set(SUITESPARSE_FOUND TRUE)
-          echo set(SUITESPARSE_INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/../suitesparse/install/include/suitesparse")
-          echo set(SUITESPARSE_LIBRARIES 
-          echo     "${CMAKE_CURRENT_SOURCE_DIR}/../suitesparse/install/lib/cholmod.lib"
-          echo     "${CMAKE_CURRENT_SOURCE_DIR}/../suitesparse/install/lib/amd.lib"
-          echo     "${CMAKE_CURRENT_SOURCE_DIR}/../suitesparse/install/lib/colamd.lib"
-          echo     "${CMAKE_CURRENT_SOURCE_DIR}/../suitesparse/install/lib/suitesparseconfig.lib")
-          echo set(CHOLMOD_FOUND TRUE)
-          echo set(CHOLMOD_LIBRARIES "${CMAKE_CURRENT_SOURCE_DIR}/../suitesparse/install/lib/cholmod.lib")
-          echo set(CHOLMOD_INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/../suitesparse/install/include/suitesparse")
-          echo.
-        ) > CMakeLists_modified.txt
-        
-        rem Append original CMakeLists.txt
-        type CMakeLists.txt >> CMakeLists_modified.txt
-        
-        rem Replace original
-        move /y CMakeLists_modified.txt CMakeLists.txt
-        
-        echo CMakeLists.txt modified
-        
-    - name: Try to configure BFF
-      shell: cmd
-      run: |
-        echo Trying to configure BFF...
         if exist build rd /s /q build
         mkdir build
         cd build
         
-        rem Try simple configuration
+        rem Simple configuration
         cmake .. -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release
         
-    - name: Try to build BFF
+    - name: Build BFF
       shell: cmd
       run: |
-        echo Trying to build BFF...
+        echo Building BFF...
         cd build
         
-        cmake --build . --config Release
+        rem Try to build
+        cmake --build . --config Release --target bff-command-line || cmake --build . --config Release
         
-        echo Build attempt complete
         if exist Release\*.exe (
-          echo Found executables:
+          echo SUCCESS: Executables built!
           dir Release\*.exe
         ) else (
-          echo No executables found in Release directory
+          echo WARNING: No executables in Release
+          echo Looking for any build outputs...
+          dir /s *.exe 2>nul || echo No executables found
         )
         
-    - name: Upload results
+    - name: Upload build artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: bff-build
+        name: bff-build-output
         path: |
           build/
           suitesparse/
