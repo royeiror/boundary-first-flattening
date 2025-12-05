@@ -1,38 +1,3 @@
-name: Build BFF for Windows
-
-on:
-  push:
-    branches: [ main, master ]
-  workflow_dispatch:
-
-env:
-  BUILD_TYPE: Release
-
-jobs:
-  build:
-    runs-on: windows-latest
-    
-    steps:
-    - name: Checkout BFF repository
-      uses: actions/checkout@v4
-      with:
-        repository: royeiror/boundary-first-flattening
-        
-    - name: Setup MSVC
-      uses: microsoft/setup-msbuild@v2
-      
-    - name: Install CMake
-      uses: jwlawson/actions-setup-cmake@v1
-      with:
-        cmake-version: '3.28.x'
-        
-    - name: Clean workspace
-      shell: cmd
-      run: |
-        if exist deps rd /s /q deps
-        if exist suitesparse rd /s /q suitesparse
-        if exist build rd /s /q build
-        
     - name: Download and setup OpenBLAS
       shell: powershell
       run: |
@@ -53,8 +18,15 @@ jobs:
             Write-Host "Trying OpenBLAS URL: $url"
             $openblasZip = "openblas.zip"
             Invoke-WebRequest -Uri $url -OutFile $openblasZip
-            Expand-Archive -Path $openblasZip -DestinationPath "openblas-windows"
+            Expand-Archive -Path $openblasZip -DestinationPath "openblas-temp"
             Remove-Item $openblasZip
+            
+            # Move to final location
+            if (Test-Path "openblas-windows") {
+              Remove-Item -Recurse -Force "openblas-windows"
+            }
+            Move-Item "openblas-temp" "openblas-windows"
+            
             $success = $true
             Write-Host "OpenBLAS downloaded successfully from $url"
             break
@@ -82,214 +54,74 @@ jobs:
           Remove-Item -Recurse -Force openblas-src
         }
         
-        # Ensure the library is in the expected location
-        mkdir -Force "openblas-windows\lib" | Out-Null
-        mkdir -Force "openblas-windows\include" | Out-Null
+        # Check what we have
+        Write-Host "OpenBLAS directory structure:"
+        Get-ChildItem -Recurse "openblas-windows" | Select-Object -First 30
         
-        # Find and copy the library
+        # Find the library
         $libFiles = Get-ChildItem -Path "openblas-windows" -Recurse -Filter "*.lib" | Where-Object { $_.Name -like "*openblas*" -or $_.Name -like "*blas*" }
         if ($libFiles) {
           $firstLib = $libFiles | Select-Object -First 1
-          Copy-Item $firstLib.FullName -Destination "openblas-windows\lib\openblas.lib" -Force
-          Write-Host "Copied OpenBLAS library to openblas-windows\lib\openblas.lib"
+          Write-Host "Found library: $($firstLib.FullName)"
+          
+          # Create standard lib directory if it doesn't exist
+          $libDir = "openblas-windows\lib"
+          mkdir -Force $libDir | Out-Null
+          
+          # Copy library to standard location
+          if ($firstLib.Directory.FullName -ne (Join-Path (Get-Location) $libDir)) {
+            Copy-Item $firstLib.FullName -Destination "$libDir\openblas.lib" -Force
+          } else {
+            # If already in the right directory, just rename if needed
+            if ($firstLib.Name -ne "openblas.lib") {
+              Copy-Item $firstLib.FullName -Destination "$libDir\openblas.lib" -Force
+            }
+          }
+        } else {
+          Write-Host "WARNING: No OpenBLAS library found!"
         }
         
-        # Find and copy headers
+        # Find include directory
         $includeDirs = Get-ChildItem -Path "openblas-windows" -Recurse -Directory | Where-Object { $_.Name -eq "include" }
-        foreach ($dir in $includeDirs) {
-          $headerFiles = Get-ChildItem -Path $dir.FullName -Filter "*.h"
-          foreach ($file in $headerFiles) {
-            Copy-Item $file.FullName -Destination "openblas-windows\include\" -Force
+        if ($includeDirs) {
+          $firstInclude = $includeDirs | Select-Object -First 1
+          Write-Host "Found include directory: $($firstInclude.FullName)"
+          
+          # Create standard include directory
+          $stdIncludeDir = "openblas-windows\include"
+          if ($firstInclude.FullName -ne (Join-Path (Get-Location) $stdIncludeDir)) {
+            mkdir -Force $stdIncludeDir | Out-Null
+            # Copy headers
+            $headerFiles = Get-ChildItem -Path $firstInclude.FullName -Filter "*.h"
+            foreach ($file in $headerFiles) {
+              $destPath = Join-Path $stdIncludeDir $file.Name
+              if ($file.FullName -ne $destPath) {
+                Copy-Item $file.FullName -Destination $destPath -Force
+              }
+            }
           }
         }
         
         Write-Host "OpenBLAS setup complete!"
-        Write-Host "OpenBLAS directory structure:"
-        Get-ChildItem -Recurse "openblas-windows" | Select-Object -First 20
+        Write-Host "Final OpenBLAS structure:"
+        Get-ChildItem -Recurse "openblas-windows" -Depth 2
         
-    - name: Patch BFF CMakeLists.txt
-      shell: powershell
-      run: |
-        Write-Host "Patching BFF CMakeLists.txt..."
-        
-        # Backup original
-        Copy-Item CMakeLists.txt CMakeLists.txt.backup -Force
-        
-        # Read the content
-        $content = Get-Content CMakeLists.txt -Raw
-        
-        # Replace the find_package line to only require components we'll build
-        $newContent = $content -replace 'find_package\(SuiteSparse REQUIRED\)', 'find_package(SuiteSparse REQUIRED COMPONENTS AMD COLAMD CHOLMOD suitesparseconfig)'
-        
-        # Write back
-        Set-Content CMakeLists.txt $newContent -Encoding ASCII
-        
-        Write-Host "Patch applied!"
-        
-    - name: Build SuiteSparse from source
+    - name: Verify OpenBLAS
       shell: cmd
       run: |
-        echo Building SuiteSparse from source...
-        
-        rem Clean up any existing suitesparse directory
-        if exist suitesparse rd /s /q suitesparse
-        mkdir suitesparse
-        cd suitesparse
-        
-        rem Download SuiteSparse source
-        echo Downloading SuiteSparse...
-        curl -L https://github.com/DrTimothyAldenDavis/SuiteSparse/archive/refs/tags/v7.6.1.tar.gz -o SuiteSparse.tar.gz
-        tar -xzf SuiteSparse.tar.gz --strip-components=1
-        del SuiteSparse.tar.gz
-        
-        rem Verify OpenBLAS exists
-        set OPENBLAS_LIB=%GITHUB_WORKSPACE%\deps\openblas-windows\lib\openblas.lib
-        if not exist "%OPENBLAS_LIB%" (
-          echo ERROR: OpenBLAS library not found!
-          echo Looking for .lib files:
-          dir /s "%GITHUB_WORKSPACE%\deps\openblas-windows\*.lib"
-          echo Creating dummy openblas.lib...
-          mkdir "%GITHUB_WORKSPACE%\deps\openblas-windows\lib" 2>nul
-          echo dummy > "%OPENBLAS_LIB%"
-        )
-        
-        set OPENBLAS_INCLUDE=%GITHUB_WORKSPACE%\deps\openblas-windows\include
-        
-        rem Build SuiteSparse_config
-        echo Building SuiteSparse_config...
-        cd SuiteSparse_config
-        mkdir build
-        cd build
-        
-        cmake .. -G "Visual Studio 17 2022" -A x64 ^
-          -DCMAKE_BUILD_TYPE=Release ^
-          -DBUILD_SHARED_LIBS=OFF
-        
-        cmake --build . --config Release --target suitesparseconfig_static
-        cd ../..
-        
-        rem Build AMD
-        echo Building AMD...
-        cd AMD
-        mkdir build
-        cd build
-        
-        cmake .. -G "Visual Studio 17 2022" -A x64 ^
-          -DCMAKE_BUILD_TYPE=Release ^
-          -DBUILD_SHARED_LIBS=OFF
-        
-        cmake --build . --config Release --target amd_static
-        cd ../..
-        
-        rem Build COLAMD
-        echo Building COLAMD...
-        cd COLAMD
-        mkdir build
-        cd build
-        
-        cmake .. -G "Visual Studio 17 2022" -A x64 ^
-          -DCMAKE_BUILD_TYPE=Release ^
-          -DBUILD_SHARED_LIBS=OFF
-        
-        cmake --build . --config Release --target colamd_static
-        cd ../..
-        
-        rem Build CHOLMOD (skip demos)
-        echo Building CHOLMOD...
-        cd CHOLMOD
-        mkdir build
-        cd build
-        
-        cmake .. -G "Visual Studio 17 2022" -A x64 ^
-          -DCMAKE_BUILD_TYPE=Release ^
-          -DBUILD_SHARED_LIBS=OFF ^
-          -DNSUPERNODAL=OFF ^
-          -DNMODIFY=OFF ^
-          -DNMATRIXOPS=OFF ^
-          -DNPARTITION=OFF
-        
-        rem Build only the library, not demos
-        cmake --build . --config Release --target cholmod_static
-        
-    - name: Install SuiteSparse
-      shell: cmd
-      run: |
-        echo Installing SuiteSparse...
-        
-        rem Create install directory
-        mkdir %GITHUB_WORKSPACE%\suitesparse\install
-        mkdir %GITHUB_WORKSPACE%\suitesparse\install\lib
-        mkdir %GITHUB_WORKSPACE%\suitesparse\install\include
-        mkdir %GITHUB_WORKSPACE%\suitesparse\install\include\suitesparse
-        
-        rem Copy libraries
-        echo Copying libraries...
-        copy suitesparse\SuiteSparse_config\build\Release\suitesparseconfig_static.lib %GITHUB_WORKSPACE%\suitesparse\install\lib\
-        copy suitesparse\AMD\build\Release\amd_static.lib %GITHUB_WORKSPACE%\suitesparse\install\lib\
-        copy suitesparse\COLAMD\build\Release\colamd_static.lib %GITHUB_WORKSPACE%\suitesparse\install\lib\
-        copy suitesparse\CHOLMOD\build\Release\cholmod_static.lib %GITHUB_WORKSPACE%\suitesparse\install\lib\
-        
-        rem Copy headers
-        echo Copying headers...
-        copy suitesparse\SuiteSparse_config\Include\*.h %GITHUB_WORKSPACE%\suitesparse\install\include\suitesparse\
-        copy suitesparse\AMD\Include\*.h %GITHUB_WORKSPACE%\suitesparse\install\include\suitesparse\
-        copy suitesparse\COLAMD\Include\*.h %GITHUB_WORKSPACE%\suitesparse\install\include\suitesparse\
-        copy suitesparse\CHOLMOD\Include\*.h %GITHUB_WORKSPACE%\suitesparse\install\include\suitesparse\
-        
-        rem Create library files without _static suffix
-        cd %GITHUB_WORKSPACE%\suitesparse\install\lib
-        copy suitesparseconfig_static.lib suitesparseconfig.lib
-        copy amd_static.lib amd.lib
-        copy colamd_static.lib colamd.lib
-        copy cholmod_static.lib cholmod.lib
-        
-        echo Installation complete!
-        echo Libraries:
-        dir *.lib
-        
-    - name: Configure BFF
-      shell: cmd
-      run: |
-        echo Configuring BFF...
-        if exist build rd /s /q build
-        mkdir build
-        cd build
-        
-        set SUITESPARSE_DIR=%GITHUB_WORKSPACE%\suitesparse\install
-        set OPENBLAS_DIR=%GITHUB_WORKSPACE%\deps\openblas-windows
-        
-        echo Checking directories...
-        dir "%SUITESPARSE_DIR%\lib\*.lib"
-        dir "%SUITESPARSE_DIR%\include\suitesparse\*.h"
-        
-        rem Configure BFF
-        cmake .. -G "Visual Studio 17 2022" -A x64 ^
-          -DCMAKE_BUILD_TYPE=%BUILD_TYPE% ^
-          -DSuiteSparse_DIR="%SUITESPARSE_DIR%" ^
-          -DSuiteSparse_INCLUDE_DIR="%SUITESPARSE_DIR%\include\suitesparse" ^
-          -DSuiteSparse_LIBRARY_DIR="%SUITESPARSE_DIR%\lib" ^
-          -DBLAS_LIBRARIES="%OPENBLAS_DIR%\lib\openblas.lib" ^
-          -DLAPACK_LIBRARIES="%OPENBLAS_DIR%\lib\openblas.lib"
-        
-    - name: Build BFF
-      shell: cmd
-      run: |
-        echo Building BFF...
-        cd build
-        cmake --build . --config Release --target bff-command-line
-        
-        echo Checking for executables...
-        if exist Release\*.exe (
-          echo SUCCESS: Executable built!
-          dir Release\*.exe
+        echo Verifying OpenBLAS installation...
+        if exist deps\openblas-windows\lib\openblas.lib (
+          echo OpenBLAS library found!
+          dir deps\openblas-windows\lib\openblas.lib
         ) else (
-          echo ERROR: No executables found
-          exit 1
+          echo ERROR: OpenBLAS library not found!
+          echo Looking for any .lib files...
+          dir /s deps\openblas-windows\*.lib
         )
         
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: bff-windows-binaries
-        path: build/Release/*.exe
-        retention-days: 7
+        if exist deps\openblas-windows\include\*.h (
+          echo OpenBLAS headers found!
+          dir deps\openblas-windows\include\*.h
+        ) else (
+          echo WARNING: No OpenBLAS headers found
+        )
