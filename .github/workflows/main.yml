@@ -1,45 +1,11 @@
-name: Build BFF for Windows
-
-on:
-  push:
-    branches: [ main, master ]
-  workflow_dispatch:
-
-env:
-  BUILD_TYPE: Release
-
-jobs:
-  build:
-    runs-on: windows-latest
-    
-    steps:
-    - name: Checkout BFF repository
-      uses: actions/checkout@v4
-      with:
-        repository: royeiror/boundary-first-flattening
-        
-    - name: Setup MSVC
-      uses: microsoft/setup-msbuild@v2
-      
-    - name: Install CMake
-      uses: jwlawson/actions-setup-cmake@v1
-      with:
-        cmake-version: '3.28.x'
-        
-    - name: Clean workspace
-      shell: cmd
-      run: |
-        if exist deps rd /s /q deps
-        if exist suitesparse rd /s /q suitesparse
-        if exist build rd /s /q build
-        
     - name: Download pre-built OpenBLAS
       shell: powershell
       run: |
         Write-Host "Downloading pre-built OpenBLAS..."
-        New-Item -ItemType Directory -Force -Path "deps" | Out-Null
-        Set-Location "deps"
+        mkdir -Force deps | Out-Null
+        cd deps
         
+        # Download pre-built OpenBLAS for Windows (x64)
         $openblasUrl = "https://github.com/xianyi/OpenBLAS/releases/download/v0.3.26/OpenBLAS-0.3.26-x64.zip"
         $openblasZip = "openblas.zip"
         
@@ -47,304 +13,32 @@ jobs:
         Expand-Archive -Path $openblasZip -DestinationPath "openblas-windows"
         Remove-Item $openblasZip
         
-        Write-Host "OpenBLAS downloaded and extracted!"
+        Write-Host "OpenBLAS directory structure:"
+        Get-ChildItem -Recurse "openblas-windows" | Select-Object -First 20
         
-    - name: Patch BFF CMakeLists.txt
-      shell: powershell
-      run: |
-        Write-Host "Patching BFF CMakeLists.txt..."
+        # Find the actual openblas.lib file
+        $openblasLib = Get-ChildItem -Path "openblas-windows" -Recurse -Filter "openblas.lib" | Select-Object -First 1
+        if ($openblasLib) {
+          Write-Host "Found OpenBLAS library at: $($openblasLib.FullName)"
+          # Create a simpler path structure
+          mkdir -Force "openblas-windows\lib" | Out-Null
+          mkdir -Force "openblas-windows\include" | Out-Null
+          Copy-Item $openblasLib.FullName -Destination "openblas-windows\lib\openblas.lib"
+          
+          # Find and copy include files
+          $includeFiles = Get-ChildItem -Path "openblas-windows" -Recurse -Filter "*.h" | Where-Object { $_.Directory.Name -eq "include" }
+          foreach ($file in $includeFiles) {
+            Copy-Item $file.FullName -Destination "openblas-windows\include\" -Force
+          }
+        } else {
+          Write-Host "WARNING: openblas.lib not found!"
+          Write-Host "Trying to find any .lib file..."
+          $anyLib = Get-ChildItem -Path "openblas-windows" -Recurse -Filter "*.lib" | Select-Object -First 1
+          if ($anyLib) {
+            Write-Host "Found library: $($anyLib.FullName)"
+            mkdir -Force "openblas-windows\lib" | Out-Null
+            Copy-Item $anyLib.FullName -Destination "openblas-windows\lib\openblas.lib"
+          }
+        }
         
-        # Backup original
-        Copy-Item CMakeLists.txt CMakeLists.txt.backup -Force
-        
-        # Read the content
-        $content = Get-Content CMakeLists.txt -Raw
-        
-        # Replace the find_package line to only require components we'll build
-        $newContent = $content -replace 'find_package\(SuiteSparse REQUIRED\)', 'find_package(SuiteSparse REQUIRED COMPONENTS AMD COLAMD CHOLMOD suitesparseconfig)'
-        
-        # Write back
-        Set-Content CMakeLists.txt $newContent -Encoding ASCII
-        
-        Write-Host "Patch applied!"
-        
-    - name: Build SuiteSparse from source
-      shell: cmd
-      run: |
-        echo Building SuiteSparse from source...
-        
-        rem Clean up any existing suitesparse directory
-        if exist suitesparse rd /s /q suitesparse
-        mkdir suitesparse
-        cd suitesparse
-        
-        rem Download SuiteSparse source
-        echo Downloading SuiteSparse...
-        curl -L https://github.com/DrTimothyAldenDavis/SuiteSparse/archive/refs/tags/v7.6.1.tar.gz -o SuiteSparse.tar.gz
-        tar -xzf SuiteSparse.tar.gz --strip-components=1
-        del SuiteSparse.tar.gz
-        
-        rem Build SuiteSparse_config
-        echo Building SuiteSparse_config...
-        cd SuiteSparse_config
-        if exist build rd /s /q build
-        mkdir build
-        cd build
-        
-        set OPENBLAS_LIB=%GITHUB_WORKSPACE%\deps\openblas-windows\lib\openblas.lib
-        set OPENBLAS_INCLUDE=%GITHUB_WORKSPACE%\deps\openblas-windows\include
-        
-        cmake .. -G "Visual Studio 17 2022" -A x64 ^
-          -DCMAKE_BUILD_TYPE=Release ^
-          -DBUILD_SHARED_LIBS=OFF ^
-          -DBLAS_LIBRARIES=%OPENBLAS_LIB% ^
-          -DLAPACK_LIBRARIES=%OPENBLAS_LIB% ^
-          -DBLAS_INCLUDE_DIR=%OPENBLAS_INCLUDE%
-        
-        cmake --build . --config Release
-        cd ../..
-        
-        rem Build AMD
-        echo Building AMD...
-        cd AMD
-        if exist build rd /s /q build
-        mkdir build
-        cd build
-        
-        cmake .. -G "Visual Studio 17 2022" -A x64 ^
-          -DCMAKE_BUILD_TYPE=Release ^
-          -DBUILD_SHARED_LIBS=OFF ^
-          -DCMAKE_PREFIX_PATH=../../SuiteSparse_config/build
-        
-        cmake --build . --config Release
-        cd ../..
-        
-        rem Build COLAMD
-        echo Building COLAMD...
-        cd COLAMD
-        if exist build rd /s /q build
-        mkdir build
-        cd build
-        
-        cmake .. -G "Visual Studio 17 2022" -A x64 ^
-          -DCMAKE_BUILD_TYPE=Release ^
-          -DBUILD_SHARED_LIBS=OFF ^
-          -DCMAKE_PREFIX_PATH=../../SuiteSparse_config/build
-        
-        cmake --build . --config Release
-        cd ../..
-        
-        rem Build CHOLMOD
-        echo Building CHOLMOD...
-        cd CHOLMOD
-        if exist build rd /s /q build
-        mkdir build
-        cd build
-        
-        cmake .. -G "Visual Studio 17 2022" -A x64 ^
-          -DCMAKE_BUILD_TYPE=Release ^
-          -DBUILD_SHARED_LIBS=OFF ^
-          -DCMAKE_PREFIX_PATH=../../SuiteSparse_config/build;../../AMD/build;../../COLAMD/build ^
-          -DBLAS_LIBRARIES=%OPENBLAS_LIB% ^
-          -DLAPACK_LIBRARIES=%OPENBLAS_LIB% ^
-          -DBLAS_INCLUDE_DIR=%OPENBLAS_INCLUDE% ^
-          -DNSUPERNODAL=OFF ^
-          -DNMODIFY=OFF ^
-          -DNMATRIXOPS=OFF ^
-          -DNPARTITION=OFF
-        
-        cmake --build . --config Release
-        
-        rem Debug: Check what was built
-        echo Checking what was built...
-        echo SuiteSparse_config build:
-        if exist SuiteSparse_config\build\Release dir SuiteSparse_config\build\Release\*.lib
-        echo AMD build:
-        if exist AMD\build\Release dir AMD\build\Release\*.lib
-        echo COLAMD build:
-        if exist COLAMD\build\Release dir COLAMD\build\Release\*.lib
-        echo CHOLMOD build:
-        if exist CHOLMOD\build\Release dir CHOLMOD\build\Release\*.lib
-        
-    - name: Install SuiteSparse libraries
-      shell: cmd
-      run: |
-        echo Installing SuiteSparse libraries...
-        
-        rem Create install directory
-        mkdir %GITHUB_WORKSPACE%\suitesparse\install
-        mkdir %GITHUB_WORKSPACE%\suitesparse\install\lib
-        mkdir %GITHUB_WORKSPACE%\suitesparse\install\include
-        mkdir %GITHUB_WORKSPACE%\suitesparse\install\include\suitesparse
-        
-        rem Copy ALL libraries from build directories
-        echo Copying libraries...
-        if exist suitesparse\SuiteSparse_config\build\Release\*.lib (
-          copy suitesparse\SuiteSparse_config\build\Release\*.lib %GITHUB_WORKSPACE%\suitesparse\install\lib\
-        )
-        if exist suitesparse\AMD\build\Release\*.lib (
-          copy suitesparse\AMD\build\Release\*.lib %GITHUB_WORKSPACE%\suitesparse\install\lib\
-        )
-        if exist suitesparse\COLAMD\build\Release\*.lib (
-          copy suitesparse\COLAMD\build\Release\*.lib %GITHUB_WORKSPACE%\suitesparse\install\lib\
-        )
-        if exist suitesparse\CHOLMOD\build\Release\*.lib (
-          copy suitesparse\CHOLMOD\build\Release\*.lib %GITHUB_WORKSPACE%\suitesparse\install\lib\
-        )
-        
-        rem Copy ALL headers from source directories
-        echo Copying headers...
-        if exist suitesparse\SuiteSparse_config\Include\*.h (
-          copy suitesparse\SuiteSparse_config\Include\*.h %GITHUB_WORKSPACE%\suitesparse\install\include\suitesparse\
-        )
-        if exist suitesparse\AMD\Include\*.h (
-          copy suitesparse\AMD\Include\*.h %GITHUB_WORKSPACE%\suitesparse\install\include\suitesparse\
-        )
-        if exist suitesparse\COLAMD\Include\*.h (
-          copy suitesparse\COLAMD\Include\*.h %GITHUB_WORKSPACE%\suitesparse\install\include\suitesparse\
-        )
-        if exist suitesparse\CHOLMOD\Include\*.h (
-          copy suitesparse\CHOLMOD\Include\*.h %GITHUB_WORKSPACE%\suitesparse\install\include\suitesparse\
-        )
-        
-        echo Checking installed files...
-        echo Libraries in install dir:
-        if exist %GITHUB_WORKSPACE%\suitesparse\install\lib\*.lib (
-          dir %GITHUB_WORKSPACE%\suitesparse\install\lib\*.lib
-        ) else (
-          echo WARNING: No libraries found in install directory!
-        )
-        
-        echo Headers in install dir:
-        if exist %GITHUB_WORKSPACE%\suitesparse\install\include\suitesparse\*.h (
-          dir %GITHUB_WORKSPACE%\suitesparse\install\include\suitesparse\*.h
-        ) else (
-          echo WARNING: No headers found in install directory!
-        )
-        
-    - name: Fix library names
-      shell: cmd
-      run: |
-        echo Fixing library names...
-        cd suitesparse\install\lib
-        
-        rem Check what files we have
-        echo Current library files:
-        dir *.lib || echo No .lib files found
-        
-        rem Create copies without _static suffix if they exist
-        if exist amd_static.lib (
-          copy amd_static.lib amd.lib
-          echo Created amd.lib
-        )
-        if exist cholmod_static.lib (
-          copy cholmod_static.lib cholmod.lib
-          echo Created cholmod.lib
-        )
-        if exist colamd_static.lib (
-          copy colamd_static.lib colamd.lib
-          echo Created colamd.lib
-        )
-        if exist suitesparseconfig_static.lib (
-          copy suitesparseconfig_static.lib suitesparseconfig.lib
-          echo Created suitesparseconfig.lib
-        )
-        
-        echo Final libraries:
-        dir *.lib || echo Still no .lib files
-        
-    - name: Configure BFF
-      shell: cmd
-      run: |
-        echo Configuring BFF...
-        if exist build rd /s /q build
-        mkdir build
-        cd build
-        
-        set SUITESPARSE_DIR=%GITHUB_WORKSPACE%\suitesparse\install
-        set OPENBLAS_DIR=%GITHUB_WORKSPACE%\deps\openblas-windows
-        
-        echo Checking SuiteSparse installation...
-        if not exist "%SUITESPARSE_DIR%\lib\*.lib" (
-          echo ERROR: No libraries found in %SUITESPARSE_DIR%\lib
-          echo Listing directory:
-          dir "%SUITESPARSE_DIR%\lib" || echo Directory doesn't exist
-          exit 1
-        )
-        
-        if not exist "%SUITESPARSE_DIR%\include\suitesparse\*.h" (
-          echo ERROR: No headers found in %SUITESPARSE_DIR%\include\suitesparse
-          echo Listing directory:
-          dir "%SUITESPARSE_DIR%\include\suitesparse" || echo Directory doesn't exist
-          exit 1
-        )
-        
-        echo SuiteSparse dir: %SUITESPARSE_DIR%
-        echo Available libraries:
-        dir "%SUITESPARSE_DIR%\lib\*.lib"
-        
-        echo Available headers:
-        dir "%SUITESPARSE_DIR%\include\suitesparse\*.h"
-        
-        rem Configure BFF with debug output
-        cmake .. -G "Visual Studio 17 2022" -A x64 ^
-          -DCMAKE_BUILD_TYPE=%BUILD_TYPE% ^
-          -DCMAKE_PREFIX_PATH="%SUITESPARSE_DIR%" ^
-          -DSuiteSparse_DIR="%SUITESPARSE_DIR%" ^
-          -DSuiteSparse_INCLUDE_DIR="%SUITESPARSE_DIR%\include\suitesparse" ^
-          -DSuiteSparse_LIBRARY_DIR="%SUITESPARSE_DIR%\lib" ^
-          -DBLAS_LIBRARIES="%OPENBLAS_DIR%\lib\openblas.lib" ^
-          -DLAPACK_LIBRARIES="%OPENBLAS_DIR%\lib\openblas.lib" ^
-          -DCMAKE_VERBOSE_MAKEFILE:BOOL=ON ^
-          --debug-find
-        
-    - name: Build BFF
-      shell: cmd
-      run: |
-        echo Building BFF...
-        cd build
-        cmake --build . --config Release --target bff-command-line
-        
-        echo Checking for executables...
-        if exist Release\*.exe (
-          echo Executables found:
-          dir Release\*.exe
-        ) else (
-          echo ERROR: No executables found!
-          echo Build directory contents:
-          dir /s
-          exit 1
-        )
-        
-    - name: Copy dependencies
-      shell: cmd
-      run: |
-        echo Copying dependencies...
-        if exist deps\openblas-windows\bin\*.dll (
-          copy deps\openblas-windows\bin\*.dll build\Release\
-        )
-        
-    - name: Test executable
-      shell: cmd
-      run: |
-        echo Testing executable...
-        cd build\Release
-        if exist bff-command-line.exe (
-          echo Executable found!
-          echo Running test...
-          bff-command-line.exe --help || echo Executable ran successfully
-        ) else (
-          echo ERROR: Executable not found!
-          echo Available files:
-          dir
-          exit 1
-        )
-        
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: bff-windows-binaries
-        path: |
-          build/Release/*.exe
-          build/Release/*.dll
-        retention-days: 7
+        Write-Host "OpenBLAS setup complete!"
