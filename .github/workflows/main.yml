@@ -1,106 +1,186 @@
-name: Build BFF Final
+name: Build BFF for Windows
 
-on: workflow_dispatch
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  release:
+    types: [created]
+  workflow_dispatch:
+
+env:
+  VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+  VCPKG_DEFAULT_TRIPLET: x64-windows
 
 jobs:
   build:
     runs-on: windows-latest
     
     steps:
-    - name: Checkout with submodules
+    - name: Checkout repository
       uses: actions/checkout@v4
       with:
-        repository: royeiror/boundary-first-flattening
         submodules: recursive
-        
-    - name: Create dummy SuiteSparse
-      shell: cmd
-      run: |
-        echo Creating dummy SuiteSparse...
-        
-        if exist suitesparse rd /s /q suitesparse
-        mkdir suitesparse
-        mkdir suitesparse\install
-        mkdir suitesparse\install\include
-        mkdir suitesparse\install\include\suitesparse
-        mkdir suitesparse\install\lib
-        
-        cd suitesparse\install\include\suitesparse
-        echo #define SUITESPARSE_VERSION "7.6.1" > SuiteSparse_config.h
-        echo #define AMD_VERSION "2.4.6" > amd.h
-        echo #define COLAMD_VERSION "3.0.0" > colamd.h
-        echo #define CHOLMOD_VERSION "5.0.0" > cholmod.h
-        
-        cd ..\..\lib
-        echo. > suitesparseconfig.lib
-        echo. > amd.lib
-        echo. > colamd.lib
-        echo. > cholmod.lib
-        
-    - name: Patch CMakeLists.txt simply
+        fetch-depth: 0
+
+    - name: Setup MSBuild
+      uses: microsoft/setup-msbuild@v2
+
+    - name: Install Windows SDK
+      uses: seanmiddleditch/gha-setup-windows-sdk@v5
+
+    - name: Install dependencies via vcpkg
       shell: powershell
       run: |
-        # Simple patch: just comment out the find_package line
-        (Get-Content CMakeLists.txt -Raw) -replace 'find_package\(SuiteSparse REQUIRED\)', '# find_package(SuiteSparse REQUIRED) # Disabled for build' | Set-Content CMakeLists.txt
+        # Install vcpkg
+        git clone https://github.com/Microsoft/vcpkg.git $env:VCPKG_ROOT
+        & "$env:VCPKG_ROOT\bootstrap-vcpkg.bat"
         
-    - name: Configure
-      shell: cmd
+        # Install required dependencies
+        & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET `
+          eigen3 `
+          libigl `
+          suitesparse `
+          metis `
+          glfw3 `
+          glew `
+          libpng `
+          zlib
+        
+        # Integrate vcpkg with MSBuild
+        & "$env:VCPKG_ROOT\vcpkg.exe" integrate install
+
+    - name: Install SuiteSparse-METIS for Windows (legacy support)
+      shell: powershell
       run: |
-        echo Configuring...
+        # Create directories for SuiteSparse
+        New-Item -ItemType Directory -Force -Path "C:\SuiteSparse"
+        New-Item -ItemType Directory -Force -Path "C:\SuiteSparse\include"
+        New-Item -ItemType Directory -Force -Path "C:\SuiteSparse\lib"
         
-        if exist build rd /s /q build
-        mkdir build
-        cd build
+        # Download and extract precompiled SuiteSparse-METIS
+        $url = "https://github.com/jlblancoc/suitesparse-metis-for-windows/releases/download/v1.4.0/SuiteSparse-4.5.1-METIS-5.1.0.zip"
+        $output = "C:\SuiteSparse\suitesparse.zip"
         
-        rem Configure with verbose output
-        cmake .. -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release -Wdev --trace-expand 2>&1 | tail -100
+        Invoke-WebRequest -Uri $url -OutFile $output
+        Expand-Archive -Path $output -DestinationPath "C:\SuiteSparse\" -Force
         
-    - name: List ALL targets
-      shell: cmd
+        # Copy headers and libraries to appropriate locations
+        Copy-Item -Path "C:\SuiteSparse\include\*" -Destination "C:\SuiteSparse\include\" -Recurse -Force
+        Copy-Item -Path "C:\SuiteSparse\lib\*" -Destination "C:\SuiteSparse\lib\" -Recurse -Force
+        
+        # Add to system PATH for CMake to find
+        echo "C:\SuiteSparse\lib" | Out-File -FilePath $env:GITHUB_PATH -Append
+        echo "C:\SuiteSparse\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+        
+        # Set environment variables for MSBuild
+        echo "SUITESPARSE_INCLUDE_DIR=C:\SuiteSparse\include" >> $env:GITHUB_ENV
+        echo "SUITESPARSE_LIB_DIR=C:\SuiteSparse\lib" >> $env:GITHUB_ENV
+
+    - name: Install additional GUI dependencies
+      shell: powershell
       run: |
-        echo Listing ALL CMake targets...
-        cd build
-        cmake --build . --config Release --target help 2>&1 || echo "Could not list targets"
+        # Install OpenGL and GUI dependencies
+        & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET `
+          freeglut `
+          glm `
+          imgui[core,opengl3-binding,glfw-binding]
         
-    - name: Build everything
-      shell: cmd
+        # Install build tools
+        choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y
+        choco install ninja -y
+
+    - name: Configure CMake
+      shell: powershell
       run: |
-        echo Building ALL targets...
-        cd build
+        # Create build directory
+        New-Item -ItemType Directory -Force -Path "build"
         
-        rem Build everything with verbose output
-        cmake --build . --config Release -- /verbosity:detailed 2>&1 | tail -200
-        
-        echo.
-        echo "Build completed. Checking for outputs..."
-        
-    - name: Find and upload ANY executables
-      shell: cmd
+        # Configure with CMake
+        cmake -B build `
+          -DCMAKE_BUILD_TYPE=Release `
+          -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
+          -DVCPKG_TARGET_TRIPLET=$env:VCPKG_DEFAULT_TRIPLET `
+          -DCMAKE_PREFIX_PATH="C:\SuiteSparse" `
+          -DBUILD_GUI=ON `
+          -G "Visual Studio 17 2022" `
+          -A x64
+
+    - name: Build BFF
+      shell: powershell
       run: |
-        echo Searching for executables...
+        # Build the project
+        cmake --build build --config Release --target ALL_BUILD --parallel 4
         
-        rem Look in the build directory
-        if exist build (
-          cd build
-          echo "Files in build directory:"
-          dir /s /b 2>nul | findstr /i "\.exe$\|\.dll$" || echo "No executables or DLLs found"
-          
-          rem Also check for lib files
-          echo.
-          echo "Library files:"
-          dir /s /b *.lib 2>nul | head -10
+        # Alternatively, use MSBuild directly
+        # msbuild build\BFF.sln /p:Configuration=Release /p:Platform=x64 /m
+
+    - name: Package binaries
+      shell: powershell
+      run: |
+        # Create distribution directory
+        New-Item -ItemType Directory -Force -Path "dist"
+        
+        # Copy executables
+        Copy-Item -Path "build\Release\*.exe" -Destination "dist\" -Force
+        
+        # Copy required DLLs (using vcpkg to find dependencies)
+        & "$env:VCPKG_ROOT\vcpkg.exe" list
+        
+        # Common DLLs needed
+        $dlls = @(
+          "$env:VCPKG_ROOT\installed\$env:VCPKG_DEFAULT_TRIPLET\bin\*.dll",
+          "C:\SuiteSparse\bin\*.dll"
         )
         
-        rem Upload whatever we find
-        if exist build\Release\*.exe (
-          echo "Found executables in build/Release/"
-          dir build\Release\*.exe
-        )
+        foreach ($dll in $dlls) {
+          if (Test-Path $dll) {
+            Copy-Item -Path $dll -Destination "dist\" -Force
+          }
+        }
         
+        # Create README
+        @"
+Boundary First Flattening (BFF) for Windows
+===========================================
+
+Build Date: $(Get-Date -Format 'yyyy-MM-dd')
+Platform: Windows x64
+
+Includes:
+- BFF GUI Application
+- Required runtime libraries
+
+Usage:
+1. Run 'bff-gui.exe' for the graphical interface
+2. Or use command-line tools as needed
+
+Dependencies:
+- SuiteSparse with METIS
+- Eigen3
+- libigl
+- GLFW3
+- OpenGL
+"@ | Out-File -FilePath "dist\README.txt" -Encoding UTF8
+
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: bff-artifacts
+        name: BFF-Windows-Binaries
         path: |
-          build/
+          dist/
+          build/Release/*.exe
         retention-days: 7
+
+    - name: Create Release (on tag)
+      if: startsWith(github.ref, 'refs/tags/')
+      shell: powershell
+      run: |
+        # Create zip archive
+        Compress-Archive -Path "dist\*" -DestinationPath "BFF-Windows-x64.zip" -Force
+        
+        # Upload to release (using gh CLI)
+        gh release upload ${{ github.ref_name }} BFF-Windows-x64.zip --clobber
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
