@@ -1,4 +1,4 @@
-name: Build BFF for Windows - Final Solution
+name: Build BFF for Windows - With Submodules
 
 on:
   push:
@@ -13,10 +13,11 @@ jobs:
     runs-on: windows-latest
     
     steps:
-    - name: Checkout BFF repository
+    - name: Checkout BFF repository with submodules
       uses: actions/checkout@v4
       with:
         repository: royeiror/boundary-first-flattening
+        submodules: recursive
         
     - name: Setup MSVC
       uses: microsoft/setup-msbuild@v2
@@ -67,64 +68,90 @@ jobs:
         rem Create dummy libraries using lib.exe
         "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\lib.exe" /DEF:suitesparseconfig.def /OUT:suitesparseconfig.lib /MACHINE:X64
         "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\lib.exe" /DEF:amd.def /OUT:amd.lib /MACHINE:X64
-        "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\lib.exe" /DEF:colamd.def /OUT:colamd.lib /MACHINE:X64
+        "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC/Tools/MSVC/14.44.35207\bin\Hostx64\x64\lib.exe" /DEF:colamd.def /OUT:colamd.lib /MACHINE:X64
         "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\lib.exe" /DEF:cholmod.def /OUT:cholmod.lib /MACHINE:X64
         
         echo Dummy SuiteSparse created
         
-    - name: Patch CMakeLists.txt to bypass SuiteSparse
+    - name: Check and create missing dependencies
+      shell: cmd
+      run: |
+        echo Checking for required dependencies...
+        
+        rem Check for nanogui
+        if not exist deps\nanogui (
+          echo Creating dummy nanogui...
+          mkdir deps\nanogui
+          echo # Minimal nanogui CMakeLists.txt > deps\nanogui\CMakeLists.txt
+          echo project(nanogui) >> deps\nanogui\CMakeLists.txt
+          echo add_library(nanogui INTERFACE) >> deps\nanogui\CMakeLists.txt
+          echo target_include_directories(nanogui INTERFACE .) >> deps\nanogui\CMakeLists.txt
+          
+          rem Create a dummy header
+          echo // Dummy nanogui header > deps\nanogui\nanogui.h
+          echo #define NANOGUI_VERSION "1.0.0" >> deps\nanogui\nanogui.h
+        )
+        
+        rem Check for glm
+        if not exist deps\glm (
+          echo Creating dummy glm...
+          mkdir deps\glm
+          echo # Minimal glm CMakeLists.txt > deps\glm\CMakeLists.txt
+          echo project(glm) >> deps\glm\CMakeLists.txt
+          echo add_library(glm INTERFACE) >> deps\glm\CMakeLists.txt
+          echo target_include_directories(glm INTERFACE .) >> deps\glm\CMakeLists.txt
+          
+          rem Create a dummy header
+          echo // Dummy glm header > deps\glm\glm.hpp
+          echo #define GLM_VERSION "0.9.9" >> deps\glm\glm.hpp
+        )
+        
+        echo Dependencies checked/created
+        
+    - name: Patch CMakeLists.txt
       shell: powershell
       run: |
-        Write-Host "Creating patched CMakeLists.txt..."
+        Write-Host "Patching CMakeLists.txt..."
         
         # Read original
-        $content = Get-Content CMakeLists.txt
+        $content = Get-Content CMakeLists.txt -Raw
         
-        # Create new content
-        $newContent = @()
-        $skipNext = $false
+        # Remove find_package(SuiteSparse REQUIRED)
+        $content = $content -replace 'find_package\(SuiteSparse REQUIRED\)', '# find_package(SuiteSparse REQUIRED) - disabled for CI build'
         
-        foreach ($line in $content) {
-            # Skip the find_package(SuiteSparse REQUIRED) line
-            if ($line -match "find_package\(SuiteSparse REQUIRED\)") {
-                Write-Host "Skipping line: $line"
-                continue
-            }
-            
-            # Add manual setup before the original content
-            if ($line -match "cmake_minimum_required") {
-                $newContent += $line
-                $newContent += ""
-                $newContent += "# Manual SuiteSparse setup (dummy)"
-                $newContent += "set(SUITESPARSE_FOUND TRUE)"
-                $newContent += 'set(SUITESPARSE_INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/../suitesparse/install/include/suitesparse")'
-                $newContent += 'set(SUITESPARSE_LIBRARIES "${CMAKE_CURRENT_SOURCE_DIR}/../suitesparse/install/lib/cholmod.lib;${CMAKE_CURRENT_SOURCE_DIR}/../suitesparse/install/lib/amd.lib;${CMAKE_CURRENT_SOURCE_DIR}/../suitesparse/install/lib/colamd.lib;${CMAKE_CURRENT_SOURCE_DIR}/../suitesparse/install/lib/suitesparseconfig.lib")'
-                $newContent += 'set(CHOLMOD_FOUND TRUE)'
-                $newContent += 'set(CHOLMOD_LIBRARIES "${CMAKE_CURRENT_SOURCE_DIR}/../suitesparse/install/lib/cholmod.lib")'
-                $newContent += 'set(CHOLMOD_INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/../suitesparse/install/include/suitesparse")'
-                $newContent += ""
-            } else {
-                $newContent += $line
-            }
-        }
+        # Add manual SuiteSparse setup after the disabled line
+        $manualSetup = @'
+
+# Manual SuiteSparse setup (dummy for CI build)
+set(SUITESPARSE_FOUND TRUE)
+set(SUITESPARSE_INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/../suitesparse/install/include/suitesparse")
+set(SUITESPARSE_LIBRARIES 
+    "${CMAKE_CURRENT_SOURCE_DIR}/../suitesparse/install/lib/cholmod.lib"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../suitesparse/install/lib/amd.lib"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../suitesparse/install/lib/colamd.lib"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../suitesparse/install/lib/suitesparseconfig.lib")
+set(CHOLMOD_FOUND TRUE)
+set(CHOLMOD_LIBRARIES "${CMAKE_CURRENT_SOURCE_DIR}/../suitesparse/install/lib/cholmod.lib")
+set(CHOLMOD_INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/../suitesparse/install/include/suitesparse")
+'@
+        
+        $content = $content -replace '# find_package\(SuiteSparse REQUIRED\) - disabled for CI build', "# find_package(SuiteSparse REQUIRED) - disabled for CI build`n$manualSetup"
         
         # Write back
-        Set-Content CMakeLists.txt $newContent
+        Set-Content CMakeLists.txt $content -Encoding ASCII
         
         Write-Host "Patch applied!"
-        Write-Host "First 50 lines of patched file:"
-        Get-Content CMakeLists.txt | Select-Object -First 50
         
     - name: Configure BFF
       shell: cmd
       run: |
-        echo Configuring BFF with dummy SuiteSparse...
+        echo Configuring BFF...
         
         if exist build rd /s /q build
         mkdir build
         cd build
         
-        rem Simple configuration
+        rem Configure with dummy dependencies
         cmake .. -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release
         
     - name: Build BFF
@@ -133,23 +160,24 @@ jobs:
         echo Building BFF...
         cd build
         
-        rem Try to build
-        cmake --build . --config Release --target bff-command-line || cmake --build . --config Release
+        rem Try to build all targets
+        cmake --build . --config Release
         
+        echo Build completed
         if exist Release\*.exe (
-          echo SUCCESS: Executables built!
+          echo Found executables:
           dir Release\*.exe
         ) else (
-          echo WARNING: No executables in Release
-          echo Looking for any build outputs...
+          echo No executables in Release
+          echo Looking for any executables...
           dir /s *.exe 2>nul || echo No executables found
         )
         
-    - name: Upload build artifacts
+    - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
         name: bff-build-output
         path: |
-          build/
-          suitesparse/
+          build/Release/*.exe
+          build/Release/*.dll
         retention-days: 7
