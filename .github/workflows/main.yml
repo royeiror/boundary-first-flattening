@@ -55,6 +55,22 @@ jobs:
         & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET freeglut
         & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET glm
 
+    - name: Check vcpkg installation
+      shell: powershell
+      run: |
+        Write-Host "Checking vcpkg installed packages..."
+        & "$env:VCPKG_ROOT\vcpkg.exe" list
+        
+        Write-Host "`nChecking GLFW installation structure..."
+        $vcpkgInstalled = "$env:VCPKG_ROOT\installed\$env:VCPKG_DEFAULT_TRIPLET"
+        if (Test-Path $vcpkgInstalled) {
+          Write-Host "Contents of installed directory:"
+          Get-ChildItem -Path $vcpkgInstalled | Select-Object Name, Mode
+          
+          Write-Host "`nLooking for GLFW files..."
+          Get-ChildItem -Path "$vcpkgInstalled\*" -Filter "*glfw*" -Recurse | Select-Object -First 10 | Format-Table FullName
+        }
+
     - name: Download and install SuiteSparse-METIS
       shell: powershell
       run: |
@@ -97,20 +113,13 @@ jobs:
           # Copy to include directory
           Copy-Item -Path $file.FullName -Destination "C:\SuiteSparse\include\" -Force
         }
-        
-        # Set environment variables
-        echo "SUITESPARSE_INCLUDE_DIR=C:\SuiteSparse\include" | Out-File -FilePath $env:GITHUB_ENV -Append
-        echo "SUITESPARSE_LIB_DIR=C:\SuiteSparse\lib" | Out-File -FilePath $env:GITHUB_ENV -Append
-        
-        # Add to PATH
-        echo "C:\SuiteSparse\lib" | Out-File -FilePath $env:GITHUB_PATH -Append
-        echo "C:\SuiteSparse\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
 
     - name: Create CMakeLists.txt for BFF
       shell: powershell
       run: |
-        # Get the vcpkg path with forward slashes for CMake
+        # Get the vcpkg path with forward slashes
         $vcpkgPath = $env:VCPKG_ROOT -replace "\\", "/"
+        $vcpkgInstalled = "$vcpkgPath/installed/$env:VCPKG_DEFAULT_TRIPLET"
         
         $cmakeLines = @(
           "cmake_minimum_required(VERSION 3.15)",
@@ -119,8 +128,8 @@ jobs:
           "set(CMAKE_CXX_STANDARD 17)",
           "set(CMAKE_CXX_STANDARD_REQUIRED ON)",
           "",
-          "# Use vcpkg toolchain",
-          "set(CMAKE_TOOLCHAIN_FILE `"$vcpkgPath/scripts/buildsystems/vcpkg.cmake`" CACHE STRING `"`")",
+          "# Set vcpkg paths",
+          "set(VCPKG_INSTALLED_DIR `"$vcpkgInstalled`")",
           "",
           "# Find Eigen3",
           "find_package(Eigen3 REQUIRED)",
@@ -133,14 +142,28 @@ jobs:
           "find_library(CHOLMOD_LIBRARY NAMES cholmod libcholmod PATHS `${SUITESPARSE_LIB_DIR})",
           "find_library(AMD_LIBRARY NAMES amd libamd PATHS `${SUITESPARSE_LIB_DIR})",
           "find_library(CAMD_LIBRARY NAMES camd libcamd PATHS `${SUITESPARSE_LIB_DIR})",
-          "find_library(COLAMD_LIBRARY Names colamd libcolamd PATHS `${SUITESPARSE_LIB_DIR})",
+          "find_library(COLAMD_LIBRARY NAMES colamd libcolamd PATHS `${SUITESPARSE_LIB_DIR})",
           "find_library(CCOLAMD_LIBRARY NAMES ccolamd libccolamd PATHS `${SUITESPARSE_LIB_DIR})",
           "find_library(METIS_LIBRARY NAMES metis libmetis PATHS `${SUITESPARSE_LIB_DIR})",
           "",
-          "# OpenGL and GLFW",
+          "# OpenGL",
           "find_package(OpenGL REQUIRED)",
-          "find_package(glfw3 REQUIRED)",
-          "find_package(GLEW REQUIRED)",
+          "",
+          "# Manually find GLFW and GLEW from vcpkg",
+          "set(GLFW3_INCLUDE_DIR `"${VCPKG_INSTALLED_DIR}/include`")",
+          "set(GLFW3_LIBRARY `"${VCPKG_INSTALLED_DIR}/lib/glfw3.lib`")",
+          "",
+          "set(GLEW_INCLUDE_DIR `"${VCPKG_INSTALLED_DIR}/include`")",
+          "set(GLEW_LIBRARY `"${VCPKG_INSTALLED_DIR}/lib/glew32.lib`")",
+          "",
+          "# Check if files exist",
+          "if(NOT EXISTS `${GLFW3_LIBRARY})",
+          "    message(FATAL_ERROR `"GLFW library not found: `${GLFW3_LIBRARY}`")",
+          "endif()",
+          "",
+          "if(NOT EXISTS `${GLEW_LIBRARY})",
+          "    message(FATAL_ERROR `"GLEW library not found: `${GLEW_LIBRARY}`")",
+          "endif()",
           "",
           "# Include directories",
           "include_directories(",
@@ -149,6 +172,8 @@ jobs:
           "    `${CMAKE_SOURCE_DIR}/deps/spectra/include",
           "    `${EIGEN3_INCLUDE_DIRS}",
           "    `${SUITESPARSE_INCLUDE_DIR}",
+          "    `${GLFW3_INCLUDE_DIR}",
+          "    `${GLEW_INCLUDE_DIR}",
           ")",
           "",
           "# Source files for library",
@@ -157,7 +182,7 @@ jobs:
           "# Create library",
           "add_library(bff-lib STATIC `${SRC_FILES})",
           "",
-          "# Link libraries to bff-lib",
+          "# Link SuiteSparse libraries to bff-lib",
           "target_link_libraries(bff-lib",
           "    `${CHOLMOD_LIBRARY}",
           "    `${AMD_LIBRARY}",
@@ -172,7 +197,7 @@ jobs:
           "    file(GLOB GUI_SRC_FILES `"apps/*.cpp`")",
           "    if(GUI_SRC_FILES)",
           "        add_executable(bff-gui `${GUI_SRC_FILES})",
-          "        target_link_libraries(bff-gui bff-lib `${OPENGL_LIBRARIES} glfw ${GLEW_LIBRARIES})",
+          "        target_link_libraries(bff-gui bff-lib `${OPENGL_LIBRARIES} `${GLFW3_LIBRARY} `${GLEW_LIBRARY})",
           "        target_include_directories(bff-gui PRIVATE `${CMAKE_SOURCE_DIR}/apps)",
           "    endif()",
           "endif()",
@@ -194,26 +219,27 @@ jobs:
     - name: Check BFF source structure
       shell: powershell
       run: |
-        Write-Host "BFF source structure:"
-        Write-Host "`nChecking deps directory..."
-        if (Test-Path "deps") {
-          Get-ChildItem -Path "deps" | Select-Object Name, Mode
+        Write-Host "Checking BFF source files..."
+        
+        Write-Host "`nChecking apps directory:"
+        if (Test-Path "apps") {
+          Get-ChildItem -Path "apps" -Filter "*.cpp" | Select-Object Name
+        } else {
+          Write-Host "apps directory not found"
         }
         
-        Write-Host "`nChecking if libigl exists in deps..."
-        if (Test-Path "deps/libigl") {
-          Write-Host "libigl found"
+        Write-Host "`nChecking binaries directory:"
+        if (Test-Path "binaries") {
+          Get-ChildItem -Path "binaries" -Filter "*.cpp" | Select-Object Name
         } else {
-          Write-Host "libigl not found, cloning it..."
-          git clone https://github.com/libigl/libigl.git deps/libigl
+          Write-Host "binaries directory not found"
         }
         
-        Write-Host "`nChecking if spectra exists in deps..."
-        if (Test-Path "deps/spectra") {
-          Write-Host "spectra found"
+        Write-Host "`nChecking src directory:"
+        if (Test-Path "src") {
+          Get-ChildItem -Path "src" -Filter "*.cpp" | Select-Object Name
         } else {
-          Write-Host "spectra not found, cloning it..."
-          git clone https://github.com/yixuan/spectra.git deps/spectra
+          Write-Host "src directory not found"
         }
 
     - name: Configure CMake
@@ -223,9 +249,8 @@ jobs:
         New-Item -ItemType Directory -Force -Path "build"
         
         Write-Host "Configuring CMake..."
-        Write-Host "Current directory: $(Get-Location)"
         
-        # Configure with CMake - pass toolchain file as argument
+        # Configure with CMake
         cmake -B build `
           -DCMAKE_BUILD_TYPE=Release `
           -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
@@ -270,9 +295,10 @@ jobs:
         $vcpkgBinPath = "$env:VCPKG_ROOT\installed\$env:VCPKG_DEFAULT_TRIPLET\bin"
         if (Test-Path $vcpkgBinPath) {
           Write-Host "Copying DLLs from $vcpkgBinPath"
-          Get-ChildItem -Path $vcpkgBinPath -Filter "*.dll" | ForEach-Object {
-            Copy-Item -Path $_.FullName -Destination "dist\" -Force
-            Write-Host "Copied: $($_.Name)"
+          $dlls = Get-ChildItem -Path $vcpkgBinPath -Filter "*.dll"
+          foreach ($dll in $dlls) {
+            Copy-Item -Path $dll.FullName -Destination "dist\" -Force
+            Write-Host "Copied: $($dll.Name)"
           }
         }
         
@@ -280,9 +306,10 @@ jobs:
         $suiteSparseBinPath = "C:\SuiteSparse\bin"
         if (Test-Path $suiteSparseBinPath) {
           Write-Host "Copying DLLs from $suiteSparseBinPath"
-          Get-ChildItem -Path $suiteSparseBinPath -Filter "*.dll" | ForEach-Object {
-            Copy-Item -Path $_.FullName -Destination "dist\" -Force
-            Write-Host "Copied: $($_.Name)"
+          $dlls = Get-ChildItem -Path $suiteSparseBinPath -Filter "*.dll"
+          foreach ($dll in $dlls) {
+            Copy-Item -Path $dll.FullName -Destination "dist\" -Force
+            Write-Host "Copied: $($dll.Name)"
           }
         }
         
