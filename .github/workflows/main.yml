@@ -106,30 +106,12 @@ jobs:
         echo "C:\SuiteSparse\lib" | Out-File -FilePath $env:GITHUB_PATH -Append
         echo "C:\SuiteSparse\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
 
-    - name: Check what vcpkg actually installed
-      shell: powershell
-      run: |
-        Write-Host "Checking vcpkg installed packages:"
-        & "$env:VCPKG_ROOT\vcpkg.exe" list
-        
-        Write-Host "`nChecking GLFW installation:"
-        $glfwPath = "$env:VCPKG_ROOT\installed\$env:VCPKG_DEFAULT_TRIPLET"
-        if (Test-Path $glfwPath) {
-          Write-Host "Contents of vcpkg install directory:"
-          Get-ChildItem -Path $glfwPath -Name
-          
-          Write-Host "`nChecking for GLFW files:"
-          Get-ChildItem -Path "$glfwPath\*" -Filter "*glfw*" -Recurse | Select-Object -First 10
-        }
-
     - name: Create CMakeLists.txt for BFF
       shell: powershell
       run: |
-        # First check the original BFF CMakeLists.txt
-        Write-Host "Original BFF CMakeLists.txt content:"
-        Get-Content CMakeLists.txt | Select-Object -First 30
+        # Get the vcpkg path with forward slashes for CMake
+        $vcpkgPath = $env:VCPKG_ROOT -replace "\\", "/"
         
-        # Based on the original BFF structure, create a simpler CMakeLists.txt
         $cmakeLines = @(
           "cmake_minimum_required(VERSION 3.15)",
           "project(BFF)",
@@ -138,7 +120,7 @@ jobs:
           "set(CMAKE_CXX_STANDARD_REQUIRED ON)",
           "",
           "# Use vcpkg toolchain",
-          "set(CMAKE_TOOLCHAIN_FILE `"$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake`" CACHE STRING `"`")",
+          "set(CMAKE_TOOLCHAIN_FILE `"$vcpkgPath/scripts/buildsystems/vcpkg.cmake`" CACHE STRING `"`")",
           "",
           "# Find Eigen3",
           "find_package(Eigen3 REQUIRED)",
@@ -151,11 +133,11 @@ jobs:
           "find_library(CHOLMOD_LIBRARY NAMES cholmod libcholmod PATHS `${SUITESPARSE_LIB_DIR})",
           "find_library(AMD_LIBRARY NAMES amd libamd PATHS `${SUITESPARSE_LIB_DIR})",
           "find_library(CAMD_LIBRARY NAMES camd libcamd PATHS `${SUITESPARSE_LIB_DIR})",
-          "find_library(COLAMD_LIBRARY NAMES colamd libcolamd PATHS `${SUITESPARSE_LIB_DIR})",
+          "find_library(COLAMD_LIBRARY Names colamd libcolamd PATHS `${SUITESPARSE_LIB_DIR})",
           "find_library(CCOLAMD_LIBRARY NAMES ccolamd libccolamd PATHS `${SUITESPARSE_LIB_DIR})",
           "find_library(METIS_LIBRARY NAMES metis libmetis PATHS `${SUITESPARSE_LIB_DIR})",
           "",
-          "# OpenGL and GLFW - use find_package for GLFW instead of GLFW3",
+          "# OpenGL and GLFW",
           "find_package(OpenGL REQUIRED)",
           "find_package(glfw3 REQUIRED)",
           "find_package(GLEW REQUIRED)",
@@ -190,7 +172,7 @@ jobs:
           "    file(GLOB GUI_SRC_FILES `"apps/*.cpp`")",
           "    if(GUI_SRC_FILES)",
           "        add_executable(bff-gui `${GUI_SRC_FILES})",
-          "        target_link_libraries(bff-gui bff-lib `${OPENGL_LIBRARIES} glfw GLEW::GLEW)",
+          "        target_link_libraries(bff-gui bff-lib `${OPENGL_LIBRARIES} glfw ${GLEW_LIBRARIES})",
           "        target_include_directories(bff-gui PRIVATE `${CMAKE_SOURCE_DIR}/apps)",
           "    endif()",
           "endif()",
@@ -213,25 +195,25 @@ jobs:
       shell: powershell
       run: |
         Write-Host "BFF source structure:"
-        Write-Host "`napps directory:"
-        if (Test-Path "apps") {
-          Get-ChildItem -Path "apps" -Recurse -Filter "*.cpp" | Select-Object Name
-        } else {
-          Write-Host "apps directory not found"
+        Write-Host "`nChecking deps directory..."
+        if (Test-Path "deps") {
+          Get-ChildItem -Path "deps" | Select-Object Name, Mode
         }
         
-        Write-Host "`nbinaries directory:"
-        if (Test-Path "binaries") {
-          Get-ChildItem -Path "binaries" -Recurse -Filter "*.cpp" | Select-Object Name
+        Write-Host "`nChecking if libigl exists in deps..."
+        if (Test-Path "deps/libigl") {
+          Write-Host "libigl found"
         } else {
-          Write-Host "binaries directory not found"
+          Write-Host "libigl not found, cloning it..."
+          git clone https://github.com/libigl/libigl.git deps/libigl
         }
         
-        Write-Host "`nsrc directory:"
-        if (Test-Path "src") {
-          Get-ChildItem -Path "src" -Recurse -Filter "*.cpp" | Select-Object Name
+        Write-Host "`nChecking if spectra exists in deps..."
+        if (Test-Path "deps/spectra") {
+          Write-Host "spectra found"
         } else {
-          Write-Host "src directory not found"
+          Write-Host "spectra not found, cloning it..."
+          git clone https://github.com/yixuan/spectra.git deps/spectra
         }
 
     - name: Configure CMake
@@ -241,8 +223,9 @@ jobs:
         New-Item -ItemType Directory -Force -Path "build"
         
         Write-Host "Configuring CMake..."
+        Write-Host "Current directory: $(Get-Location)"
         
-        # Configure with CMake - use simpler approach
+        # Configure with CMake - pass toolchain file as argument
         cmake -B build `
           -DCMAKE_BUILD_TYPE=Release `
           -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
