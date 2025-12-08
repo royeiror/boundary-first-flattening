@@ -1,4 +1,4 @@
-name: Build BFF for Windows - With Submodules
+name: Build BFF for Windows
 
 on:
   push:
@@ -13,7 +13,7 @@ jobs:
     runs-on: windows-latest
     
     steps:
-    - name: Checkout BFF repository with submodules
+    - name: Checkout BFF repository
       uses: actions/checkout@v4
       with:
         repository: royeiror/boundary-first-flattening
@@ -30,7 +30,7 @@ jobs:
     - name: Create dummy SuiteSparse
       shell: cmd
       run: |
-        echo Creating dummy SuiteSparse installation...
+        echo Creating dummy SuiteSparse...
         
         if exist suitesparse rd /s /q suitesparse
         mkdir suitesparse
@@ -39,15 +39,12 @@ jobs:
         mkdir suitesparse\install\include\suitesparse
         mkdir suitesparse\install\lib
         
-        rem Create minimal headers
         cd suitesparse\install\include\suitesparse
-        echo // Dummy SuiteSparse headers > README.txt
         echo #define SUITESPARSE_VERSION "7.6.1" > SuiteSparse_config.h
         echo #define AMD_VERSION "2.4.6" > amd.h
         echo #define COLAMD_VERSION "3.0.0" > colamd.h
         echo #define CHOLMOD_VERSION "5.0.0" > cholmod.h
         
-        rem Create dummy libraries
         cd ..\..\lib
         echo LIBRARY suitesparseconfig > suitesparseconfig.def
         echo EXPORTS >> suitesparseconfig.def
@@ -65,119 +62,74 @@ jobs:
         echo EXPORTS >> cholmod.def
         echo   cholmod_version >> cholmod.def
         
-        rem Create dummy libraries using lib.exe
         "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\lib.exe" /DEF:suitesparseconfig.def /OUT:suitesparseconfig.lib /MACHINE:X64
         "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\lib.exe" /DEF:amd.def /OUT:amd.lib /MACHINE:X64
-        "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC/Tools/MSVC/14.44.35207\bin\Hostx64\x64\lib.exe" /DEF:colamd.def /OUT:colamd.lib /MACHINE:X64
+        "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\lib.exe" /DEF:colamd.def /OUT:colamd.lib /MACHINE:X64
         "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\lib.exe" /DEF:cholmod.def /OUT:cholmod.lib /MACHINE:X64
         
-        echo Dummy SuiteSparse created
-        
-    - name: Check and create missing dependencies
+    - name: Check dependencies
       shell: cmd
       run: |
-        echo Checking for required dependencies...
+        echo Checking dependencies...
         
-        rem Check for nanogui
         if not exist deps\nanogui (
           echo Creating dummy nanogui...
           mkdir deps\nanogui
-          echo # Minimal nanogui CMakeLists.txt > deps\nanogui\CMakeLists.txt
-          echo project(nanogui) >> deps\nanogui\CMakeLists.txt
+          echo project(nanogui) > deps\nanogui\CMakeLists.txt
           echo add_library(nanogui INTERFACE) >> deps\nanogui\CMakeLists.txt
           echo target_include_directories(nanogui INTERFACE .) >> deps\nanogui\CMakeLists.txt
-          
-          rem Create a dummy header
-          echo // Dummy nanogui header > deps\nanogui\nanogui.h
-          echo #define NANOGUI_VERSION "1.0.0" >> deps\nanogui\nanogui.h
+          echo // Dummy nanogui > deps\nanogui\nanogui.h
         )
         
-        rem Check for glm
         if not exist deps\glm (
           echo Creating dummy glm...
           mkdir deps\glm
-          echo # Minimal glm CMakeLists.txt > deps\glm\CMakeLists.txt
-          echo project(glm) >> deps\glm\CMakeLists.txt
+          echo project(glm) > deps\glm\CMakeLists.txt
           echo add_library(glm INTERFACE) >> deps\glm\CMakeLists.txt
           echo target_include_directories(glm INTERFACE .) >> deps\glm\CMakeLists.txt
-          
-          rem Create a dummy header
-          echo // Dummy glm header > deps\glm\glm.hpp
-          echo #define GLM_VERSION "0.9.9" >> deps\glm\glm.hpp
+          echo // Dummy glm > deps\glm\glm.hpp
         )
-        
-        echo Dependencies checked/created
         
     - name: Patch CMakeLists.txt
       shell: powershell
       run: |
-        Write-Host "Patching CMakeLists.txt..."
-        
-        # Read original
+        # Simple patch to disable SuiteSparse requirement
         $content = Get-Content CMakeLists.txt -Raw
-        
-        # Remove find_package(SuiteSparse REQUIRED)
-        $content = $content -replace 'find_package\(SuiteSparse REQUIRED\)', '# find_package(SuiteSparse REQUIRED) - disabled for CI build'
-        
-        # Add manual SuiteSparse setup after the disabled line
-        $manualSetup = @'
-
-# Manual SuiteSparse setup (dummy for CI build)
+        $content = $content -replace 'find_package\(SuiteSparse REQUIRED\)', @'
+# find_package(SuiteSparse REQUIRED) - disabled
 set(SUITESPARSE_FOUND TRUE)
 set(SUITESPARSE_INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/../suitesparse/install/include/suitesparse")
-set(SUITESPARSE_LIBRARIES 
-    "${CMAKE_CURRENT_SOURCE_DIR}/../suitesparse/install/lib/cholmod.lib"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../suitesparse/install/lib/amd.lib"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../suitesparse/install/lib/colamd.lib"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../suitesparse/install/lib/suitesparseconfig.lib")
+set(SUITESPARSE_LIBRARIES "${CMAKE_CURRENT_SOURCE_DIR}/../suitesparse/install/lib/cholmod.lib;${CMAKE_CURRENT_SOURCE_DIR}/../suitesparse/install/lib/amd.lib;${CMAKE_CURRENT_SOURCE_DIR}/../suitesparse/install/lib/colamd.lib;${CMAKE_CURRENT_SOURCE_DIR}/../suitesparse/install/lib/suitesparseconfig.lib")
 set(CHOLMOD_FOUND TRUE)
 set(CHOLMOD_LIBRARIES "${CMAKE_CURRENT_SOURCE_DIR}/../suitesparse/install/lib/cholmod.lib")
 set(CHOLMOD_INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/../suitesparse/install/include/suitesparse")
 '@
-        
-        $content = $content -replace '# find_package\(SuiteSparse REQUIRED\) - disabled for CI build', "# find_package(SuiteSparse REQUIRED) - disabled for CI build`n$manualSetup"
-        
-        # Write back
         Set-Content CMakeLists.txt $content -Encoding ASCII
+        Write-Host "CMakeLists.txt patched"
         
-        Write-Host "Patch applied!"
-        
-    - name: Configure BFF
+    - name: Configure
       shell: cmd
       run: |
-        echo Configuring BFF...
-        
         if exist build rd /s /q build
         mkdir build
         cd build
-        
-        rem Configure with dummy dependencies
         cmake .. -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release
         
-    - name: Build BFF
+    - name: Build
       shell: cmd
       run: |
-        echo Building BFF...
         cd build
-        
-        rem Try to build all targets
         cmake --build . --config Release
         
-        echo Build completed
         if exist Release\*.exe (
-          echo Found executables:
+          echo Success! Executables:
           dir Release\*.exe
         ) else (
           echo No executables in Release
-          echo Looking for any executables...
-          dir /s *.exe 2>nul || echo No executables found
         )
         
-    - name: Upload artifacts
+    - name: Upload
       uses: actions/upload-artifact@v4
       with:
-        name: bff-build-output
-        path: |
-          build/Release/*.exe
-          build/Release/*.dll
-        retention-days: 7
+        name: bff-binaries
+        path: build/Release/*.exe
