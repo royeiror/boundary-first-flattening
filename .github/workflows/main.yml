@@ -29,7 +29,7 @@ jobs:
     - name: Install Chocolatey packages
       shell: powershell
       run: |
-        # Install Chocolatey if not present
+        # Install Chocolatey
         Set-ExecutionPolicy Bypass -Scope Process -Force
         [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
         iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
@@ -37,7 +37,6 @@ jobs:
         # Install build tools
         choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y
         choco install ninja -y
-        choco install git -y
 
     - name: Install vcpkg and dependencies
       shell: powershell
@@ -53,38 +52,84 @@ jobs:
         & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET metis
         & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET glfw3
         & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET glew
-        & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET libpng
-        & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET zlib
         & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET freeglut
         & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET glm
 
     - name: Download and install SuiteSparse-METIS
       shell: powershell
       run: |
-        # Download SuiteSparse-METIS
-        $url = "https://github.com/jlblancoc/suitesparse-metis-for-windows/releases/download/v1.4.0/SuiteSparse-4.5.1-METIS-5.1.0.zip"
-        $output = "C:\SuiteSparse.zip"
+        # Download SuiteSparse-METIS from the correct URL
+        # Based on the repository: https://github.com/jlblancoc/suitesparse-metis-for-windows
+        # Looking at the releases, let's try a different approach
+        $url = "https://github.com/jlblancoc/suitesparse-metis-for-windows/archive/master.zip"
+        $output = "C:\suitesparse-metis.zip"
         
+        Write-Host "Downloading SuiteSparse-METIS from $url"
         Invoke-WebRequest -Uri $url -OutFile $output
         
+        # Create directory
+        New-Item -ItemType Directory -Force -Path "C:\SuiteSparse"
+        
         # Extract
-        Expand-Archive -Path $output -DestinationPath "C:\SuiteSparse\" -Force
+        Expand-Archive -Path $output -DestinationPath "C:\SuiteSparseTemp\" -Force
+        
+        # Find the actual library files
+        # The structure might be different, so let's search for files
+        $libDir = Get-ChildItem -Path "C:\SuiteSparseTemp" -Recurse -Directory | Where-Object { $_.Name -eq "lib" } | Select-Object -First 1
+        $includeDir = Get-ChildItem -Path "C:\SuiteSparseTemp" -Recurse -Directory | Where-Object { $_.Name -eq "include" } | Select-Object -First 1
+        
+        if ($libDir -and $includeDir) {
+          Write-Host "Found lib directory: $($libDir.FullName)"
+          Write-Host "Found include directory: $($includeDir.FullName)"
+          
+          # Copy files
+          Copy-Item -Path "$($includeDir.FullName)\*" -Destination "C:\SuiteSparse\include\" -Recurse -Force
+          Copy-Item -Path "$($libDir.FullName)\*" -Destination "C:\SuiteSparse\lib\" -Recurse -Force
+        } else {
+          Write-Host "Could not find lib/include directories, checking for pre-built binaries..."
+          
+          # Look for .lib and .dll files
+          $libFiles = Get-ChildItem -Path "C:\SuiteSparseTemp" -Recurse -Filter "*.lib"
+          $dllFiles = Get-ChildItem -Path "C:\SuiteSparseTemp" -Recurse -Filter "*.dll"
+          $hFiles = Get-ChildItem -Path "C:\SuiteSparseTemp" -Recurse -Filter "*.h"
+          
+          if ($libFiles.Count -gt 0) {
+            foreach ($file in $libFiles) {
+              Copy-Item -Path $file.FullName -Destination "C:\SuiteSparse\lib\" -Force
+            }
+          }
+          
+          if ($dllFiles.Count -gt 0) {
+            foreach ($file in $dllFiles) {
+              Copy-Item -Path $file.FullName -Destination "C:\SuiteSparse\bin\" -Force
+            }
+          }
+          
+          if ($hFiles.Count -gt 0) {
+            foreach ($file in $hFiles) {
+              $destDir = "C:\SuiteSparse\include\" + $file.Directory.Name
+              New-Item -ItemType Directory -Force -Path $destDir
+              Copy-Item -Path $file.FullName -Destination $destDir -Force
+            }
+          }
+        }
         
         # Set environment variables
-        echo "SUITESPARSE_ROOT=C:\SuiteSparse" | Out-File -FilePath $env:GITHUB_ENV -Append
         echo "SUITESPARSE_INCLUDE_DIR=C:\SuiteSparse\include" | Out-File -FilePath $env:GITHUB_ENV -Append
         echo "SUITESPARSE_LIB_DIR=C:\SuiteSparse\lib" | Out-File -FilePath $env:GITHUB_ENV -Append
         
         # Add to PATH
         echo "C:\SuiteSparse\lib" | Out-File -FilePath $env:GITHUB_PATH -Append
-        echo "C:\SuiteSparse\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+        if (Test-Path "C:\SuiteSparse\bin") {
+          echo "C:\SuiteSparse\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+        }
 
     - name: Clone BFF repository
       shell: powershell
       run: |
         # Clone the BFF repository
         if (-not (Test-Path "bff-source")) {
-          git clone https://github.com/GeometryCollective/boundary-first-flattening.git bff-source
+          git clone --recursive https://github.com/GeometryCollective/boundary-first-flattening.git bff-source
           cd bff-source
           git checkout v1.6
           cd ..
@@ -93,11 +138,29 @@ jobs:
         # Copy to workspace
         Copy-Item -Path "bff-source\*" -Destination "." -Recurse -Force
 
+    - name: Check BFF structure
+      shell: powershell
+      run: |
+        # Check what files are in the BFF repository
+        Write-Host "BFF directory structure:"
+        Get-ChildItem -Recurse | Select-Object -First 20
+        
+        Write-Host "`nChecking for source files:"
+        if (Test-Path "lib") {
+          Write-Host "lib directory exists"
+          Get-ChildItem -Path "lib" -Filter "*.cpp" | Select-Object -First 5
+        }
+        
+        if (Test-Path "gui") {
+          Write-Host "gui directory exists"
+          Get-ChildItem -Path "gui" -Filter "*.cpp" | Select-Object -First 5
+        }
+
     - name: Create CMakeLists.txt for BFF
       shell: powershell
       run: |
-        # Create CMakeLists.txt using Echo command to avoid YAML conflicts
-        $lines = @(
+        # Create CMakeLists.txt using array approach
+        $cmakeLines = @(
           "cmake_minimum_required(VERSION 3.15)",
           "project(BFF)",
           "",
@@ -106,23 +169,41 @@ jobs:
           "",
           "# Find dependencies",
           "find_package(Eigen3 REQUIRED)",
-          "find_package(SuiteSparse REQUIRED COMPONENTS CHOLMOD AMD CAMD COLAMD CCOLAMD)",
-          "find_package(METIS REQUIRED)",
           "find_package(OpenGL REQUIRED)",
           "find_package(GLFW3 REQUIRED)",
           "find_package(GLEW REQUIRED)",
           "",
+          "# Manually set SuiteSparse paths since find_package might not work",
+          "set(SUITESPARSE_INCLUDE_DIR `"C:/SuiteSparse/include`")",
+          "set(SUITESPARSE_LIB_DIR `"C:/SuiteSparse/lib`")",
+          "",
+          "# Find SuiteSparse libraries",
+          "find_library(CHOLMOD_LIBRARY NAMES cholmod libcholmod PATHS `${SUITESPARSE_LIB_DIR})",
+          "find_library(AMD_LIBRARY NAMES amd libamd PATHS `${SUITESPARSE_LIB_DIR})",
+          "find_library(CAMD_LIBRARY NAMES camd libcamd PATHS `${SUITESPARSE_LIB_DIR})",
+          "find_library(COLAMD_LIBRARY NAMES colamd libcolamd PATHS `${SUITESPARSE_LIB_DIR})",
+          "find_library(CCOLAMD_LIBRARY NAMES ccolamd libccolamd PATHS `${SUITESPARSE_LIB_DIR})",
+          "find_library(METIS_LIBRARY NAMES metis libmetis PATHS `${SUITESPARSE_LIB_DIR})",
+          "",
           "# Add source files",
-          "file(GLOB_RECURSE BFF_SOURCES `"lib/*.cpp`" `"gui/*.cpp`")",
-          "file(GLOB_RECURSE BFF_HEADERS `"lib/*.h`" `"gui/*.h`")",
+          "file(GLOB_RECURSE BFF_SOURCES `"lib/*.cpp`")",
+          "file(GLOB_RECURSE BFF_HEADERS `"lib/*.h`")",
+          "",
+          "# Check for GUI files",
+          "file(GLOB_RECURSE GUI_SOURCES `"gui/*.cpp`")",
+          "file(GLOB_RECURSE GUI_HEADERS `"gui/*.h`")",
+          "",
+          "# Combine sources",
+          "set(ALL_SOURCES `${BFF_SOURCES} `${GUI_SOURCES})",
+          "set(ALL_HEADERS `${BFF_HEADERS} `${GUI_HEADERS})",
           "",
           "# Add executable",
-          "add_executable(bff-gui `${BFF_SOURCES} `${BFF_HEADERS})",
+          "add_executable(bff-gui `${ALL_SOURCES} `${ALL_HEADERS})",
           "",
           "# Include directories",
           "target_include_directories(bff-gui PRIVATE",
           "    `${EIGEN3_INCLUDE_DIRS}",
-          "    `${SUITESPARSE_INCLUDE_DIRS}",
+          "    `${SUITESPARSE_INCLUDE_DIR}",
           "    `${OPENGL_INCLUDE_DIRS}",
           "    `${GLFW3_INCLUDE_DIRS}",
           "    `${GLEW_INCLUDE_DIRS}",
@@ -132,8 +213,12 @@ jobs:
           "",
           "# Link libraries",
           "target_link_libraries(bff-gui",
-          "    `${SUITESPARSE_LIBRARIES}",
-          "    `${METIS_LIBRARIES}",
+          "    `${CHOLMOD_LIBRARY}",
+          "    `${AMD_LIBRARY}",
+          "    `${CAMD_LIBRARY}",
+          "    `${COLAMD_LIBRARY}",
+          "    `${CCOLAMD_LIBRARY}",
+          "    `${METIS_LIBRARY}",
           "    `${OPENGL_LIBRARIES}",
           "    `${GLFW3_LIBRARIES}",
           "    `${GLEW_LIBRARIES}",
@@ -141,7 +226,7 @@ jobs:
         )
         
         # Write to file
-        $lines | Out-File -FilePath "CMakeLists.txt" -Encoding UTF8
+        $cmakeLines | Out-File -FilePath "CMakeLists.txt" -Encoding UTF8
 
     - name: Configure CMake
       shell: powershell
@@ -149,21 +234,23 @@ jobs:
         # Create build directory
         New-Item -ItemType Directory -Force -Path "build"
         
+        Write-Host "Configuring CMake..."
+        Write-Host "VCPKG_ROOT: $env:VCPKG_ROOT"
+        Write-Host "SuiteSparse include dir: C:\SuiteSparse\include"
+        
         # Configure with CMake
         cmake -B build `
           -DCMAKE_BUILD_TYPE=Release `
           -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
           -DVCPKG_TARGET_TRIPLET=$env:VCPKG_DEFAULT_TRIPLET `
-          -DSUITESPARSE_ROOT="C:\SuiteSparse" `
-          -DCMAKE_PREFIX_PATH="C:\SuiteSparse" `
           -G "Visual Studio 17 2022" `
           -A x64
 
     - name: Build BFF
       shell: powershell
       run: |
-        # Build the project
-        cmake --build build --config Release --target ALL_BUILD --parallel 4
+        Write-Host "Building project..."
+        cmake --build build --config Release --parallel 4
 
     - name: Find and copy executables
       shell: powershell
@@ -171,47 +258,43 @@ jobs:
         # Create distribution directory
         New-Item -ItemType Directory -Force -Path "dist"
         
-        # Find all executables
-        $exes = Get-ChildItem -Path "build" -Filter "*.exe" -Recurse | Where-Object { $_.Directory.Name -eq "Release" }
+        Write-Host "Searching for executables..."
         
-        if ($exes.Count -eq 0) {
-          Write-Host "No executables found in build/Release, searching in entire build directory..."
-          $exes = Get-ChildItem -Path "build" -Filter "*.exe" -Recurse
+        # Search for executables in various locations
+        $searchPaths = @(
+          "build\Release",
+          "build",
+          "build\bin\Release",
+          "build\bin"
+        )
+        
+        foreach ($path in $searchPaths) {
+          if (Test-Path $path) {
+            Write-Host "Checking $path"
+            $exes = Get-ChildItem -Path $path -Filter "*.exe" -Recurse
+            foreach ($exe in $exes) {
+              Write-Host "Found executable: $($exe.FullName)"
+              Copy-Item -Path $exe.FullName -Destination "dist\" -Force
+            }
+          }
         }
         
-        foreach ($exe in $exes) {
-          Write-Host "Found executable: $($exe.FullName)"
-          Copy-Item -Path $exe.FullName -Destination "dist\" -Force
+        # Copy DLLs
+        $dllSources = @(
+          "$env:VCPKG_ROOT\installed\$env:VCPKG_DEFAULT_TRIPLET\bin",
+          "C:\SuiteSparse\bin",
+          "C:\SuiteSparse\lib"
+        )
+        
+        foreach ($source in $dllSources) {
+          if (Test-Path $source) {
+            Write-Host "Copying DLLs from $source"
+            Get-ChildItem -Path $source -Filter "*.dll" | ForEach-Object {
+              Copy-Item -Path $_.FullName -Destination "dist\" -Force
+              Write-Host "Copied: $($_.Name)"
+            }
+          }
         }
-        
-        # Copy required DLLs from vcpkg
-        $vcpkgBinPath = "$env:VCPKG_ROOT\installed\$env:VCPKG_DEFAULT_TRIPLET\bin"
-        if (Test-Path $vcpkgBinPath) {
-          Copy-Item -Path "$vcpkgBinPath\*.dll" -Destination "dist\" -Force
-        }
-        
-        # Copy DLLs from SuiteSparse
-        $suiteSparseBinPath = "C:\SuiteSparse\bin"
-        if (Test-Path $suiteSparseBinPath) {
-          Copy-Item -Path "$suiteSparseBinPath\*.dll" -Destination "dist\" -Force
-        }
-        
-        # List files in dist for debugging
-        Write-Host "Files in dist directory:"
-        Get-ChildItem -Path "dist"
-
-    - name: Create README
-      shell: powershell
-      run: |
-        # Create simple README
-        $date = Get-Date -Format 'yyyy-MM-dd'
-        $readmeText = "Boundary First Flattening (BFF) for Windows`r`n"
-        $readmeText += "===========================================`r`n`r`n"
-        $readmeText += "Build Date: $date`r`n"
-        $readmeText += "Version: v1.6`r`n`r`n"
-        $readmeText += "To run: Execute bff-gui.exe`r`n"
-        
-        $readmeText | Out-File -FilePath "dist\README.txt" -Encoding UTF8
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
