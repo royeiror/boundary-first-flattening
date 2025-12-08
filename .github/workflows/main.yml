@@ -24,6 +24,20 @@ jobs:
       with:
         cmake-version: '3.28.x'
         
+    - name: List repository contents
+      shell: cmd
+      run: |
+        echo "=== Repository Structure ==="
+        dir
+        
+        echo.
+        echo "=== deps directory ==="
+        if exist deps dir deps
+        
+        echo.
+        echo "=== CMakeLists.txt first 50 lines ==="
+        type CMakeLists.txt | head -50
+        
     - name: Create dummy SuiteSparse
       shell: cmd
       run: |
@@ -64,45 +78,12 @@ jobs:
         "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\lib.exe" /DEF:colamd.def /OUT:colamd.lib /MACHINE:X64
         "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\lib.exe" /DEF:cholmod.def /OUT:cholmod.lib /MACHINE:X64
         
-        echo Dummy SuiteSparse created
-        
-    - name: Clean up dummy dependency files
-      shell: cmd
-      run: |
-        echo Cleaning up any leftover dummy files...
-        
-        rem Remove our dummy CMakeLists.txt files if they exist
-        if exist deps\nanogui\CMakeLists.txt.dummy (
-          echo Removing dummy nanogui CMakeLists.txt...
-          if exist deps\nanogui\CMakeLists.txt (
-            if exist deps\nanogui\CMakeLists.txt.real (
-              move /y deps\nanogui\CMakeLists.txt.real deps\nanogui\CMakeLists.txt
-            ) else (
-              del deps\nanogui\CMakeLists.txt
-            )
-          )
-          del deps\nanogui\CMakeLists.txt.dummy
-        )
-        
-        if exist deps\glm\CMakeLists.txt.dummy (
-          echo Removing dummy glm CMakeLists.txt...
-          if exist deps\glm\CMakeLists.txt (
-            if exist deps\glm\CMakeLists.txt.real (
-              move /y deps\glm\CMakeLists.txt.real deps\glm\CMakeLists.txt
-            ) else (
-              del deps\glm\CMakeLists.txt
-            )
-          )
-          del deps\glm\CMakeLists.txt.dummy
-        )
-        
     - name: Patch CMakeLists.txt
       shell: powershell
       run: |
-        # Simple patch to disable SuiteSparse requirement
         $content = Get-Content CMakeLists.txt -Raw
         
-        $replacement = "# find_package(SuiteSparse REQUIRED) - disabled`n" +
+        $replacement = "# find_package(SuiteSparse REQUIRED) - disabled for CI`n" +
         "set(SUITESPARSE_FOUND TRUE)`n" +
         'set(SUITESPARSE_INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/../suitesparse/install/include/suitesparse")' + "`n" +
         'set(SUITESPARSE_LIBRARIES "${CMAKE_CURRENT_SOURCE_DIR}/../suitesparse/install/lib/cholmod.lib;${CMAKE_CURRENT_SOURCE_DIR}/../suitesparse/install/lib/amd.lib;${CMAKE_CURRENT_SOURCE_DIR}/../suitesparse/install/lib/colamd.lib;${CMAKE_CURRENT_SOURCE_DIR}/../suitesparse/install/lib/suitesparseconfig.lib")' + "`n" +
@@ -114,42 +95,62 @@ jobs:
         Set-Content CMakeLists.txt $content -Encoding ASCII
         Write-Host "CMakeLists.txt patched"
         
-    - name: Configure
+    - name: Configure with debug
       shell: cmd
       run: |
+        echo Configuring BFF...
         if exist build rd /s /q build
         mkdir build
         cd build
         
-        rem Try to configure with OpenGL disabled if nanogui needs it
-        cmake .. -G "Visual Studio 17 2022" -A x64 ^
-          -DCMAKE_BUILD_TYPE=Release ^
-          -DNANOGUI_BUILD_EXAMPLE=OFF ^
-          -DNANOGUI_BUILD_SHARED=OFF ^
-          -DNANOGUI_BUILD_PYTHON=OFF
+        rem Try different configurations
+        echo "=== Trying configuration 1: Default ==="
+        cmake .. -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release --trace-expand 2>&1 | head -100
         
-    - name: Build
+    - name: List CMake targets
       shell: cmd
       run: |
+        echo "=== Listing CMake targets ==="
+        cd build
+        cmake --build . --config Release --target help 2>&1 | findstr /i "bff\|command\|viewer" || echo "No relevant targets found"
+        
+    - name: Try to build all targets
+      shell: cmd
+      run: |
+        echo "=== Building all targets ==="
+        cd build
+        cmake --build . --config Release --verbose 2>&1 | tail -100
+        
+    - name: Check build output
+      shell: cmd
+      run: |
+        echo "=== Checking build output ==="
+        if exist build (
+          cd build
+          echo "Release directory contents:"
+          dir Release 2>nul || echo "No Release directory"
+          echo.
+          echo "All files in build directory:"
+          dir /s /b 2>nul | head -50
+        )
+        
+    - name: Try specific target names
+      shell: cmd
+      run: |
+        echo "=== Trying specific target names ==="
         cd build
         
-        rem Try to build specific target first
-        cmake --build . --config Release --target bff-command-line || (
-          echo "Building bff-command-line failed, trying all targets..."
-          cmake --build . --config Release
+        rem Try common target names
+        for %%t in (bff-command-line bff_command_line bff.command.line bff bff-viewer bff_viewer bff.viewer) do (
+          echo Trying target: %%t
+          cmake --build . --config Release --target %%t 2>&1 | findstr /i "error\|warning\|Building" && echo "Target %%t attempted" || echo "Target %%t not found"
         )
         
-        if exist Release\*.exe (
-          echo Success! Executables:
-          dir Release\*.exe
-        ) else (
-          echo No executables in Release
-          echo Looking for any executables...
-          dir /s *.exe 2>nul || echo No executables found
-        )
-        
-    - name: Upload
+    - name: Upload any found executables
       uses: actions/upload-artifact@v4
       with:
-        name: bff-binaries
-        path: build/Release/*.exe
+        name: bff-build-output
+        path: |
+          build/
+          suitesparse/
+        retention-days: 7
