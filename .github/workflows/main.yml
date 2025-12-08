@@ -38,20 +38,19 @@ jobs:
         & "$env:VCPKG_ROOT\bootstrap-vcpkg.bat"
         
         # Install required dependencies
-        & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET `
-          eigen3 `
-          libigl `
-          suitesparse `
-          metis `
-          glfw3 `
-          glew `
-          libpng `
-          zlib
+        & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET eigen3
+        & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET libigl
+        & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET suitesparse
+        & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET metis
+        & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET glfw3
+        & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET glew
+        & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET libpng
+        & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET zlib
         
         # Integrate vcpkg with MSBuild
         & "$env:VCPKG_ROOT\vcpkg.exe" integrate install
 
-    - name: Install SuiteSparse-METIS for Windows (legacy support)
+    - name: Install SuiteSparse-METIS for Windows
       shell: powershell
       run: |
         # Create directories for SuiteSparse
@@ -75,17 +74,16 @@ jobs:
         echo "C:\SuiteSparse\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
         
         # Set environment variables for MSBuild
-        echo "SUITESPARSE_INCLUDE_DIR=C:\SuiteSparse\include" >> $env:GITHUB_ENV
-        echo "SUITESPARSE_LIB_DIR=C:\SuiteSparse\lib" >> $env:GITHUB_ENV
+        echo "SUITESPARSE_INCLUDE_DIR=C:\SuiteSparse\include" | Out-File -FilePath $env:GITHUB_ENV -Append
+        echo "SUITESPARSE_LIB_DIR=C:\SuiteSparse\lib" | Out-File -FilePath $env:GITHUB_ENV -Append
 
     - name: Install additional GUI dependencies
       shell: powershell
       run: |
         # Install OpenGL and GUI dependencies
-        & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET `
-          freeglut `
-          glm `
-          imgui[core,opengl3-binding,glfw-binding]
+        & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET freeglut
+        & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET glm
+        & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET imgui[core,opengl3-binding,glfw-binding]
         
         # Install build tools
         choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y
@@ -112,9 +110,6 @@ jobs:
       run: |
         # Build the project
         cmake --build build --config Release --target ALL_BUILD --parallel 4
-        
-        # Alternatively, use MSBuild directly
-        # msbuild build\BFF.sln /p:Configuration=Release /p:Platform=x64 /m
 
     - name: Package binaries
       shell: powershell
@@ -125,10 +120,7 @@ jobs:
         # Copy executables
         Copy-Item -Path "build\Release\*.exe" -Destination "dist\" -Force
         
-        # Copy required DLLs (using vcpkg to find dependencies)
-        & "$env:VCPKG_ROOT\vcpkg.exe" list
-        
-        # Common DLLs needed
+        # Copy required DLLs
         $dlls = @(
           "$env:VCPKG_ROOT\installed\$env:VCPKG_DEFAULT_TRIPLET\bin\*.dll",
           "C:\SuiteSparse\bin\*.dll"
@@ -140,8 +132,8 @@ jobs:
           }
         }
         
-        # Create README
-        @"
+        # Create README with proper here-string syntax
+        $readmeContent = @"
 Boundary First Flattening (BFF) for Windows
 ===========================================
 
@@ -162,7 +154,9 @@ Dependencies:
 - libigl
 - GLFW3
 - OpenGL
-"@ | Out-File -FilePath "dist\README.txt" -Encoding UTF8
+"@
+        
+        $readmeContent | Out-File -FilePath "dist\README.txt" -Encoding UTF8
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
@@ -171,16 +165,15 @@ Dependencies:
         path: |
           dist/
           build/Release/*.exe
-        retention-days: 7
 
-    - name: Create Release (on tag)
+    - name: Create Release on tag
       if: startsWith(github.ref, 'refs/tags/')
       shell: powershell
       run: |
         # Create zip archive
         Compress-Archive -Path "dist\*" -DestinationPath "BFF-Windows-x64.zip" -Force
         
-        # Upload to release (using gh CLI)
+        # Upload to release
         gh release upload ${{ github.ref_name }} BFF-Windows-x64.zip --clobber
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
