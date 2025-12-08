@@ -82,7 +82,7 @@ jobs:
     - name: Clone BFF repository
       shell: powershell
       run: |
-        # Clone the BFF repository if not already cloned
+        # Clone the BFF repository
         if (-not (Test-Path "bff-source")) {
           git clone https://github.com/GeometryCollective/boundary-first-flattening.git bff-source
           cd bff-source
@@ -96,51 +96,52 @@ jobs:
     - name: Create CMakeLists.txt for BFF
       shell: powershell
       run: |
-        # Create a simple CMakeLists.txt for BFF
-        $cmakeContent = @'
-cmake_minimum_required(VERSION 3.15)
-project(BFF)
-
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-
-# Find dependencies
-find_package(Eigen3 REQUIRED)
-find_package(SuiteSparse REQUIRED COMPONENTS CHOLMOD AMD CAMD COLAMD CCOLAMD)
-find_package(METIS REQUIRED)
-find_package(OpenGL REQUIRED)
-find_package(GLFW3 REQUIRED)
-find_package(GLEW REQUIRED)
-
-# Add source files
-file(GLOB_RECURSE BFF_SOURCES "lib/*.cpp" "gui/*.cpp")
-file(GLOB_RECURSE BFF_HEADERS "lib/*.h" "gui/*.h")
-
-# Add executable
-add_executable(bff-gui ${BFF_SOURCES} ${BFF_HEADERS})
-
-# Include directories
-target_include_directories(bff-gui PRIVATE
-    ${EIGEN3_INCLUDE_DIRS}
-    ${SUITESPARSE_INCLUDE_DIRS}
-    ${OPENGL_INCLUDE_DIRS}
-    ${GLFW3_INCLUDE_DIRS}
-    ${GLEW_INCLUDE_DIRS}
-    "lib"
-    "gui"
-)
-
-# Link libraries
-target_link_libraries(bff-gui
-    ${SUITESPARSE_LIBRARIES}
-    ${METIS_LIBRARIES}
-    ${OPENGL_LIBRARIES}
-    ${GLFW3_LIBRARIES}
-    ${GLEW_LIBRARIES}
-)
-'@
+        # Create CMakeLists.txt using Echo command to avoid YAML conflicts
+        $lines = @(
+          "cmake_minimum_required(VERSION 3.15)",
+          "project(BFF)",
+          "",
+          "set(CMAKE_CXX_STANDARD 17)",
+          "set(CMAKE_CXX_STANDARD_REQUIRED ON)",
+          "",
+          "# Find dependencies",
+          "find_package(Eigen3 REQUIRED)",
+          "find_package(SuiteSparse REQUIRED COMPONENTS CHOLMOD AMD CAMD COLAMD CCOLAMD)",
+          "find_package(METIS REQUIRED)",
+          "find_package(OpenGL REQUIRED)",
+          "find_package(GLFW3 REQUIRED)",
+          "find_package(GLEW REQUIRED)",
+          "",
+          "# Add source files",
+          "file(GLOB_RECURSE BFF_SOURCES `"lib/*.cpp`" `"gui/*.cpp`")",
+          "file(GLOB_RECURSE BFF_HEADERS `"lib/*.h`" `"gui/*.h`")",
+          "",
+          "# Add executable",
+          "add_executable(bff-gui `${BFF_SOURCES} `${BFF_HEADERS})",
+          "",
+          "# Include directories",
+          "target_include_directories(bff-gui PRIVATE",
+          "    `${EIGEN3_INCLUDE_DIRS}",
+          "    `${SUITESPARSE_INCLUDE_DIRS}",
+          "    `${OPENGL_INCLUDE_DIRS}",
+          "    `${GLFW3_INCLUDE_DIRS}",
+          "    `${GLEW_INCLUDE_DIRS}",
+          "    `"lib`"",
+          "    `"gui`"",
+          ")",
+          "",
+          "# Link libraries",
+          "target_link_libraries(bff-gui",
+          "    `${SUITESPARSE_LIBRARIES}",
+          "    `${METIS_LIBRARIES}",
+          "    `${OPENGL_LIBRARIES}",
+          "    `${GLFW3_LIBRARIES}",
+          "    `${GLEW_LIBRARIES}",
+          ")"
+        )
         
-        $cmakeContent | Out-File -FilePath "CMakeLists.txt" -Encoding UTF8
+        # Write to file
+        $lines | Out-File -FilePath "CMakeLists.txt" -Encoding UTF8
 
     - name: Configure CMake
       shell: powershell
@@ -173,6 +174,11 @@ target_link_libraries(bff-gui
         # Find all executables
         $exes = Get-ChildItem -Path "build" -Filter "*.exe" -Recurse | Where-Object { $_.Directory.Name -eq "Release" }
         
+        if ($exes.Count -eq 0) {
+          Write-Host "No executables found in build/Release, searching in entire build directory..."
+          $exes = Get-ChildItem -Path "build" -Filter "*.exe" -Recurse
+        }
+        
         foreach ($exe in $exes) {
           Write-Host "Found executable: $($exe.FullName)"
           Copy-Item -Path $exe.FullName -Destination "dist\" -Force
@@ -189,6 +195,10 @@ target_link_libraries(bff-gui
         if (Test-Path $suiteSparseBinPath) {
           Copy-Item -Path "$suiteSparseBinPath\*.dll" -Destination "dist\" -Force
         }
+        
+        # List files in dist for debugging
+        Write-Host "Files in dist directory:"
+        Get-ChildItem -Path "dist"
 
     - name: Create README
       shell: powershell
@@ -213,7 +223,5 @@ target_link_libraries(bff-gui
       if: startsWith(github.ref, 'refs/tags/')
       uses: softprops/action-gh-release@v1
       with:
-        files: |
-          dist/*.exe
-          dist/README.txt
+        files: dist/**
         generate_release_notes: true
