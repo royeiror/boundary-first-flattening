@@ -132,31 +132,26 @@ jobs:
           }
         }
         
-        # Create README with proper here-string syntax
-        $readmeContent = @"
-Boundary First Flattening (BFF) for Windows
-===========================================
-
-Build Date: $(Get-Date -Format 'yyyy-MM-dd')
-Platform: Windows x64
-
-Includes:
-- BFF GUI Application
-- Required runtime libraries
-
-Usage:
-1. Run 'bff-gui.exe' for the graphical interface
-2. Or use command-line tools as needed
-
-Dependencies:
-- SuiteSparse with METIS
-- Eigen3
-- libigl
-- GLFW3
-- OpenGL
-"@
+        # Create README without here-string to avoid YAML conflicts
+        $date = Get-Date -Format 'yyyy-MM-dd'
+        $readmeText = "Boundary First Flattening (BFF) for Windows`r`n"
+        $readmeText += "===========================================`r`n`r`n"
+        $readmeText += "Build Date: $date`r`n"
+        $readmeText += "Platform: Windows x64`r`n`r`n"
+        $readmeText += "Includes:`r`n"
+        $readmeText += "- BFF GUI Application`r`n"
+        $readmeText += "- Required runtime libraries`r`n`r`n"
+        $readmeText += "Usage:`r`n"
+        $readmeText += "1. Run 'bff-gui.exe' for the graphical interface`r`n"
+        $readmeText += "2. Or use command-line tools as needed`r`n`r`n"
+        $readmeText += "Dependencies:`r`n"
+        $readmeText += "- SuiteSparse with METIS`r`n"
+        $readmeText += "- Eigen3`r`n"
+        $readmeText += "- libigl`r`n"
+        $readmeText += "- GLFW3`r`n"
+        $readmeText += "- OpenGL`r`n"
         
-        $readmeContent | Out-File -FilePath "dist\README.txt" -Encoding UTF8
+        $readmeText | Out-File -FilePath "dist\README.txt" -Encoding UTF8
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
