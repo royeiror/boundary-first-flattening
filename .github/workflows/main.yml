@@ -66,27 +66,34 @@ jobs:
         
         echo Dummy SuiteSparse created
         
-    - name: Check dependencies
+    - name: Clean up dummy dependency files
       shell: cmd
       run: |
-        echo Checking dependencies...
+        echo Cleaning up any leftover dummy files...
         
-        if not exist deps\nanogui (
-          echo Creating dummy nanogui...
-          mkdir deps\nanogui
-          echo project(nanogui) > deps\nanogui\CMakeLists.txt
-          echo add_library(nanogui INTERFACE) >> deps\nanogui\CMakeLists.txt
-          echo target_include_directories(nanogui INTERFACE .) >> deps\nanogui\CMakeLists.txt
-          echo // Dummy nanogui > deps\nanogui\nanogui.h
+        rem Remove our dummy CMakeLists.txt files if they exist
+        if exist deps\nanogui\CMakeLists.txt.dummy (
+          echo Removing dummy nanogui CMakeLists.txt...
+          if exist deps\nanogui\CMakeLists.txt (
+            if exist deps\nanogui\CMakeLists.txt.real (
+              move /y deps\nanogui\CMakeLists.txt.real deps\nanogui\CMakeLists.txt
+            ) else (
+              del deps\nanogui\CMakeLists.txt
+            )
+          )
+          del deps\nanogui\CMakeLists.txt.dummy
         )
         
-        if not exist deps\glm (
-          echo Creating dummy glm...
-          mkdir deps\glm
-          echo project(glm) > deps\glm\CMakeLists.txt
-          echo add_library(glm INTERFACE) >> deps\glm\CMakeLists.txt
-          echo target_include_directories(glm INTERFACE .) >> deps\glm\CMakeLists.txt
-          echo // Dummy glm > deps\glm\glm.hpp
+        if exist deps\glm\CMakeLists.txt.dummy (
+          echo Removing dummy glm CMakeLists.txt...
+          if exist deps\glm\CMakeLists.txt (
+            if exist deps\glm\CMakeLists.txt.real (
+              move /y deps\glm\CMakeLists.txt.real deps\glm\CMakeLists.txt
+            ) else (
+              del deps\glm\CMakeLists.txt
+            )
+          )
+          del deps\glm\CMakeLists.txt.dummy
         )
         
     - name: Patch CMakeLists.txt
@@ -113,13 +120,24 @@ jobs:
         if exist build rd /s /q build
         mkdir build
         cd build
-        cmake .. -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release
+        
+        rem Try to configure with OpenGL disabled if nanogui needs it
+        cmake .. -G "Visual Studio 17 2022" -A x64 ^
+          -DCMAKE_BUILD_TYPE=Release ^
+          -DNANOGUI_BUILD_EXAMPLE=OFF ^
+          -DNANOGUI_BUILD_SHARED=OFF ^
+          -DNANOGUI_BUILD_PYTHON=OFF
         
     - name: Build
       shell: cmd
       run: |
         cd build
-        cmake --build . --config Release
+        
+        rem Try to build specific target first
+        cmake --build . --config Release --target bff-command-line || (
+          echo "Building bff-command-line failed, trying all targets..."
+          cmake --build . --config Release
+        )
         
         if exist Release\*.exe (
           echo Success! Executables:
