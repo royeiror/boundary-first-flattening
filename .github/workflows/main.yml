@@ -58,23 +58,23 @@ jobs:
     - name: Download and install SuiteSparse-METIS
       shell: powershell
       run: |
-        # Download SuiteSparse-METIS from the correct URL
-        # Based on the repository: https://github.com/jlblancoc/suitesparse-metis-for-windows
-        # Looking at the releases, let's try a different approach
+        # Download SuiteSparse-METIS
         $url = "https://github.com/jlblancoc/suitesparse-metis-for-windows/archive/master.zip"
         $output = "C:\suitesparse-metis.zip"
         
         Write-Host "Downloading SuiteSparse-METIS from $url"
         Invoke-WebRequest -Uri $url -OutFile $output
         
-        # Create directory
+        # Create directories
         New-Item -ItemType Directory -Force -Path "C:\SuiteSparse"
+        New-Item -ItemType Directory -Force -Path "C:\SuiteSparse\include"
+        New-Item -ItemType Directory -Force -Path "C:\SuiteSparse\lib"
+        New-Item -ItemType Directory -Force -Path "C:\SuiteSparse\bin"
         
         # Extract
         Expand-Archive -Path $output -DestinationPath "C:\SuiteSparseTemp\" -Force
         
         # Find the actual library files
-        # The structure might be different, so let's search for files
         $libDir = Get-ChildItem -Path "C:\SuiteSparseTemp" -Recurse -Directory | Where-Object { $_.Name -eq "lib" } | Select-Object -First 1
         $includeDir = Get-ChildItem -Path "C:\SuiteSparseTemp" -Recurse -Directory | Where-Object { $_.Name -eq "include" } | Select-Object -First 1
         
@@ -82,36 +82,36 @@ jobs:
           Write-Host "Found lib directory: $($libDir.FullName)"
           Write-Host "Found include directory: $($includeDir.FullName)"
           
-          # Copy files
+          # Copy files with proper paths
           Copy-Item -Path "$($includeDir.FullName)\*" -Destination "C:\SuiteSparse\include\" -Recurse -Force
           Copy-Item -Path "$($libDir.FullName)\*" -Destination "C:\SuiteSparse\lib\" -Recurse -Force
-        } else {
-          Write-Host "Could not find lib/include directories, checking for pre-built binaries..."
-          
-          # Look for .lib and .dll files
-          $libFiles = Get-ChildItem -Path "C:\SuiteSparseTemp" -Recurse -Filter "*.lib"
-          $dllFiles = Get-ChildItem -Path "C:\SuiteSparseTemp" -Recurse -Filter "*.dll"
-          $hFiles = Get-ChildItem -Path "C:\SuiteSparseTemp" -Recurse -Filter "*.h"
-          
-          if ($libFiles.Count -gt 0) {
-            foreach ($file in $libFiles) {
-              Copy-Item -Path $file.FullName -Destination "C:\SuiteSparse\lib\" -Force
-            }
-          }
-          
-          if ($dllFiles.Count -gt 0) {
-            foreach ($file in $dllFiles) {
-              Copy-Item -Path $file.FullName -Destination "C:\SuiteSparse\bin\" -Force
-            }
-          }
-          
-          if ($hFiles.Count -gt 0) {
-            foreach ($file in $hFiles) {
-              $destDir = "C:\SuiteSparse\include\" + $file.Directory.Name
-              New-Item -ItemType Directory -Force -Path $destDir
-              Copy-Item -Path $file.FullName -Destination $destDir -Force
-            }
-          }
+        }
+        
+        # Look for .lib, .dll, and .h files in the entire extracted directory
+        Write-Host "Searching for library files..."
+        
+        # Copy all .lib files
+        $libFiles = Get-ChildItem -Path "C:\SuiteSparseTemp" -Recurse -Filter "*.lib"
+        foreach ($file in $libFiles) {
+          Copy-Item -Path $file.FullName -Destination "C:\SuiteSparse\lib\" -Force
+          Write-Host "Copied lib: $($file.Name)"
+        }
+        
+        # Copy all .dll files
+        $dllFiles = Get-ChildItem -Path "C:\SuiteSparseTemp" -Recurse -Filter "*.dll"
+        foreach ($file in $dllFiles) {
+          Copy-Item -Path $file.FullName -Destination "C:\SuiteSparse\bin\" -Force
+          Write-Host "Copied dll: $($file.Name)"
+        }
+        
+        # Copy all .h files
+        $hFiles = Get-ChildItem -Path "C:\SuiteSparseTemp" -Recurse -Filter "*.h"
+        foreach ($file in $hFiles) {
+          # Create subdirectory structure if needed
+          $relativePath = $file.FullName.Substring("C:\SuiteSparseTemp\".Length)
+          $destPath = "C:\SuiteSparse\include\" + (Split-Path $relativePath -Parent)
+          New-Item -ItemType Directory -Force -Path $destPath | Out-Null
+          Copy-Item -Path $file.FullName -Destination $destPath -Force
         }
         
         # Set environment variables
@@ -120,9 +120,7 @@ jobs:
         
         # Add to PATH
         echo "C:\SuiteSparse\lib" | Out-File -FilePath $env:GITHUB_PATH -Append
-        if (Test-Path "C:\SuiteSparse\bin") {
-          echo "C:\SuiteSparse\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
-        }
+        echo "C:\SuiteSparse\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
 
     - name: Clone BFF repository
       shell: powershell
@@ -143,17 +141,21 @@ jobs:
       run: |
         # Check what files are in the BFF repository
         Write-Host "BFF directory structure:"
-        Get-ChildItem -Recurse | Select-Object -First 20
+        Get-ChildItem | Select-Object Name, Mode
         
         Write-Host "`nChecking for source files:"
         if (Test-Path "lib") {
           Write-Host "lib directory exists"
-          Get-ChildItem -Path "lib" -Filter "*.cpp" | Select-Object -First 5
+          Get-ChildItem -Path "lib" -Filter "*.cpp" | Select-Object Name
+        } else {
+          Write-Host "lib directory does not exist"
         }
         
         if (Test-Path "gui") {
           Write-Host "gui directory exists"
-          Get-ChildItem -Path "gui" -Filter "*.cpp" | Select-Object -First 5
+          Get-ChildItem -Path "gui" -Filter "*.cpp" | Select-Object Name
+        } else {
+          Write-Host "gui directory does not exist"
         }
 
     - name: Create CMakeLists.txt for BFF
@@ -173,7 +175,7 @@ jobs:
           "find_package(GLFW3 REQUIRED)",
           "find_package(GLEW REQUIRED)",
           "",
-          "# Manually set SuiteSparse paths since find_package might not work",
+          "# Manually set SuiteSparse paths",
           "set(SUITESPARSE_INCLUDE_DIR `"C:/SuiteSparse/include`")",
           "set(SUITESPARSE_LIB_DIR `"C:/SuiteSparse/lib`")",
           "",
@@ -190,12 +192,18 @@ jobs:
           "file(GLOB_RECURSE BFF_HEADERS `"lib/*.h`")",
           "",
           "# Check for GUI files",
-          "file(GLOB_RECURSE GUI_SOURCES `"gui/*.cpp`")",
-          "file(GLOB_RECURSE GUI_HEADERS `"gui/*.h`")",
+          "if(EXISTS `${CMAKE_CURRENT_SOURCE_DIR}/gui)",
+          "    file(GLOB_RECURSE GUI_SOURCES `"gui/*.cpp`")",
+          "    file(GLOB_RECURSE GUI_HEADERS `"gui/*.h`")",
+          "endif()",
           "",
           "# Combine sources",
-          "set(ALL_SOURCES `${BFF_SOURCES} `${GUI_SOURCES})",
-          "set(ALL_HEADERS `${BFF_HEADERS} `${GUI_HEADERS})",
+          "set(ALL_SOURCES `${BFF_SOURCES})",
+          "set(ALL_HEADERS `${BFF_HEADERS})",
+          "if(GUI_SOURCES)",
+          "    list(APPEND ALL_SOURCES `${GUI_SOURCES})",
+          "    list(APPEND ALL_HEADERS `${GUI_HEADERS})",
+          "endif()",
           "",
           "# Add executable",
           "add_executable(bff-gui `${ALL_SOURCES} `${ALL_HEADERS})",
@@ -207,9 +215,13 @@ jobs:
           "    `${OPENGL_INCLUDE_DIRS}",
           "    `${GLFW3_INCLUDE_DIRS}",
           "    `${GLEW_INCLUDE_DIRS}",
-          "    `"lib`"",
-          "    `"gui`"",
+          "    `${CMAKE_CURRENT_SOURCE_DIR}/lib",
           ")",
+          "",
+          "# Add GUI include if it exists",
+          "if(EXISTS `${CMAKE_CURRENT_SOURCE_DIR}/gui)",
+          "    target_include_directories(bff-gui PRIVATE `${CMAKE_CURRENT_SOURCE_DIR}/gui)",
+          "endif()",
           "",
           "# Link libraries",
           "target_link_libraries(bff-gui",
@@ -235,8 +247,9 @@ jobs:
         New-Item -ItemType Directory -Force -Path "build"
         
         Write-Host "Configuring CMake..."
-        Write-Host "VCPKG_ROOT: $env:VCPKG_ROOT"
-        Write-Host "SuiteSparse include dir: C:\SuiteSparse\include"
+        Write-Host "Current directory: $(Get-Location)"
+        Write-Host "Files in current directory:"
+        Get-ChildItem
         
         # Configure with CMake
         cmake -B build `
@@ -260,7 +273,7 @@ jobs:
         
         Write-Host "Searching for executables..."
         
-        # Search for executables in various locations
+        # Search for executables
         $searchPaths = @(
           "build\Release",
           "build",
@@ -295,6 +308,10 @@ jobs:
             }
           }
         }
+        
+        # List what we have in dist
+        Write-Host "`nFiles in dist directory:"
+        Get-ChildItem -Path "dist"
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
