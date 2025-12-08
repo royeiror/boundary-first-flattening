@@ -5,9 +5,6 @@ on:
     branches: [ main, master ]
   workflow_dispatch:
 
-env:
-  BUILD_TYPE: Release
-
 jobs:
   build:
     runs-on: windows-latest
@@ -67,6 +64,8 @@ jobs:
         "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\lib.exe" /DEF:colamd.def /OUT:colamd.lib /MACHINE:X64
         "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\lib.exe" /DEF:cholmod.def /OUT:cholmod.lib /MACHINE:X64
         
+        echo Dummy SuiteSparse created
+        
     - name: Check dependencies
       shell: cmd
       run: |
@@ -95,15 +94,16 @@ jobs:
       run: |
         # Simple patch to disable SuiteSparse requirement
         $content = Get-Content CMakeLists.txt -Raw
-        $content = $content -replace 'find_package\(SuiteSparse REQUIRED\)', @'
-# find_package(SuiteSparse REQUIRED) - disabled
-set(SUITESPARSE_FOUND TRUE)
-set(SUITESPARSE_INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/../suitesparse/install/include/suitesparse")
-set(SUITESPARSE_LIBRARIES "${CMAKE_CURRENT_SOURCE_DIR}/../suitesparse/install/lib/cholmod.lib;${CMAKE_CURRENT_SOURCE_DIR}/../suitesparse/install/lib/amd.lib;${CMAKE_CURRENT_SOURCE_DIR}/../suitesparse/install/lib/colamd.lib;${CMAKE_CURRENT_SOURCE_DIR}/../suitesparse/install/lib/suitesparseconfig.lib")
-set(CHOLMOD_FOUND TRUE)
-set(CHOLMOD_LIBRARIES "${CMAKE_CURRENT_SOURCE_DIR}/../suitesparse/install/lib/cholmod.lib")
-set(CHOLMOD_INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/../suitesparse/install/include/suitesparse")
-'@
+        
+        $replacement = "# find_package(SuiteSparse REQUIRED) - disabled`n" +
+        "set(SUITESPARSE_FOUND TRUE)`n" +
+        'set(SUITESPARSE_INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/../suitesparse/install/include/suitesparse")' + "`n" +
+        'set(SUITESPARSE_LIBRARIES "${CMAKE_CURRENT_SOURCE_DIR}/../suitesparse/install/lib/cholmod.lib;${CMAKE_CURRENT_SOURCE_DIR}/../suitesparse/install/lib/amd.lib;${CMAKE_CURRENT_SOURCE_DIR}/../suitesparse/install/lib/colamd.lib;${CMAKE_CURRENT_SOURCE_DIR}/../suitesparse/install/lib/suitesparseconfig.lib")' + "`n" +
+        'set(CHOLMOD_FOUND TRUE)' + "`n" +
+        'set(CHOLMOD_LIBRARIES "${CMAKE_CURRENT_SOURCE_DIR}/../suitesparse/install/lib/cholmod.lib")' + "`n" +
+        'set(CHOLMOD_INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/../suitesparse/install/include/suitesparse")'
+        
+        $content = $content -replace 'find_package\(SuiteSparse REQUIRED\)', $replacement
         Set-Content CMakeLists.txt $content -Encoding ASCII
         Write-Host "CMakeLists.txt patched"
         
@@ -126,6 +126,8 @@ set(CHOLMOD_INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/../suitesparse/install/inc
           dir Release\*.exe
         ) else (
           echo No executables in Release
+          echo Looking for any executables...
+          dir /s *.exe 2>nul || echo No executables found
         )
         
     - name: Upload
