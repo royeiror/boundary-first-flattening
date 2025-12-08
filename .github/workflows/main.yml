@@ -74,20 +74,7 @@ jobs:
         # Extract
         Expand-Archive -Path $output -DestinationPath "C:\SuiteSparseTemp\" -Force
         
-        # Find the actual library files
-        $libDir = Get-ChildItem -Path "C:\SuiteSparseTemp" -Recurse -Directory | Where-Object { $_.Name -eq "lib" } | Select-Object -First 1
-        $includeDir = Get-ChildItem -Path "C:\SuiteSparseTemp" -Recurse -Directory | Where-Object { $_.Name -eq "include" } | Select-Object -First 1
-        
-        if ($libDir -and $includeDir) {
-          Write-Host "Found lib directory: $($libDir.FullName)"
-          Write-Host "Found include directory: $($includeDir.FullName)"
-          
-          # Copy files with proper paths
-          Copy-Item -Path "$($includeDir.FullName)\*" -Destination "C:\SuiteSparse\include\" -Recurse -Force
-          Copy-Item -Path "$($libDir.FullName)\*" -Destination "C:\SuiteSparse\lib\" -Recurse -Force
-        }
-        
-        # Look for .lib, .dll, and .h files in the entire extracted directory
+        # Find and copy files
         Write-Host "Searching for library files..."
         
         # Copy all .lib files
@@ -107,11 +94,8 @@ jobs:
         # Copy all .h files
         $hFiles = Get-ChildItem -Path "C:\SuiteSparseTemp" -Recurse -Filter "*.h"
         foreach ($file in $hFiles) {
-          # Create subdirectory structure if needed
-          $relativePath = $file.FullName.Substring("C:\SuiteSparseTemp\".Length)
-          $destPath = "C:\SuiteSparse\include\" + (Split-Path $relativePath -Parent)
-          New-Item -ItemType Directory -Force -Path $destPath | Out-Null
-          Copy-Item -Path $file.FullName -Destination $destPath -Force
+          # Copy to include directory
+          Copy-Item -Path $file.FullName -Destination "C:\SuiteSparse\include\" -Force
         }
         
         # Set environment variables
@@ -122,46 +106,30 @@ jobs:
         echo "C:\SuiteSparse\lib" | Out-File -FilePath $env:GITHUB_PATH -Append
         echo "C:\SuiteSparse\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
 
-    - name: Clone BFF repository
+    - name: Check what vcpkg actually installed
       shell: powershell
       run: |
-        # Clone the BFF repository
-        if (-not (Test-Path "bff-source")) {
-          git clone --recursive https://github.com/GeometryCollective/boundary-first-flattening.git bff-source
-          cd bff-source
-          git checkout v1.6
-          cd ..
-        }
+        Write-Host "Checking vcpkg installed packages:"
+        & "$env:VCPKG_ROOT\vcpkg.exe" list
         
-        # Copy to workspace
-        Copy-Item -Path "bff-source\*" -Destination "." -Recurse -Force
-
-    - name: Check BFF structure
-      shell: powershell
-      run: |
-        # Check what files are in the BFF repository
-        Write-Host "BFF directory structure:"
-        Get-ChildItem | Select-Object Name, Mode
-        
-        Write-Host "`nChecking for source files:"
-        if (Test-Path "lib") {
-          Write-Host "lib directory exists"
-          Get-ChildItem -Path "lib" -Filter "*.cpp" | Select-Object Name
-        } else {
-          Write-Host "lib directory does not exist"
-        }
-        
-        if (Test-Path "gui") {
-          Write-Host "gui directory exists"
-          Get-ChildItem -Path "gui" -Filter "*.cpp" | Select-Object Name
-        } else {
-          Write-Host "gui directory does not exist"
+        Write-Host "`nChecking GLFW installation:"
+        $glfwPath = "$env:VCPKG_ROOT\installed\$env:VCPKG_DEFAULT_TRIPLET"
+        if (Test-Path $glfwPath) {
+          Write-Host "Contents of vcpkg install directory:"
+          Get-ChildItem -Path $glfwPath -Name
+          
+          Write-Host "`nChecking for GLFW files:"
+          Get-ChildItem -Path "$glfwPath\*" -Filter "*glfw*" -Recurse | Select-Object -First 10
         }
 
     - name: Create CMakeLists.txt for BFF
       shell: powershell
       run: |
-        # Create CMakeLists.txt using array approach
+        # First check the original BFF CMakeLists.txt
+        Write-Host "Original BFF CMakeLists.txt content:"
+        Get-Content CMakeLists.txt | Select-Object -First 30
+        
+        # Based on the original BFF structure, create a simpler CMakeLists.txt
         $cmakeLines = @(
           "cmake_minimum_required(VERSION 3.15)",
           "project(BFF)",
@@ -169,11 +137,11 @@ jobs:
           "set(CMAKE_CXX_STANDARD 17)",
           "set(CMAKE_CXX_STANDARD_REQUIRED ON)",
           "",
-          "# Find dependencies",
+          "# Use vcpkg toolchain",
+          "set(CMAKE_TOOLCHAIN_FILE `"$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake`" CACHE STRING `"`")",
+          "",
+          "# Find Eigen3",
           "find_package(Eigen3 REQUIRED)",
-          "find_package(OpenGL REQUIRED)",
-          "find_package(GLFW3 REQUIRED)",
-          "find_package(GLEW REQUIRED)",
           "",
           "# Manually set SuiteSparse paths",
           "set(SUITESPARSE_INCLUDE_DIR `"C:/SuiteSparse/include`")",
@@ -187,58 +155,84 @@ jobs:
           "find_library(CCOLAMD_LIBRARY NAMES ccolamd libccolamd PATHS `${SUITESPARSE_LIB_DIR})",
           "find_library(METIS_LIBRARY NAMES metis libmetis PATHS `${SUITESPARSE_LIB_DIR})",
           "",
-          "# Add source files",
-          "file(GLOB_RECURSE BFF_SOURCES `"lib/*.cpp`")",
-          "file(GLOB_RECURSE BFF_HEADERS `"lib/*.h`")",
-          "",
-          "# Check for GUI files",
-          "if(EXISTS `${CMAKE_CURRENT_SOURCE_DIR}/gui)",
-          "    file(GLOB_RECURSE GUI_SOURCES `"gui/*.cpp`")",
-          "    file(GLOB_RECURSE GUI_HEADERS `"gui/*.h`")",
-          "endif()",
-          "",
-          "# Combine sources",
-          "set(ALL_SOURCES `${BFF_SOURCES})",
-          "set(ALL_HEADERS `${BFF_HEADERS})",
-          "if(GUI_SOURCES)",
-          "    list(APPEND ALL_SOURCES `${GUI_SOURCES})",
-          "    list(APPEND ALL_HEADERS `${GUI_HEADERS})",
-          "endif()",
-          "",
-          "# Add executable",
-          "add_executable(bff-gui `${ALL_SOURCES} `${ALL_HEADERS})",
+          "# OpenGL and GLFW - use find_package for GLFW instead of GLFW3",
+          "find_package(OpenGL REQUIRED)",
+          "find_package(glfw3 REQUIRED)",
+          "find_package(GLEW REQUIRED)",
           "",
           "# Include directories",
-          "target_include_directories(bff-gui PRIVATE",
+          "include_directories(",
+          "    `${CMAKE_SOURCE_DIR}/include",
+          "    `${CMAKE_SOURCE_DIR}/deps/libigl/include",
+          "    `${CMAKE_SOURCE_DIR}/deps/spectra/include",
           "    `${EIGEN3_INCLUDE_DIRS}",
           "    `${SUITESPARSE_INCLUDE_DIR}",
-          "    `${OPENGL_INCLUDE_DIRS}",
-          "    `${GLFW3_INCLUDE_DIRS}",
-          "    `${GLEW_INCLUDE_DIRS}",
-          "    `${CMAKE_CURRENT_SOURCE_DIR}/lib",
           ")",
           "",
-          "# Add GUI include if it exists",
-          "if(EXISTS `${CMAKE_CURRENT_SOURCE_DIR}/gui)",
-          "    target_include_directories(bff-gui PRIVATE `${CMAKE_CURRENT_SOURCE_DIR}/gui)",
-          "endif()",
+          "# Source files for library",
+          "file(GLOB SRC_FILES `"src/*.cpp`")",
           "",
-          "# Link libraries",
-          "target_link_libraries(bff-gui",
+          "# Create library",
+          "add_library(bff-lib STATIC `${SRC_FILES})",
+          "",
+          "# Link libraries to bff-lib",
+          "target_link_libraries(bff-lib",
           "    `${CHOLMOD_LIBRARY}",
           "    `${AMD_LIBRARY}",
           "    `${CAMD_LIBRARY}",
           "    `${COLAMD_LIBRARY}",
           "    `${CCOLAMD_LIBRARY}",
           "    `${METIS_LIBRARY}",
-          "    `${OPENGL_LIBRARIES}",
-          "    `${GLFW3_LIBRARIES}",
-          "    `${GLEW_LIBRARIES}",
-          ")"
+          ")",
+          "",
+          "# GUI application",
+          "if(EXISTS `${CMAKE_SOURCE_DIR}/apps)",
+          "    file(GLOB GUI_SRC_FILES `"apps/*.cpp`")",
+          "    if(GUI_SRC_FILES)",
+          "        add_executable(bff-gui `${GUI_SRC_FILES})",
+          "        target_link_libraries(bff-gui bff-lib `${OPENGL_LIBRARIES} glfw GLEW::GLEW)",
+          "        target_include_directories(bff-gui PRIVATE `${CMAKE_SOURCE_DIR}/apps)",
+          "    endif()",
+          "endif()",
+          "",
+          "# Command line tool",
+          "if(EXISTS `${CMAKE_SOURCE_DIR}/binaries)",
+          "    file(GLOB CLI_SRC_FILES `"binaries/*.cpp`")",
+          "    if(CLI_SRC_FILES)",
+          "        add_executable(bff-cli `${CLI_SRC_FILES})",
+          "        target_link_libraries(bff-cli bff-lib)",
+          "        target_include_directories(bff-cli PRIVATE `${CMAKE_SOURCE_DIR}/binaries)",
+          "    endif()",
+          "endif()"
         )
         
         # Write to file
-        $cmakeLines | Out-File -FilePath "CMakeLists.txt" -Encoding UTF8
+        $cmakeLines | Out-File -FilePath "CMakeLists.txt" -Encoding UTF8 -Force
+
+    - name: Check BFF source structure
+      shell: powershell
+      run: |
+        Write-Host "BFF source structure:"
+        Write-Host "`napps directory:"
+        if (Test-Path "apps") {
+          Get-ChildItem -Path "apps" -Recurse -Filter "*.cpp" | Select-Object Name
+        } else {
+          Write-Host "apps directory not found"
+        }
+        
+        Write-Host "`nbinaries directory:"
+        if (Test-Path "binaries") {
+          Get-ChildItem -Path "binaries" -Recurse -Filter "*.cpp" | Select-Object Name
+        } else {
+          Write-Host "binaries directory not found"
+        }
+        
+        Write-Host "`nsrc directory:"
+        if (Test-Path "src") {
+          Get-ChildItem -Path "src" -Recurse -Filter "*.cpp" | Select-Object Name
+        } else {
+          Write-Host "src directory not found"
+        }
 
     - name: Configure CMake
       shell: powershell
@@ -247,11 +241,8 @@ jobs:
         New-Item -ItemType Directory -Force -Path "build"
         
         Write-Host "Configuring CMake..."
-        Write-Host "Current directory: $(Get-Location)"
-        Write-Host "Files in current directory:"
-        Get-ChildItem
         
-        # Configure with CMake
+        # Configure with CMake - use simpler approach
         cmake -B build `
           -DCMAKE_BUILD_TYPE=Release `
           -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
@@ -292,20 +283,23 @@ jobs:
           }
         }
         
-        # Copy DLLs
-        $dllSources = @(
-          "$env:VCPKG_ROOT\installed\$env:VCPKG_DEFAULT_TRIPLET\bin",
-          "C:\SuiteSparse\bin",
-          "C:\SuiteSparse\lib"
-        )
+        # Copy DLLs from vcpkg
+        $vcpkgBinPath = "$env:VCPKG_ROOT\installed\$env:VCPKG_DEFAULT_TRIPLET\bin"
+        if (Test-Path $vcpkgBinPath) {
+          Write-Host "Copying DLLs from $vcpkgBinPath"
+          Get-ChildItem -Path $vcpkgBinPath -Filter "*.dll" | ForEach-Object {
+            Copy-Item -Path $_.FullName -Destination "dist\" -Force
+            Write-Host "Copied: $($_.Name)"
+          }
+        }
         
-        foreach ($source in $dllSources) {
-          if (Test-Path $source) {
-            Write-Host "Copying DLLs from $source"
-            Get-ChildItem -Path $source -Filter "*.dll" | ForEach-Object {
-              Copy-Item -Path $_.FullName -Destination "dist\" -Force
-              Write-Host "Copied: $($_.Name)"
-            }
+        # Copy DLLs from SuiteSparse
+        $suiteSparseBinPath = "C:\SuiteSparse\bin"
+        if (Test-Path $suiteSparseBinPath) {
+          Write-Host "Copying DLLs from $suiteSparseBinPath"
+          Get-ChildItem -Path $suiteSparseBinPath -Filter "*.dll" | ForEach-Object {
+            Copy-Item -Path $_.FullName -Destination "dist\" -Force
+            Write-Host "Copied: $($_.Name)"
           }
         }
         
