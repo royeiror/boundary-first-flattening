@@ -1,52 +1,35 @@
-name: Debug BFF Build
+name: Build BFF Final
 
 on: workflow_dispatch
 
 jobs:
-  debug:
+  build:
     runs-on: windows-latest
     
     steps:
-    - name: Checkout repository
+    - name: Checkout with submodules
       uses: actions/checkout@v4
       with:
         repository: royeiror/boundary-first-flattening
         submodules: recursive
         
-    - name: Initial analysis
+    - name: Create dummy SuiteSparse
       shell: cmd
       run: |
-        echo "=== Initial Repository Analysis ==="
-        echo.
-        echo "Directory structure:"
-        dir
+        echo Creating dummy SuiteSparse...
         
-        echo.
-        echo "CMakeLists.txt exists:" 
-        if exist CMakeLists.txt echo YES && type CMakeLists.txt | head -30
-        
-        echo.
-        echo "Looking for source directories:"
-        dir /b /ad src source lib include 2>nul
-        
-        echo.
-        echo "Checking for executable source files:"
-        findstr /S /M "main(" *.cpp *.c 2>nul
-        
-    - name: Create minimal build setup
-      shell: cmd
-      run: |
-        echo "=== Creating minimal build ==="
-        
-        rem Create dummy SuiteSparse
+        if exist suitesparse rd /s /q suitesparse
+        mkdir suitesparse
+        mkdir suitesparse\install
+        mkdir suitesparse\install\include
         mkdir suitesparse\install\include\suitesparse
         mkdir suitesparse\install\lib
         
         cd suitesparse\install\include\suitesparse
-        echo #define SUITESPARSE_VERSION "1.0" > SuiteSparse_config.h
-        echo #define AMD_VERSION "1.0" > amd.h
-        echo #define COLAMD_VERSION "1.0" > colamd.h
-        echo #define CHOLMOD_VERSION "1.0" > cholmod.h
+        echo #define SUITESPARSE_VERSION "7.6.1" > SuiteSparse_config.h
+        echo #define AMD_VERSION "2.4.6" > amd.h
+        echo #define COLAMD_VERSION "3.0.0" > colamd.h
+        echo #define CHOLMOD_VERSION "5.0.0" > cholmod.h
         
         cd ..\..\lib
         echo. > suitesparseconfig.lib
@@ -54,129 +37,70 @@ jobs:
         echo. > colamd.lib
         echo. > cholmod.lib
         
-        cd ../../..
+    - name: Patch CMakeLists.txt simply
+      shell: powershell
+      run: |
+        # Simple patch: just comment out the find_package line
+        (Get-Content CMakeLists.txt -Raw) -replace 'find_package\(SuiteSparse REQUIRED\)', '# find_package(SuiteSparse REQUIRED) # Disabled for build' | Set-Content CMakeLists.txt
         
-        rem Backup original CMakeLists.txt
-        copy CMakeLists.txt CMakeLists.txt.orig
-        
-    - name: Try to understand build system
+    - name: Configure
       shell: cmd
       run: |
-        echo "=== Analyzing CMakeLists.txt ==="
+        echo Configuring...
         
-        echo.
-        echo "CMakeLists.txt summary:"
-        echo "Total lines:" && find /c /v "" < CMakeLists.txt
+        if exist build rd /s /q build
+        mkdir build
+        cd build
         
-        echo.
-        echo "Looking for project() command:"
-        findstr /I "project(" CMakeLists.txt
+        rem Configure with verbose output
+        cmake .. -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release -Wdev --trace-expand 2>&1 | tail -100
         
-        echo.
-        echo "Looking for add_executable() commands:"
-        findstr /I "add_executable" CMakeLists.txt
-        
-        echo.
-        echo "Looking for add_library() commands:"
-        findstr /I "add_library" CMakeLists.txt | head -10
-        
-        echo.
-        echo "Looking for target names:"
-        findstr /I "add_executable\|add_library" CMakeLists.txt | findstr /v "#" | sed "s/.*(//" | sed "s/ .*//" | sort | uniq
-        
-    - name: Create simplified CMakeLists.txt
+    - name: List ALL targets
       shell: cmd
       run: |
-        echo "=== Creating simplified CMakeLists.txt ==="
+        echo Listing ALL CMake targets...
+        cd build
+        cmake --build . --config Release --target help 2>&1 || echo "Could not list targets"
         
-        rem Create a minimal CMakeLists.txt
-        (
-          echo cmake_minimum_required(VERSION 3.5)
-          echo project(bff)
-          echo 
-          echo set(CMAKE_CXX_STANDARD 11)
-          echo set(CMAKE_CXX_STANDARD_REQUIRED ON)
-          echo 
-          echo # Dummy SuiteSparse setup
-          echo set(SUITESPARSE_FOUND TRUE)
-          echo set(SUITESPARSE_INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/suitesparse/install/include/suitesparse")
-          echo set(SUITESPARSE_LIBRARIES "${CMAKE_CURRENT_SOURCE_DIR}/suitesparse/install/lib/cholmod.lib")
-          echo 
-          echo # Find source files
-          echo file(GLOB_RECURSE SOURCES "*.cpp" "*.c")
-          echo message(STATUS "Found sources: $\{SOURCES\}")
-          echo 
-          echo # Try to build everything
-          echo foreach(source $\{SOURCES\})
-          echo   get_filename_component(name $\{source\} NAME_WE)
-          echo   add_executable($\{name\} $\{source\})
-          echo endforeach()
-        ) > CMakeLists_simple.txt
-        
-        echo "Simple CMakeLists.txt created"
-        type CMakeLists_simple.txt
-        
-    - name: Try simple build
+    - name: Build everything
       shell: cmd
       run: |
-        echo "=== Trying simple build ==="
+        echo Building ALL targets...
+        cd build
         
-        rem Use our simple CMakeLists.txt
-        copy CMakeLists_simple.txt CMakeLists.txt
-        
-        mkdir build_simple
-        cd build_simple
-        
-        rem Configure
-        cmake .. -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release 2>&1 | tail -50
-        
-        rem Try to build
-        cmake --build . --config Release 2>&1 | tail -50
+        rem Build everything with verbose output
+        cmake --build . --config Release -- /verbosity:detailed 2>&1 | tail -200
         
         echo.
-        echo "Build results:"
-        dir /s *.exe 2>nul || echo "No executables built"
+        echo "Build completed. Checking for outputs..."
         
-    - name: Check original build with debug
+    - name: Find and upload ANY executables
       shell: cmd
       run: |
-        echo "=== Checking original build with debug output ==="
+        echo Searching for executables...
         
-        rem Restore original
-        copy CMakeLists.txt.orig CMakeLists.txt
+        rem Look in the build directory
+        if exist build (
+          cd build
+          echo "Files in build directory:"
+          dir /s /b 2>nul | findstr /i "\.exe$\|\.dll$" || echo "No executables or DLLs found"
+          
+          rem Also check for lib files
+          echo.
+          echo "Library files:"
+          dir /s /b *.lib 2>nul | head -10
+        )
         
-        mkdir build_orig
-        cd build_orig
+        rem Upload whatever we find
+        if exist build\Release\*.exe (
+          echo "Found executables in build/Release/"
+          dir build\Release\*.exe
+        )
         
-        rem Configure with maximum verbosity
-        echo "CMake configure output:"
-        cmake .. -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release --trace 2>&1 | head -200
-        
-    - name: Search for build scripts
-      shell: cmd
-      run: |
-        echo "=== Looking for alternative build methods ==="
-        
-        echo.
-        echo "Looking for Makefiles:"
-        dir /b /s Makefile makefile 2>nul
-        
-        echo.
-        echo "Looking for build scripts:"
-        dir /b /s build.sh build.cmd build.bat BUILD* 2>nul
-        
-        echo.
-        echo "Looking for Visual Studio projects:"
-        dir /b /s *.sln *.vcxproj 2>nul
-        
-    - name: Upload all for analysis
+    - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: bff-debug-analysis
+        name: bff-artifacts
         path: |
-          CMakeLists.txt.orig
-          CMakeLists.txt
-          CMakeLists_simple.txt
-          build_orig/
-          build_simple/
+          build/
         retention-days: 7
