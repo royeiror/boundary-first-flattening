@@ -55,20 +55,32 @@ jobs:
         & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET freeglut
         & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET glm
 
-    - name: Check vcpkg installation
+    - name: Check vcpkg GLFW installation
       shell: powershell
       run: |
-        Write-Host "Checking vcpkg installed packages..."
-        & "$env:VCPKG_ROOT\vcpkg.exe" list
-        
-        Write-Host "`nChecking GLFW installation structure..."
+        Write-Host "Checking GLFW installation..."
         $vcpkgInstalled = "$env:VCPKG_ROOT\installed\$env:VCPKG_DEFAULT_TRIPLET"
+        
         if (Test-Path $vcpkgInstalled) {
-          Write-Host "Contents of installed directory:"
-          Get-ChildItem -Path $vcpkgInstalled | Select-Object Name, Mode
+          Write-Host "Looking for GLFW files in $vcpkgInstalled"
           
-          Write-Host "`nLooking for GLFW files..."
-          Get-ChildItem -Path "$vcpkgInstalled\*" -Filter "*glfw*" -Recurse | Select-Object -First 10 | Format-Table FullName
+          # Check for glfw3.lib
+          $glfwLib = Get-ChildItem -Path $vcpkgInstalled -Recurse -Filter "glfw3.lib"
+          if ($glfwLib) {
+            Write-Host "Found GLFW library: $($glfwLib.FullName)"
+          } else {
+            Write-Host "GLFW library not found, listing lib files:"
+            Get-ChildItem -Path "$vcpkgInstalled\lib" -Filter "*.lib" | Select-Object -First 10
+          }
+          
+          # Check for glew32.lib
+          $glewLib = Get-ChildItem -Path $vcpkgInstalled -Recurse -Filter "glew32.lib"
+          if ($glewLib) {
+            Write-Host "Found GLEW library: $($glewLib.FullName)"
+          } else {
+            Write-Host "GLEW library not found, checking alternatives:"
+            Get-ChildItem -Path "$vcpkgInstalled\lib" -Filter "*glew*.lib" | Select-Object Name
+          }
         }
 
     - name: Download and install SuiteSparse-METIS
@@ -110,16 +122,24 @@ jobs:
         # Copy all .h files
         $hFiles = Get-ChildItem -Path "C:\SuiteSparseTemp" -Recurse -Filter "*.h"
         foreach ($file in $hFiles) {
-          # Copy to include directory
           Copy-Item -Path $file.FullName -Destination "C:\SuiteSparse\include\" -Force
         }
 
     - name: Create CMakeLists.txt for BFF
       shell: powershell
       run: |
-        # Get the vcpkg path with forward slashes
+        # Get the vcpkg paths
         $vcpkgPath = $env:VCPKG_ROOT -replace "\\", "/"
         $vcpkgInstalled = "$vcpkgPath/installed/$env:VCPKG_DEFAULT_TRIPLET"
+        
+        # Check what files actually exist
+        $glfwLibPath = "$env:VCPKG_ROOT\installed\$env:VCPKG_DEFAULT_TRIPLET\lib\glfw3.lib"
+        $glewLibPath = "$env:VCPKG_ROOT\installed\$env:VCPKG_DEFAULT_TRIPLET\lib\glew32.lib"
+        
+        Write-Host "GLFW library path: $glfwLibPath"
+        Write-Host "GLEW library path: $glewLibPath"
+        Write-Host "Exists GLFW: $(Test-Path $glfwLibPath)"
+        Write-Host "Exists GLEW: $(Test-Path $glewLibPath)"
         
         $cmakeLines = @(
           "cmake_minimum_required(VERSION 3.15)",
@@ -127,9 +147,6 @@ jobs:
           "",
           "set(CMAKE_CXX_STANDARD 17)",
           "set(CMAKE_CXX_STANDARD_REQUIRED ON)",
-          "",
-          "# Set vcpkg paths",
-          "set(VCPKG_INSTALLED_DIR `"$vcpkgInstalled`")",
           "",
           "# Find Eigen3",
           "find_package(Eigen3 REQUIRED)",
@@ -149,20 +166,24 @@ jobs:
           "# OpenGL",
           "find_package(OpenGL REQUIRED)",
           "",
-          "# Manually find GLFW and GLEW from vcpkg",
-          "set(GLFW3_INCLUDE_DIR `"${VCPKG_INSTALLED_DIR}/include`")",
-          "set(GLFW3_LIBRARY `"${VCPKG_INSTALLED_DIR}/lib/glfw3.lib`")",
+          "# Set vcpkg paths",
+          "set(VCPKG_INSTALLED_DIR `"$vcpkgInstalled`")",
           "",
-          "set(GLEW_INCLUDE_DIR `"${VCPKG_INSTALLED_DIR}/include`")",
-          "set(GLEW_LIBRARY `"${VCPKG_INSTALLED_DIR}/lib/glew32.lib`")",
+          "# Find GLFW and GLEW libraries",
+          "find_library(GLFW3_LIBRARY NAMES glfw3 PATHS `${VCPKG_INSTALLED_DIR}/lib NO_DEFAULT_PATH)",
+          "find_library(GLEW_LIBRARY NAMES glew32 PATHS `${VCPKG_INSTALLED_DIR}/lib NO_DEFAULT_PATH)",
           "",
-          "# Check if files exist",
-          "if(NOT EXISTS `${GLFW3_LIBRARY})",
-          "    message(FATAL_ERROR `"GLFW library not found: `${GLFW3_LIBRARY}`")",
+          "# Check if found",
+          "if(NOT GLFW3_LIBRARY)",
+          "    message(FATAL_ERROR `"GLFW library not found in `${VCPKG_INSTALLED_DIR}/lib`")",
+          "else()",
+          "    message(STATUS `"Found GLFW: `${GLFW3_LIBRARY}`")",
           "endif()",
           "",
-          "if(NOT EXISTS `${GLEW_LIBRARY})",
-          "    message(FATAL_ERROR `"GLEW library not found: `${GLEW_LIBRARY}`")",
+          "if(NOT GLEW_LIBRARY)",
+          "    message(FATAL_ERROR `"GLEW library not found in `${VCPKG_INSTALLED_DIR}/lib`")",
+          "else()",
+          "    message(STATUS `"Found GLEW: `${GLEW_LIBRARY}`")",
           "endif()",
           "",
           "# Include directories",
@@ -172,8 +193,7 @@ jobs:
           "    `${CMAKE_SOURCE_DIR}/deps/spectra/include",
           "    `${EIGEN3_INCLUDE_DIRS}",
           "    `${SUITESPARSE_INCLUDE_DIR}",
-          "    `${GLFW3_INCLUDE_DIR}",
-          "    `${GLEW_INCLUDE_DIR}",
+          "    `${VCPKG_INSTALLED_DIR}/include",
           ")",
           "",
           "# Source files for library",
@@ -216,32 +236,6 @@ jobs:
         # Write to file
         $cmakeLines | Out-File -FilePath "CMakeLists.txt" -Encoding UTF8 -Force
 
-    - name: Check BFF source structure
-      shell: powershell
-      run: |
-        Write-Host "Checking BFF source files..."
-        
-        Write-Host "`nChecking apps directory:"
-        if (Test-Path "apps") {
-          Get-ChildItem -Path "apps" -Filter "*.cpp" | Select-Object Name
-        } else {
-          Write-Host "apps directory not found"
-        }
-        
-        Write-Host "`nChecking binaries directory:"
-        if (Test-Path "binaries") {
-          Get-ChildItem -Path "binaries" -Filter "*.cpp" | Select-Object Name
-        } else {
-          Write-Host "binaries directory not found"
-        }
-        
-        Write-Host "`nChecking src directory:"
-        if (Test-Path "src") {
-          Get-ChildItem -Path "src" -Filter "*.cpp" | Select-Object Name
-        } else {
-          Write-Host "src directory not found"
-        }
-
     - name: Configure CMake
       shell: powershell
       run: |
@@ -249,6 +243,7 @@ jobs:
         New-Item -ItemType Directory -Force -Path "build"
         
         Write-Host "Configuring CMake..."
+        Write-Host "VCPKG_ROOT: $env:VCPKG_ROOT"
         
         # Configure with CMake
         cmake -B build `
