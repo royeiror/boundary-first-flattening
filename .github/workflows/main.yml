@@ -55,45 +55,33 @@ jobs:
         & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET freeglut
         & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET glm
 
-    - name: Check vcpkg library files
+    - name: Check SuiteSparse directory
       shell: powershell
       run: |
-        Write-Host "Checking vcpkg installed libraries..."
-        $vcpkgInstalled = "$env:VCPKG_ROOT\installed\$env:VCPKG_DEFAULT_TRIPLET"
-        $libDir = "$vcpkgInstalled\lib"
+        Write-Host "Checking SuiteSparse directory..."
+        $suiteSparseLibDir = "C:\SuiteSparse\lib"
         
-        if (Test-Path $libDir) {
-          Write-Host "Listing all .lib files in $( $libDir ):"
-          $libFiles = Get-ChildItem -Path $libDir -Filter "*.lib"
+        if (Test-Path $suiteSparseLibDir) {
+          Write-Host "Listing all files in $( $suiteSparseLibDir ):"
+          Get-ChildItem -Path $suiteSparseLibDir | Format-Table Name, Length
+          
+          Write-Host "`nLooking for library files (.lib):"
+          $libFiles = Get-ChildItem -Path $suiteSparseLibDir -Filter "*.lib"
           foreach ($file in $libFiles) {
             Write-Host "  - $($file.Name)"
           }
-          
-          # Check for GLFW
-          $glfwFiles = $libFiles | Where-Object { $_.Name -like "*glfw*" }
-          Write-Host "`nGLFW library files found:"
-          foreach ($file in $glfwFiles) {
-            Write-Host "  - $($file.Name)"
-          }
-          
-          # Check for GLEW
-          $glewFiles = $libFiles | Where-Object { $_.Name -like "*glew*" }
-          Write-Host "`nGLEW library files found:"
-          foreach ($file in $glewFiles) {
-            Write-Host "  - $($file.Name)"
-          }
         } else {
-          Write-Host "Library directory not found: $( $libDir )"
+          Write-Host "SuiteSparse lib directory not found: $( $suiteSparseLibDir )"
         }
 
     - name: Download and install SuiteSparse-METIS
       shell: powershell
       run: |
         # Download SuiteSparse-METIS
+        Write-Host "Downloading SuiteSparse-METIS..."
         $url = "https://github.com/jlblancoc/suitesparse-metis-for-windows/archive/master.zip"
         $output = "C:\suitesparse-metis.zip"
         
-        Write-Host "Downloading SuiteSparse-METIS from $url"
         Invoke-WebRequest -Uri $url -OutFile $output
         
         # Create directories
@@ -105,28 +93,47 @@ jobs:
         # Extract
         Expand-Archive -Path $output -DestinationPath "C:\SuiteSparseTemp\" -Force
         
-        # Find and copy files
-        Write-Host "Searching for library files..."
+        # Find the actual library directory
+        Write-Host "Searching for library files in extracted directory..."
         
-        # Copy all .lib files
-        $libFiles = Get-ChildItem -Path "C:\SuiteSparseTemp" -Recurse -Filter "*.lib"
-        foreach ($file in $libFiles) {
-          Copy-Item -Path $file.FullName -Destination "C:\SuiteSparse\lib\" -Force
-          Write-Host "Copied lib: $($file.Name)"
+        # Look for lib directory
+        $extractedLibDir = Get-ChildItem -Path "C:\SuiteSparseTemp" -Recurse -Directory | Where-Object { $_.Name -eq "lib" } | Select-Object -First 1
+        
+        if ($extractedLibDir) {
+          Write-Host "Found lib directory: $( $extractedLibDir.FullName )"
+          
+          # Copy all .lib files
+          $libFiles = Get-ChildItem -Path $extractedLibDir.FullName -Filter "*.lib"
+          foreach ($file in $libFiles) {
+            Copy-Item -Path $file.FullName -Destination "C:\SuiteSparse\lib\" -Force
+            Write-Host "Copied lib: $($file.Name)"
+          }
+        } else {
+          Write-Host "No lib directory found, searching for .lib files..."
+          $libFiles = Get-ChildItem -Path "C:\SuiteSparseTemp" -Recurse -Filter "*.lib"
+          foreach ($file in $libFiles) {
+            Copy-Item -Path $file.FullName -Destination "C:\SuiteSparse\lib\" -Force
+            Write-Host "Copied lib: $($file.Name)"
+          }
         }
         
-        # Copy all .dll files
+        # Copy .dll files
         $dllFiles = Get-ChildItem -Path "C:\SuiteSparseTemp" -Recurse -Filter "*.dll"
         foreach ($file in $dllFiles) {
           Copy-Item -Path $file.FullName -Destination "C:\SuiteSparse\bin\" -Force
           Write-Host "Copied dll: $($file.Name)"
         }
         
-        # Copy all .h files
+        # Copy .h files
         $hFiles = Get-ChildItem -Path "C:\SuiteSparseTemp" -Recurse -Filter "*.h"
         foreach ($file in $hFiles) {
           Copy-Item -Path $file.FullName -Destination "C:\SuiteSparse\include\" -Force
+          Write-Host "Copied header: $($file.Name)"
         }
+        
+        # List what we copied
+        Write-Host "`nFinal SuiteSparse lib directory contents:"
+        Get-ChildItem -Path "C:\SuiteSparse\lib" | Format-Table Name
 
     - name: Create CMakeLists.txt for BFF
       shell: powershell
@@ -135,7 +142,7 @@ jobs:
         $vcpkgPath = $env:VCPKG_ROOT -replace "\\", "/"
         $vcpkgInstalled = "$vcpkgPath/installed/$env:VCPKG_DEFAULT_TRIPLET"
         
-        # Create a simpler CMakeLists.txt that should work
+        # Create CMakeLists.txt with better library finding
         $cmakeLines = @(
           "cmake_minimum_required(VERSION 3.15)",
           "project(BFF)",
@@ -146,21 +153,59 @@ jobs:
           "# Find Eigen3",
           "find_package(Eigen3 REQUIRED)",
           "",
-          "# Manually set SuiteSparse paths",
+          "# Set SuiteSparse paths",
           "set(SUITESPARSE_INCLUDE_DIR `"C:/SuiteSparse/include`")",
           "set(SUITESPARSE_LIB_DIR `"C:/SuiteSparse/lib`")",
           "",
-          "# Find SuiteSparse libraries - use HINTS instead of PATHS for better compatibility",
-          "find_library(CHOLMOD_LIBRARY NAMES cholmod libcholmod HINTS `${SUITESPARSE_LIB_DIR})",
-          "find_library(AMD_LIBRARY NAMES amd libamd HINTS `${SUITESPARSE_LIB_DIR})",
-          "find_library(CAMD_LIBRARY NAMES camd libcamd HINTS `${SUITESPARSE_LIB_DIR})",
-          "find_library(COLAMD_LIBRARY NAMES colamd libcolamd HINTS `${SUITESPARSE_LIB_DIR})",
-          "find_library(CCOLAMD_LIBRARY NAMES ccolamd libccolamd HINTS `${SUITESPARSE_LIBRARY})",
-          "find_library(METIS_LIBRARY NAMES metis libmetis HINTS `${SUITESPARSE_LIB_DIR})",
+          "# Try to find any SuiteSparse library files using glob",
+          "file(GLOB_RECURSE CHOLMOD_LIBRARIES `"${SUITESPARSE_LIB_DIR}/*cholmod*.lib`")",
+          "file(GLOB_RECURSE AMD_LIBRARIES `"${SUITESPARSE_LIB_DIR}/*amd*.lib`")",
+          "file(GLOB_RECURSE CAMD_LIBRARIES `"${SUITESPARSE_LIB_DIR}/*camd*.lib`")",
+          "file(GLOB_RECURSE COLAMD_LIBRARIES `"${SUITESPARSE_LIB_DIR}/*colamd*.lib`")",
+          "file(GLOB_RECURSE CCOLAMD_LIBRARIES `"${SUITESPARSE_LIB_DIR}/*ccolamd*.lib`")",
+          "file(GLOB_RECURSE METIS_LIBRARIES `"${SUITESPARSE_LIB_DIR}/*metis*.lib`")",
           "",
-          "# Check if SuiteSparse libraries were found",
-          "if(NOT CHOLMOD_LIBRARY)",
-          "    message(FATAL_ERROR `"CHOLMOD library not found in `${SUITESPARSE_LIB_DIR}`")",
+          "# Check if libraries were found",
+          "if(CHOLMOD_LIBRARIES)",
+          "    list(GET CHOLMOD_LIBRARIES 0 CHOLMOD_LIBRARY)",
+          "    message(STATUS `"Found CHOLMOD: `${CHOLMOD_LIBRARY}`")",
+          "else()",
+          "    message(FATAL_ERROR `"No CHOLMOD library found in `${SUITESPARSE_LIB_DIR}`")",
+          "endif()",
+          "",
+          "if(AMD_LIBRARIES)",
+          "    list(GET AMD_LIBRARIES 0 AMD_LIBRARY)",
+          "    message(STATUS `"Found AMD: `${AMD_LIBRARY}`")",
+          "else()",
+          "    message(FATAL_ERROR `"No AMD library found in `${SUITESPARSE_LIB_DIR}`")",
+          "endif()",
+          "",
+          "if(CAMD_LIBRARIES)",
+          "    list(GET CAMD_LIBRARIES 0 CAMD_LIBRARY)",
+          "    message(STATUS `"Found CAMD: `${CAMD_LIBRARY}`")",
+          "else()",
+          "    message(FATAL_ERROR `"No CAMD library found in `${SUITESPARSE_LIB_DIR}`")",
+          "endif()",
+          "",
+          "if(COLAMD_LIBRARIES)",
+          "    list(GET COLAMD_LIBRARIES 0 COLAMD_LIBRARY)",
+          "    message(STATUS `"Found COLAMD: `${COLAMD_LIBRARY}`")",
+          "else()",
+          "    message(FATAL_ERROR `"No COLAMD library found in `${SUITESPARSE_LIB_DIR}`")",
+          "endif()",
+          "",
+          "if(CCOLAMD_LIBRARIES)",
+          "    list(GET CCOLAMD_LIBRARIES 0 CCOLAMD_LIBRARY)",
+          "    message(STATUS `"Found CCOLAMD: `${CCOLAMD_LIBRARY}`")",
+          "else()",
+          "    message(FATAL_ERROR `"No CCOLAMD library found in `${SUITESPARSE_LIB_DIR}`")",
+          "endif()",
+          "",
+          "if(METIS_LIBRARIES)",
+          "    list(GET METIS_LIBRARIES 0 METIS_LIBRARY)",
+          "    message(STATUS `"Found METIS: `${METIS_LIBRARY}`")",
+          "else()",
+          "    message(FATAL_ERROR `"No METIS library found in `${SUITESPARSE_LIB_DIR}`")",
           "endif()",
           "",
           "# OpenGL",
@@ -169,20 +214,19 @@ jobs:
           "# Set vcpkg paths",
           "set(VCPKG_INSTALLED_DIR `"$vcpkgInstalled`")",
           "",
-          "# Try to find any GLFW library file",
+          "# Find GLFW and GLEW libraries",
           "file(GLOB_RECURSE GLFW_LIBRARIES `"${VCPKG_INSTALLED_DIR}/*glfw*.lib`")",
           "if(GLFW_LIBRARIES)",
           "    list(GET GLFW_LIBRARIES 0 GLFW3_LIBRARY)",
-          "    message(STATUS `"Using GLFW library: `${GLFW3_LIBRARY}`")",
+          "    message(STATUS `"Found GLFW: `${GLFW3_LIBRARY}`")",
           "else()",
           "    message(FATAL_ERROR `"No GLFW library found in `${VCPKG_INSTALLED_DIR}`")",
           "endif()",
           "",
-          "# Try to find any GLEW library file",
           "file(GLOB_RECURSE GLEW_LIBRARIES `"${VCPKG_INSTALLED_DIR}/*glew*.lib`")",
           "if(GLEW_LIBRARIES)",
           "    list(GET GLEW_LIBRARIES 0 GLEW_LIBRARY)",
-          "    message(STATUS `"Using GLEW library: `${GLEW_LIBRARY}`")",
+          "    message(STATUS `"Found GLEW: `${GLEW_LIBRARY}`")",
           "else()",
           "    message(FATAL_ERROR `"No GLEW library found in `${VCPKG_INSTALLED_DIR}`")",
           "endif()",
