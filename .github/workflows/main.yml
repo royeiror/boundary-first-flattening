@@ -63,7 +63,7 @@ jobs:
         $libDir = "$vcpkgInstalled\lib"
         
         if (Test-Path $libDir) {
-          Write-Host "Listing all .lib files in $libDir:"
+          Write-Host "Listing all .lib files in $( $libDir ):"
           $libFiles = Get-ChildItem -Path $libDir -Filter "*.lib"
           foreach ($file in $libFiles) {
             Write-Host "  - $($file.Name)"
@@ -83,7 +83,7 @@ jobs:
             Write-Host "  - $($file.Name)"
           }
         } else {
-          Write-Host "Library directory not found: $libDir"
+          Write-Host "Library directory not found: $( $libDir )"
         }
 
     - name: Download and install SuiteSparse-METIS
@@ -135,7 +135,7 @@ jobs:
         $vcpkgPath = $env:VCPKG_ROOT -replace "\\", "/"
         $vcpkgInstalled = "$vcpkgPath/installed/$env:VCPKG_DEFAULT_TRIPLET"
         
-        # Based on the actual library names found, create CMakeLists.txt
+        # Create a simpler CMakeLists.txt that should work
         $cmakeLines = @(
           "cmake_minimum_required(VERSION 3.15)",
           "project(BFF)",
@@ -150,13 +150,18 @@ jobs:
           "set(SUITESPARSE_INCLUDE_DIR `"C:/SuiteSparse/include`")",
           "set(SUITESPARSE_LIB_DIR `"C:/SuiteSparse/lib`")",
           "",
-          "# Find SuiteSparse libraries",
-          "find_library(CHOLMOD_LIBRARY NAMES cholmod libcholmod PATHS `${SUITESPARSE_LIB_DIR})",
-          "find_library(AMD_LIBRARY NAMES amd libamd PATHS `${SUITESPARSE_LIB_DIR})",
-          "find_library(CAMD_LIBRARY NAMES camd libcamd PATHS `${SUITESPARSE_LIB_DIR})",
-          "find_library(COLAMD_LIBRARY NAMES colamd libcolamd PATHS `${SUITESPARSE_LIB_DIR})",
-          "find_library(CCOLAMD_LIBRARY NAMES ccolamd libccolamd PATHS `${SUITESPARSE_LIB_DIR})",
-          "find_library(METIS_LIBRARY NAMES metis libmetis PATHS `${SUITESPARSE_LIB_DIR})",
+          "# Find SuiteSparse libraries - use HINTS instead of PATHS for better compatibility",
+          "find_library(CHOLMOD_LIBRARY NAMES cholmod libcholmod HINTS `${SUITESPARSE_LIB_DIR})",
+          "find_library(AMD_LIBRARY NAMES amd libamd HINTS `${SUITESPARSE_LIB_DIR})",
+          "find_library(CAMD_LIBRARY NAMES camd libcamd HINTS `${SUITESPARSE_LIB_DIR})",
+          "find_library(COLAMD_LIBRARY NAMES colamd libcolamd HINTS `${SUITESPARSE_LIB_DIR})",
+          "find_library(CCOLAMD_LIBRARY NAMES ccolamd libccolamd HINTS `${SUITESPARSE_LIBRARY})",
+          "find_library(METIS_LIBRARY NAMES metis libmetis HINTS `${SUITESPARSE_LIB_DIR})",
+          "",
+          "# Check if SuiteSparse libraries were found",
+          "if(NOT CHOLMOD_LIBRARY)",
+          "    message(FATAL_ERROR `"CHOLMOD library not found in `${SUITESPARSE_LIB_DIR}`")",
+          "endif()",
           "",
           "# OpenGL",
           "find_package(OpenGL REQUIRED)",
@@ -164,70 +169,22 @@ jobs:
           "# Set vcpkg paths",
           "set(VCPKG_INSTALLED_DIR `"$vcpkgInstalled`")",
           "",
-          "# Try to find GLFW and GLEW with multiple possible names",
-          "find_library(GLFW3_LIBRARY",
-          "    NAMES",
-          "        glfw3",
-          "        glfw3dll",
-          "        glfw",
-          "    PATHS `${VCPKG_INSTALLED_DIR}/lib",
-          "    NO_DEFAULT_PATH",
-          ")",
-          "",
-          "find_library(GLEW_LIBRARY",
-          "    NAMES",
-          "        glew32",
-          "        glew32dll",
-          "        glew",
-          "        libglew32",
-          "    PATHS `${VCPKG_INSTALLED_DIR}/lib",
-          "    NO_DEFAULT_PATH",
-          ")",
-          "",
-          "# If not found with find_library, try direct paths",
-          "if(NOT GLFW3_LIBRARY)",
-          "    set(GLFW3_LIBRARY `"${VCPKG_INSTALLED_DIR}/lib/glfw3.lib`")",
-          "    if(NOT EXISTS `${GLFW3_LIBRARY})",
-          "        # Try debug version",
-          "        set(GLFW3_LIBRARY `"${VCPKG_INSTALLED_DIR}/debug/lib/glfw3.lib`")",
-          "    endif()",
-          "endif()",
-          "",
-          "if(NOT GLEW_LIBRARY)",
-          "    set(GLEW_LIBRARY `"${VCPKG_INSTALLED_DIR}/lib/glew32.lib`")",
-          "    if(NOT EXISTS `${GLEW_LIBRARY})",
-          "        # Try debug version",
-          "        set(GLEW_LIBRARY `"${VCPKG_INSTALLED_DIR}/debug/lib/glew32.lib`")",
-          "    endif()",
-          "endif()",
-          "",
-          "# Check if libraries exist",
-          "if(NOT EXISTS `${GLFW3_LIBRARY})",
-          "    message(WARNING `"GLFW library not found at `${GLFW3_LIBRARY}`")",
-          "    # Try to find any glfw library",
-          "    file(GLOB_RECURSE GLFW_LIBS `"${VCPKG_INSTALLED_DIR}/*glfw*.lib`")",
-          "    if(GLFW_LIBS)",
-          "        list(GET GLFW_LIBS 0 GLFW3_LIBRARY)",
-          "        message(STATUS `"Using GLFW library: `${GLFW3_LIBRARY}`")",
-          "    else()",
-          "        message(FATAL_ERROR `"Could not find any GLFW library in `${VCPKG_INSTALLED_DIR}`")",
-          "    endif()",
+          "# Try to find any GLFW library file",
+          "file(GLOB_RECURSE GLFW_LIBRARIES `"${VCPKG_INSTALLED_DIR}/*glfw*.lib`")",
+          "if(GLFW_LIBRARIES)",
+          "    list(GET GLFW_LIBRARIES 0 GLFW3_LIBRARY)",
+          "    message(STATUS `"Using GLFW library: `${GLFW3_LIBRARY}`")",
           "else()",
-          "    message(STATUS `"Found GLFW: `${GLFW3_LIBRARY}`")",
+          "    message(FATAL_ERROR `"No GLFW library found in `${VCPKG_INSTALLED_DIR}`")",
           "endif()",
           "",
-          "if(NOT EXISTS `${GLEW_LIBRARY})",
-          "    message(WARNING `"GLEW library not found at `${GLEW_LIBRARY}`")",
-          "    # Try to find any glew library",
-          "    file(GLOB_RECURSE GLEW_LIBS `"${VCPKG_INSTALLED_DIR}/*glew*.lib`")",
-          "    if(GLEW_LIBS)",
-          "        list(GET GLEW_LIBS 0 GLEW_LIBRARY)",
-          "        message(STATUS `"Using GLEW library: `${GLEW_LIBRARY}`")",
-          "    else()",
-          "        message(FATAL_ERROR `"Could not find any GLEW library in `${VCPKG_INSTALLED_DIR}`")",
-          "    endif()",
+          "# Try to find any GLEW library file",
+          "file(GLOB_RECURSE GLEW_LIBRARIES `"${VCPKG_INSTALLED_DIR}/*glew*.lib`")",
+          "if(GLEW_LIBRARIES)",
+          "    list(GET GLEW_LIBRARIES 0 GLEW_LIBRARY)",
+          "    message(STATUS `"Using GLEW library: `${GLEW_LIBRARY}`")",
           "else()",
-          "    message(STATUS `"Found GLEW: `${GLEW_LIBRARY}`")",
+          "    message(FATAL_ERROR `"No GLEW library found in `${VCPKG_INSTALLED_DIR}`")",
           "endif()",
           "",
           "# Include directories",
