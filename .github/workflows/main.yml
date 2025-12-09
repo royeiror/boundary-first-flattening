@@ -55,32 +55,35 @@ jobs:
         & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET freeglut
         & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET glm
 
-    - name: Check vcpkg GLFW installation
+    - name: Check vcpkg library files
       shell: powershell
       run: |
-        Write-Host "Checking GLFW installation..."
+        Write-Host "Checking vcpkg installed libraries..."
         $vcpkgInstalled = "$env:VCPKG_ROOT\installed\$env:VCPKG_DEFAULT_TRIPLET"
+        $libDir = "$vcpkgInstalled\lib"
         
-        if (Test-Path $vcpkgInstalled) {
-          Write-Host "Looking for GLFW files in $vcpkgInstalled"
-          
-          # Check for glfw3.lib
-          $glfwLib = Get-ChildItem -Path $vcpkgInstalled -Recurse -Filter "glfw3.lib"
-          if ($glfwLib) {
-            Write-Host "Found GLFW library: $($glfwLib.FullName)"
-          } else {
-            Write-Host "GLFW library not found, listing lib files:"
-            Get-ChildItem -Path "$vcpkgInstalled\lib" -Filter "*.lib" | Select-Object -First 10
+        if (Test-Path $libDir) {
+          Write-Host "Listing all .lib files in $libDir:"
+          $libFiles = Get-ChildItem -Path $libDir -Filter "*.lib"
+          foreach ($file in $libFiles) {
+            Write-Host "  - $($file.Name)"
           }
           
-          # Check for glew32.lib
-          $glewLib = Get-ChildItem -Path $vcpkgInstalled -Recurse -Filter "glew32.lib"
-          if ($glewLib) {
-            Write-Host "Found GLEW library: $($glewLib.FullName)"
-          } else {
-            Write-Host "GLEW library not found, checking alternatives:"
-            Get-ChildItem -Path "$vcpkgInstalled\lib" -Filter "*glew*.lib" | Select-Object Name
+          # Check for GLFW
+          $glfwFiles = $libFiles | Where-Object { $_.Name -like "*glfw*" }
+          Write-Host "`nGLFW library files found:"
+          foreach ($file in $glfwFiles) {
+            Write-Host "  - $($file.Name)"
           }
+          
+          # Check for GLEW
+          $glewFiles = $libFiles | Where-Object { $_.Name -like "*glew*" }
+          Write-Host "`nGLEW library files found:"
+          foreach ($file in $glewFiles) {
+            Write-Host "  - $($file.Name)"
+          }
+        } else {
+          Write-Host "Library directory not found: $libDir"
         }
 
     - name: Download and install SuiteSparse-METIS
@@ -132,15 +135,7 @@ jobs:
         $vcpkgPath = $env:VCPKG_ROOT -replace "\\", "/"
         $vcpkgInstalled = "$vcpkgPath/installed/$env:VCPKG_DEFAULT_TRIPLET"
         
-        # Check what files actually exist
-        $glfwLibPath = "$env:VCPKG_ROOT\installed\$env:VCPKG_DEFAULT_TRIPLET\lib\glfw3.lib"
-        $glewLibPath = "$env:VCPKG_ROOT\installed\$env:VCPKG_DEFAULT_TRIPLET\lib\glew32.lib"
-        
-        Write-Host "GLFW library path: $glfwLibPath"
-        Write-Host "GLEW library path: $glewLibPath"
-        Write-Host "Exists GLFW: $(Test-Path $glfwLibPath)"
-        Write-Host "Exists GLEW: $(Test-Path $glewLibPath)"
-        
+        # Based on the actual library names found, create CMakeLists.txt
         $cmakeLines = @(
           "cmake_minimum_required(VERSION 3.15)",
           "project(BFF)",
@@ -169,19 +164,68 @@ jobs:
           "# Set vcpkg paths",
           "set(VCPKG_INSTALLED_DIR `"$vcpkgInstalled`")",
           "",
-          "# Find GLFW and GLEW libraries",
-          "find_library(GLFW3_LIBRARY NAMES glfw3 PATHS `${VCPKG_INSTALLED_DIR}/lib NO_DEFAULT_PATH)",
-          "find_library(GLEW_LIBRARY NAMES glew32 PATHS `${VCPKG_INSTALLED_DIR}/lib NO_DEFAULT_PATH)",
+          "# Try to find GLFW and GLEW with multiple possible names",
+          "find_library(GLFW3_LIBRARY",
+          "    NAMES",
+          "        glfw3",
+          "        glfw3dll",
+          "        glfw",
+          "    PATHS `${VCPKG_INSTALLED_DIR}/lib",
+          "    NO_DEFAULT_PATH",
+          ")",
           "",
-          "# Check if found",
+          "find_library(GLEW_LIBRARY",
+          "    NAMES",
+          "        glew32",
+          "        glew32dll",
+          "        glew",
+          "        libglew32",
+          "    PATHS `${VCPKG_INSTALLED_DIR}/lib",
+          "    NO_DEFAULT_PATH",
+          ")",
+          "",
+          "# If not found with find_library, try direct paths",
           "if(NOT GLFW3_LIBRARY)",
-          "    message(FATAL_ERROR `"GLFW library not found in `${VCPKG_INSTALLED_DIR}/lib`")",
+          "    set(GLFW3_LIBRARY `"${VCPKG_INSTALLED_DIR}/lib/glfw3.lib`")",
+          "    if(NOT EXISTS `${GLFW3_LIBRARY})",
+          "        # Try debug version",
+          "        set(GLFW3_LIBRARY `"${VCPKG_INSTALLED_DIR}/debug/lib/glfw3.lib`")",
+          "    endif()",
+          "endif()",
+          "",
+          "if(NOT GLEW_LIBRARY)",
+          "    set(GLEW_LIBRARY `"${VCPKG_INSTALLED_DIR}/lib/glew32.lib`")",
+          "    if(NOT EXISTS `${GLEW_LIBRARY})",
+          "        # Try debug version",
+          "        set(GLEW_LIBRARY `"${VCPKG_INSTALLED_DIR}/debug/lib/glew32.lib`")",
+          "    endif()",
+          "endif()",
+          "",
+          "# Check if libraries exist",
+          "if(NOT EXISTS `${GLFW3_LIBRARY})",
+          "    message(WARNING `"GLFW library not found at `${GLFW3_LIBRARY}`")",
+          "    # Try to find any glfw library",
+          "    file(GLOB_RECURSE GLFW_LIBS `"${VCPKG_INSTALLED_DIR}/*glfw*.lib`")",
+          "    if(GLFW_LIBS)",
+          "        list(GET GLFW_LIBS 0 GLFW3_LIBRARY)",
+          "        message(STATUS `"Using GLFW library: `${GLFW3_LIBRARY}`")",
+          "    else()",
+          "        message(FATAL_ERROR `"Could not find any GLFW library in `${VCPKG_INSTALLED_DIR}`")",
+          "    endif()",
           "else()",
           "    message(STATUS `"Found GLFW: `${GLFW3_LIBRARY}`")",
           "endif()",
           "",
-          "if(NOT GLEW_LIBRARY)",
-          "    message(FATAL_ERROR `"GLEW library not found in `${VCPKG_INSTALLED_DIR}/lib`")",
+          "if(NOT EXISTS `${GLEW_LIBRARY})",
+          "    message(WARNING `"GLEW library not found at `${GLEW_LIBRARY}`")",
+          "    # Try to find any glew library",
+          "    file(GLOB_RECURSE GLEW_LIBS `"${VCPKG_INSTALLED_DIR}/*glew*.lib`")",
+          "    if(GLEW_LIBS)",
+          "        list(GET GLEW_LIBS 0 GLEW_LIBRARY)",
+          "        message(STATUS `"Using GLEW library: `${GLEW_LIBRARY}`")",
+          "    else()",
+          "        message(FATAL_ERROR `"Could not find any GLEW library in `${VCPKG_INSTALLED_DIR}`")",
+          "    endif()",
           "else()",
           "    message(STATUS `"Found GLEW: `${GLEW_LIBRARY}`")",
           "endif()",
@@ -243,7 +287,6 @@ jobs:
         New-Item -ItemType Directory -Force -Path "build"
         
         Write-Host "Configuring CMake..."
-        Write-Host "VCPKG_ROOT: $env:VCPKG_ROOT"
         
         # Configure with CMake
         cmake -B build `
