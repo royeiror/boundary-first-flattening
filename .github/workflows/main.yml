@@ -43,10 +43,10 @@ jobs:
         & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET freeglut
         & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET glm
 
-    - name: Create CMakeLists.txt using Write-Output
+    - name: Create CMakeLists.txt with echo commands
       shell: powershell
       run: |
-        # Create CMakeLists.txt by writing directly to file
+        # Create CMakeLists.txt using echo commands
         $cmakeFile = "CMakeLists.txt"
         
         # Start fresh
@@ -54,107 +54,105 @@ jobs:
           Remove-Item $cmakeFile
         }
         
-        # Write CMakeLists.txt line by line
-        @"
-cmake_minimum_required(VERSION 3.15)
-project(BFF)
-
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-
-# Set vcpkg paths from environment
-set(VCPKG_INSTALLED_DIR "\$ENV{VCPKG_ROOT}/installed/\$ENV{VCPKG_DEFAULT_TRIPLET}")
-
-# Find Eigen3
-find_package(Eigen3 REQUIRED)
-
-# Find OpenGL
-find_package(OpenGL REQUIRED)
-
-# Manually find SuiteSparse and METIS libraries from vcpkg
-find_library(CHOLMOD_LIBRARY NAMES cholmod PATHS \${VCPKG_INSTALLED_DIR}/lib NO_DEFAULT_PATH)
-find_library(AMD_LIBRARY NAMES amd PATHS \${VCPKG_INSTALLED_DIR}/lib NO_DEFAULT_PATH)
-find_library(CAMD_LIBRARY NAMES camd PATHS \${VCPKG_INSTALLED_DIR}/lib NO_DEFAULT_PATH)
-find_library(COLAMD_LIBRARY NAMES colamd PATHS \${VCPKG_INSTALLED_DIR}/lib NO_DEFAULT_PATH)
-find_library(CCOLAMD_LIBRARY NAMES ccolamd PATHS \${VCPKG_INSTALLED_DIR}/lib NO_DEFAULT_PATH)
-find_library(METIS_LIBRARY NAMES metis PATHS \${VCPKG_INSTALLED_DIR}/lib NO_DEFAULT_PATH)
-
-# Check if SuiteSparse libraries were found
-if(NOT CHOLMOD_LIBRARY)
-    message(FATAL_ERROR "CHOLMOD library not found in \${VCPKG_INSTALLED_DIR}/lib")
-else()
-    message(STATUS "Found CHOLMOD: \${CHOLMOD_LIBRARY}")
-endif()
-
-# Manually find GLFW and GLEW
-find_library(GLFW_LIBRARY NAMES glfw3 PATHS \${VCPKG_INSTALLED_DIR}/lib NO_DEFAULT_PATH)
-find_library(GLEW_LIBRARY NAMES glew32 PATHS \${VCPKG_INSTALLED_DIR}/lib NO_DEFAULT_PATH)
-
-# Check if GLFW and GLEW were found
-if(NOT GLFW_LIBRARY)
-    message(FATAL_ERROR "GLFW library not found in \${VCPKG_INSTALLED_DIR}/lib")
-else()
-    message(STATUS "Found GLFW: \${GLFW_LIBRARY}")
-endif()
-
-if(NOT GLEW_LIBRARY)
-    message(FATAL_ERROR "GLEW library not found in \${VCPKG_INSTALLED_DIR}/lib")
-else()
-    message(STATUS "Found GLEW: \${GLEW_LIBRARY}")
-endif()
-
-# Include directories
-include_directories(
-    \${CMAKE_SOURCE_DIR}/include
-    \${CMAKE_SOURCE_DIR}/deps/libigl/include
-    \${CMAKE_SOURCE_DIR}/deps/spectra/include
-    \${Eigen3_INCLUDE_DIRS}
-    \${VCPKG_INSTALLED_DIR}/include
-)
-
-# Find source files
-file(GLOB_RECURSE SRC_FILES "src/*.cpp")
-file(GLOB_RECURSE SRC_HEADERS "src/*.h")
-
-if(NOT SRC_FILES)
-    message(FATAL_ERROR "No source files found in src/ directory")
-endif()
-
-# Create library
-add_library(bff-lib STATIC \${SRC_FILES})
-
-# Link SuiteSparse and METIS libraries to bff-lib
-target_link_libraries(bff-lib
-    \${CHOLMOD_LIBRARY}
-    \${AMD_LIBRARY}
-    \${CAMD_LIBRARY}
-    \${COLAMD_LIBRARY}
-    \${CCOLAMD_LIBRARY}
-    \${METIS_LIBRARY}
-)
-
-# GUI executable
-file(GLOB_RECURSE GUI_FILES "apps/*.cpp")
-if(GUI_FILES)
-    add_executable(bff-gui \${GUI_FILES})
-    target_link_libraries(bff-gui bff-lib
-        \${OPENGL_LIBRARIES}
-        \${GLFW_LIBRARY}
-        \${GLEW_LIBRARY}
-    )
-    target_include_directories(bff-gui PRIVATE \${CMAKE_SOURCE_DIR}/apps)
-    message(STATUS "Building GUI application")
-endif()
-
-# CLI executable
-file(GLOB_RECURSE CLI_FILES "binaries/*.cpp")
-if(CLI_FILES)
-    add_executable(bff-cli \${CLI_FILES})
-    target_link_libraries(bff-cli bff-lib)
-    target_include_directories(bff-cli PRIVATE \${CMAKE_SOURCE_DIR}/binaries)
-    message(STATUS "Building CLI application")
-endif()
-"@ | Out-File -FilePath $cmakeFile -Encoding UTF8
+        # Build the file line by line using Add-Content
+        Add-Content -Path $cmakeFile -Value "cmake_minimum_required(VERSION 3.15)"
+        Add-Content -Path $cmakeFile -Value "project(BFF)"
+        Add-Content -Path $cmakeFile -Value ""
+        Add-Content -Path $cmakeFile -Value "set(CMAKE_CXX_STANDARD 17)"
+        Add-Content -Path $cmakeFile -Value "set(CMAKE_CXX_STANDARD_REQUIRED ON)"
+        Add-Content -Path $cmakeFile -Value ""
+        Add-Content -Path $cmakeFile -Value "# Set vcpkg paths from environment"
+        Add-Content -Path $cmakeFile -Value 'set(VCPKG_INSTALLED_DIR "$ENV{VCPKG_ROOT}/installed/$ENV{VCPKG_DEFAULT_TRIPLET}")'
+        Add-Content -Path $cmakeFile -Value ""
+        Add-Content -Path $cmakeFile -Value "# Find Eigen3"
+        Add-Content -Path $cmakeFile -Value "find_package(Eigen3 REQUIRED)"
+        Add-Content -Path $cmakeFile -Value ""
+        Add-Content -Path $cmakeFile -Value "# Find OpenGL"
+        Add-Content -Path $cmakeFile -Value "find_package(OpenGL REQUIRED)"
+        Add-Content -Path $cmakeFile -Value ""
+        Add-Content -Path $cmakeFile -Value "# Manually find SuiteSparse and METIS libraries from vcpkg"
+        Add-Content -Path $cmakeFile -Value "find_library(CHOLMOD_LIBRARY NAMES cholmod PATHS ${VCPKG_INSTALLED_DIR}/lib NO_DEFAULT_PATH)"
+        Add-Content -Path $cmakeFile -Value "find_library(AMD_LIBRARY NAMES amd PATHS ${VCPKG_INSTALLED_DIR}/lib NO_DEFAULT_PATH)"
+        Add-Content -Path $cmakeFile -Value "find_library(CAMD_LIBRARY NAMES camd PATHS ${VCPKG_INSTALLED_DIR}/lib NO_DEFAULT_PATH)"
+        Add-Content -Path $cmakeFile -Value "find_library(COLAMD_LIBRARY NAMES colamd PATHS ${VCPKG_INSTALLED_DIR}/lib NO_DEFAULT_PATH)"
+        Add-Content -Path $cmakeFile -Value "find_library(CCOLAMD_LIBRARY NAMES ccolamd PATHS ${VCPKG_INSTALLED_DIR}/lib NO_DEFAULT_PATH)"
+        Add-Content -Path $cmakeFile -Value "find_library(METIS_LIBRARY NAMES metis PATHS ${VCPKG_INSTALLED_DIR}/lib NO_DEFAULT_PATH)"
+        Add-Content -Path $cmakeFile -Value ""
+        Add-Content -Path $cmakeFile -Value "# Check if SuiteSparse libraries were found"
+        Add-Content -Path $cmakeFile -Value "if(NOT CHOLMOD_LIBRARY)"
+        Add-Content -Path $cmakeFile -Value '    message(FATAL_ERROR "CHOLMOD library not found in ${VCPKG_INSTALLED_DIR}/lib")'
+        Add-Content -Path $cmakeFile -Value "else()"
+        Add-Content -Path $cmakeFile -Value '    message(STATUS "Found CHOLMOD: ${CHOLMOD_LIBRARY}")'
+        Add-Content -Path $cmakeFile -Value "endif()"
+        Add-Content -Path $cmakeFile -Value ""
+        Add-Content -Path $cmakeFile -Value "# Manually find GLFW and GLEW"
+        Add-Content -Path $cmakeFile -Value "find_library(GLFW_LIBRARY NAMES glfw3 PATHS ${VCPKG_INSTALLED_DIR}/lib NO_DEFAULT_PATH)"
+        Add-Content -Path $cmakeFile -Value "find_library(GLEW_LIBRARY NAMES glew32 PATHS ${VCPKG_INSTALLED_DIR}/lib NO_DEFAULT_PATH)"
+        Add-Content -Path $cmakeFile -Value ""
+        Add-Content -Path $cmakeFile -Value "# Check if GLFW and GLEW were found"
+        Add-Content -Path $cmakeFile -Value "if(NOT GLFW_LIBRARY)"
+        Add-Content -Path $cmakeFile -Value '    message(FATAL_ERROR "GLFW library not found in ${VCPKG_INSTALLED_DIR}/lib")'
+        Add-Content -Path $cmakeFile -Value "else()"
+        Add-Content -Path $cmakeFile -Value '    message(STATUS "Found GLFW: ${GLFW_LIBRARY}")'
+        Add-Content -Path $cmakeFile -Value "endif()"
+        Add-Content -Path $cmakeFile -Value ""
+        Add-Content -Path $cmakeFile -Value "if(NOT GLEW_LIBRARY)"
+        Add-Content -Path $cmakeFile -Value '    message(FATAL_ERROR "GLEW library not found in ${VCPKG_INSTALLED_DIR}/lib")'
+        Add-Content -Path $cmakeFile -Value "else()"
+        Add-Content -Path $cmakeFile -Value '    message(STATUS "Found GLEW: ${GLEW_LIBRARY}")'
+        Add-Content -Path $cmakeFile -Value "endif()"
+        Add-Content -Path $cmakeFile -Value ""
+        Add-Content -Path $cmakeFile -Value "# Include directories"
+        Add-Content -Path $cmakeFile -Value "include_directories("
+        Add-Content -Path $cmakeFile -Value "    ${CMAKE_SOURCE_DIR}/include"
+        Add-Content -Path $cmakeFile -Value "    ${CMAKE_SOURCE_DIR}/deps/libigl/include"
+        Add-Content -Path $cmakeFile -Value "    ${CMAKE_SOURCE_DIR}/deps/spectra/include"
+        Add-Content -Path $cmakeFile -Value "    ${Eigen3_INCLUDE_DIRS}"
+        Add-Content -Path $cmakeFile -Value "    ${VCPKG_INSTALLED_DIR}/include"
+        Add-Content -Path $cmakeFile -Value ")"
+        Add-Content -Path $cmakeFile -Value ""
+        Add-Content -Path $cmakeFile -Value "# Find source files"
+        Add-Content -Path $cmakeFile -Value 'file(GLOB_RECURSE SRC_FILES "src/*.cpp")'
+        Add-Content -Path $cmakeFile -Value 'file(GLOB_RECURSE SRC_HEADERS "src/*.h")'
+        Add-Content -Path $cmakeFile -Value ""
+        Add-Content -Path $cmakeFile -Value "if(NOT SRC_FILES)"
+        Add-Content -Path $cmakeFile -Value '    message(FATAL_ERROR "No source files found in src/ directory")'
+        Add-Content -Path $cmakeFile -Value "endif()"
+        Add-Content -Path $cmakeFile -Value ""
+        Add-Content -Path $cmakeFile -Value "# Create library"
+        Add-Content -Path $cmakeFile -Value "add_library(bff-lib STATIC ${SRC_FILES})"
+        Add-Content -Path $cmakeFile -Value ""
+        Add-Content -Path $cmakeFile -Value "# Link SuiteSparse and METIS libraries to bff-lib"
+        Add-Content -Path $cmakeFile -Value "target_link_libraries(bff-lib"
+        Add-Content -Path $cmakeFile -Value "    ${CHOLMOD_LIBRARY}"
+        Add-Content -Path $cmakeFile -Value "    ${AMD_LIBRARY}"
+        Add-Content -Path $cmakeFile -Value "    ${CAMD_LIBRARY}"
+        Add-Content -Path $cmakeFile -Value "    ${COLAMD_LIBRARY}"
+        Add-Content -Path $cmakeFile -Value "    ${CCOLAMD_LIBRARY}"
+        Add-Content -Path $cmakeFile -Value "    ${METIS_LIBRARY}"
+        Add-Content -Path $cmakeFile -Value ")"
+        Add-Content -Path $cmakeFile -Value ""
+        Add-Content -Path $cmakeFile -Value "# GUI executable"
+        Add-Content -Path $cmakeFile -Value 'file(GLOB_RECURSE GUI_FILES "apps/*.cpp")'
+        Add-Content -Path $cmakeFile -Value "if(GUI_FILES)"
+        Add-Content -Path $cmakeFile -Value "    add_executable(bff-gui ${GUI_FILES})"
+        Add-Content -Path $cmakeFile -Value "    target_link_libraries(bff-gui bff-lib"
+        Add-Content -Path $cmakeFile -Value "        ${OPENGL_LIBRARIES}"
+        Add-Content -Path $cmakeFile -Value "        ${GLFW_LIBRARY}"
+        Add-Content -Path $cmakeFile -Value "        ${GLEW_LIBRARY}"
+        Add-Content -Path $cmakeFile -Value "    )"
+        Add-Content -Path $cmakeFile -Value "    target_include_directories(bff-gui PRIVATE ${CMAKE_SOURCE_DIR}/apps)"
+        Add-Content -Path $cmakeFile -Value '    message(STATUS "Building GUI application")'
+        Add-Content -Path $cmakeFile -Value "endif()"
+        Add-Content -Path $cmakeFile -Value ""
+        Add-Content -Path $cmakeFile -Value "# CLI executable"
+        Add-Content -Path $cmakeFile -Value 'file(GLOB_RECURSE CLI_FILES "binaries/*.cpp")'
+        Add-Content -Path $cmakeFile -Value "if(CLI_FILES)"
+        Add-Content -Path $cmakeFile -Value "    add_executable(bff-cli ${CLI_FILES})"
+        Add-Content -Path $cmakeFile -Value "    target_link_libraries(bff-cli bff-lib)"
+        Add-Content -Path $cmakeFile -Value "    target_include_directories(bff-cli PRIVATE ${CMAKE_SOURCE_DIR}/binaries)"
+        Add-Content -Path $cmakeFile -Value '    message(STATUS "Building CLI application")'
+        Add-Content -Path $cmakeFile -Value "endif()"
         
         Write-Host "Created CMakeLists.txt"
         Write-Host "First few lines of CMakeLists.txt:"
