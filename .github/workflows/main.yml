@@ -34,12 +34,74 @@ jobs:
         # Install required dependencies
         & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET eigen3
         & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET libigl
-        & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET suitesparse
-        & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET metis
         & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET glfw3
         & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET glew
         & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET freeglut
         & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET glm
+
+    - name: Download and install SuiteSparse-METIS with headers
+      shell: powershell
+      run: |
+        Write-Host "Downloading SuiteSparse-METIS with headers..."
+        
+        # Create directories
+        New-Item -ItemType Directory -Force -Path "C:\SuiteSparse"
+        New-Item -ItemType Directory -Force -Path "C:\SuiteSparse\include"
+        New-Item -ItemType Directory -Force -Path "C:\SuiteSparse\lib"
+        
+        # Download from the actual release mentioned in BFF instructions
+        # Based on: https://github.com/jlblancoc/suitesparse-metis-for-windows
+        # Let's try to get the actual pre-built binaries
+        $url = "https://github.com/jlblancoc/suitesparse-metis-for-windows/releases/download/v1.5.0/SuiteSparse-5.4.0-METIS-5.1.0-Win-x64.zip"
+        $output = "C:\SuiteSparse.zip"
+        
+        Write-Host "Downloading from: $url"
+        try {
+          Invoke-WebRequest -Uri $url -OutFile $output
+          Write-Host "Download successful"
+        } catch {
+          Write-Host "Failed to download from primary URL, trying alternative..."
+          # Try an alternative URL
+          $url = "https://github.com/jlblancoc/suitesparse-metis-for-windows/releases/download/v1.4.0/SuiteSparse-4.5.1-METIS-5.1.0-Win-x64.zip"
+          Invoke-WebRequest -Uri $url -OutFile $output
+        }
+        
+        # Extract
+        Expand-Archive -Path $output -DestinationPath "C:\SuiteSparseTemp\" -Force
+        
+        Write-Host "Extracted files:"
+        Get-ChildItem -Path "C:\SuiteSparseTemp" -Recurse | Select-Object -First 10
+        
+        # Copy include files
+        $includeSrc = Get-ChildItem -Path "C:\SuiteSparseTemp" -Recurse -Directory | Where-Object { $_.Name -eq "include" } | Select-Object -First 1
+        if ($includeSrc) {
+          Write-Host "Found include directory: $($includeSrc.FullName)"
+          Copy-Item -Path "$($includeSrc.FullName)\*" -Destination "C:\SuiteSparse\include\" -Recurse -Force
+        }
+        
+        # Copy library files
+        $libSrc = Get-ChildItem -Path "C:\SuiteSparseTemp" -Recurse -Directory | Where-Object { $_.Name -eq "lib" } | Select-Object -First 1
+        if ($libSrc) {
+          Write-Host "Found lib directory: $($libSrc.FullName)"
+          Copy-Item -Path "$($libSrc.FullName)\*" -Destination "C:\SuiteSparse\lib\" -Recurse -Force
+        }
+        
+        # If no structured directories found, copy all .h and .lib files
+        if (-not $includeSrc -or -not $libSrc) {
+          Write-Host "No structured directories found, copying all files..."
+          Get-ChildItem -Path "C:\SuiteSparseTemp" -Recurse -Filter "*.h" | ForEach-Object {
+            Copy-Item -Path $_.FullName -Destination "C:\SuiteSparse\include\" -Force
+          }
+          Get-ChildItem -Path "C:\SuiteSparseTemp" -Recurse -Filter "*.lib" | ForEach-Object {
+            Copy-Item -Path $_.FullName -Destination "C:\SuiteSparse\lib\" -Force
+          }
+        }
+        
+        Write-Host "SuiteSparse installation complete"
+        Write-Host "Files in include directory:"
+        Get-ChildItem -Path "C:\SuiteSparse\include" -Filter "*.h" | Select-Object -First 10
+        Write-Host "Files in lib directory:"
+        Get-ChildItem -Path "C:\SuiteSparse\lib" -Filter "*.lib" | Select-Object -First 10
 
     - name: Clone BFF source
       shell: powershell
@@ -47,151 +109,45 @@ jobs:
         Write-Host "Cloning BFF v1.6..."
         git clone --recursive --branch v1.6 https://github.com/GeometryCollective/boundary-first-flattening.git bff-source
         
-        Write-Host "BFF source structure:"
-        Get-ChildItem -Path "bff-source" | Format-Table Name, Mode
-        
-        Write-Host "`nLooking for source files..."
-        # Check different possible source locations
-        $possibleSrcDirs = @("bff-source", "bff-source/lib", "bff-source/src", "bff-source/bff")
-        foreach ($dir in $possibleSrcDirs) {
-          if (Test-Path $dir) {
-            $cppFiles = Get-ChildItem -Path $dir -Recurse -Filter "*.cpp" | Select-Object -First 5
-            if ($cppFiles) {
-              Write-Host "Found .cpp files in $dir :"
-              $cppFiles | Format-Table Name
-            }
-          }
-        }
-        
-        Write-Host "`nLooking for apps/gui files..."
-        $possibleAppDirs = @("bff-source/apps", "bff-source/gui", "bff-source/viewer")
-        foreach ($dir in $possibleAppDirs) {
-          if (Test-Path $dir) {
-            $cppFiles = Get-ChildItem -Path $dir -Recurse -Filter "*.cpp" | Select-Object -First 5
-            if ($cppFiles) {
-              Write-Host "Found .cpp files in $dir :"
-              $cppFiles | Format-Table Name
-            }
-          }
-        }
-
-    - name: Create CMakeLists.txt for actual BFF structure
-      shell: powershell
-      run: |
-        # Based on what we found, create appropriate CMakeLists.txt
-        $lines = @()
-        
-        # Add each line individually
-        $lines += "cmake_minimum_required(VERSION 3.15)"
-        $lines += "project(BFF)"
-        $lines += ""
-        $lines += "set(CMAKE_CXX_STANDARD 17)"
-        $lines += "set(CMAKE_CXX_STANDARD_REQUIRED ON)"
-        $lines += ""
-        $lines += "# Get vcpkg paths from environment"
-        $lines += 'set(VCPKG_INSTALLED_DIR "$ENV{VCPKG_ROOT}/installed/$ENV{VCPKG_DEFAULT_TRIPLET}")'
-        $lines += ""
-        $lines += "# Find Eigen3"
-        $lines += "find_package(Eigen3 REQUIRED)"
-        $lines += ""
-        $lines += "# Find OpenGL"
-        $lines += "find_package(OpenGL REQUIRED)"
-        $lines += ""
-        $lines += "# Use file glob to find all needed libraries"
-        $lines += 'file(GLOB CHOLMOD_LIBS "${VCPKG_INSTALLED_DIR}/lib/*cholmod*.lib")'
-        $lines += 'file(GLOB AMD_LIBS "${VCPKG_INSTALLED_DIR}/lib/*amd*.lib")'
-        $lines += 'file(GLOB CAMD_LIBS "${VCPKG_INSTALLED_DIR}/lib/*camd*.lib")'
-        $lines += 'file(GLOB COLAMD_LIBS "${VCPKG_INSTALLED_DIR}/lib/*colamd*.lib")'
-        $lines += 'file(GLOB CCOLAMD_LIBS "${VCPKG_INSTALLED_DIR}/lib/*ccolamd*.lib")'
-        $lines += 'file(GLOB METIS_LIBS "${VCPKG_INSTALLED_DIR}/lib/*metis*.lib")'
-        $lines += 'file(GLOB GLFW_LIBS "${VCPKG_INSTALLED_DIR}/lib/*glfw*.lib")'
-        $lines += 'file(GLOB GLEW_LIBS "${VCPKG_INSTALLED_DIR}/lib/*glew*.lib")'
-        $lines += ""
-        $lines += "# Check if libraries were found"
-        $lines += "if(NOT CHOLMOD_LIBS)"
-        $lines += '    message(FATAL_ERROR "CHOLMOD library not found")'
-        $lines += "else()"
-        $lines += "    list(GET CHOLMOD_LIBS 0 CHOLMOD_LIBRARY)"
-        $lines += '    message(STATUS "Found CHOLMOD: ${CHOLMOD_LIBRARY}")'
-        $lines += "endif()"
-        $lines += ""
-        $lines += "# Similar for other libraries (simplified for brevity)"
-        $lines += "if(AMD_LIBS) list(GET AMD_LIBS 0 AMD_LIBRARY) endif()"
-        $lines += "if(CAMD_LIBS) list(GET CAMD_LIBS 0 CAMD_LIBRARY) endif()"
-        $lines += "if(COLAMD_LIBS) list(GET COLAMD_LIBS 0 COLAMD_LIBRARY) endif()"
-        $lines += "if(CCOLAMD_LIBS) list(GET CCOLAMD_LIBS 0 CCOLAMD_LIBRARY) endif()"
-        $lines += "if(METIS_LIBS) list(GET METIS_LIBS 0 METIS_LIBRARY) endif()"
-        $lines += "if(GLFW_LIBS) list(GET GLFW_LIBS 0 GLFW_LIBRARY) endif()"
-        $lines += "if(GLEW_LIBS) list(GET GLEW_LIBS 0 GLEW_LIBRARY) endif()"
-        $lines += ""
-        $lines += "# Include directories"
-        $lines += "include_directories("
-        $lines += "    ${CMAKE_SOURCE_DIR}/bff-source"
-        $lines += "    ${CMAKE_SOURCE_DIR}/bff-source/lib"
-        $lines += "    ${CMAKE_SOURCE_DIR}/bff-source/deps/libigl/include"
-        $lines += "    ${CMAKE_SOURCE_DIR}/bff-source/deps/spectra/include"
-        $lines += "    ${Eigen3_INCLUDE_DIRS}"
-        $lines += "    ${VCPKG_INSTALLED_DIR}/include"
-        $lines += ")"
-        $lines += ""
-        $lines += "# Find BFF source files - look in lib directory"
-        $lines += 'file(GLOB_RECURSE SRC_FILES "bff-source/lib/*.cpp")'
-        $lines += 'file(GLOB_RECURSE SRC_HEADERS "bff-source/lib/*.h")'
-        $lines += ""
-        $lines += "if(NOT SRC_FILES)"
-        $lines += '    message(FATAL_ERROR "No source files found")'
-        $lines += "else()"
-        $lines += '    message(STATUS "Found ${SRC_FILES} source files")'
-        $lines += "endif()"
-        $lines += ""
-        $lines += "# Create library"
-        $lines += "add_library(bff-lib STATIC ${SRC_FILES})"
-        $lines += ""
-        $lines += "# Link libraries"
-        $lines += "target_link_libraries(bff-lib"
-        $lines += "    ${CHOLMOD_LIBRARY}"
-        $lines += "    ${AMD_LIBRARY}"
-        $lines += "    ${CAMD_LIBRARY}"
-        $lines += "    ${COLAMD_LIBRARY}"
-        $lines += "    ${CCOLAMD_LIBRARY}"
-        $lines += "    ${METIS_LIBRARY}"
-        $lines += ")"
-        $lines += ""
-        $lines += "# GUI executable - look in apps directory"
-        $lines += 'file(GLOB_RECURSE GUI_FILES "bff-source/apps/*.cpp")'
-        $lines += "if(GUI_FILES)"
-        $lines += "    add_executable(bff-gui ${GUI_FILES})"
-        $lines += "    target_link_libraries(bff-gui bff-lib"
-        $lines += "        ${OPENGL_LIBRARIES}"
-        $lines += "        ${GLFW_LIBRARY}"
-        $lines += "        ${GLEW_LIBRARY}"
-        $lines += "    )"
-        $lines += "    target_include_directories(bff-gui PRIVATE ${CMAKE_SOURCE_DIR}/bff-source/apps)"
-        $lines += '    message(STATUS "Building GUI application")'
-        $lines += "endif()"
-        $lines += ""
-        $lines += "# CLI executable - look in binaries directory"
-        $lines += 'file(GLOB_RECURSE CLI_FILES "bff-source/binaries/*.cpp")'
-        $lines += "if(CLI_FILES)"
-        $lines += "    add_executable(bff-cli ${CLI_FILES})"
-        $lines += "    target_link_libraries(bff-cli bff-lib)"
-        $lines += "    target_include_directories(bff-cli PRIVATE ${CMAKE_SOURCE_DIR}/bff-source/binaries)"
-        $lines += '    message(STATUS "Building CLI application")'
-        $lines += "endif()"
-        
-        # Write all lines to file
-        [System.IO.File]::WriteAllLines("CMakeLists.txt", $lines)
-        Write-Host "Created CMakeLists.txt with $($lines.Count) lines"
-
-    - name: Copy BFF source to root for easier building
-      shell: powershell
-      run: |
-        # Copy everything from bff-source to current directory
-        Write-Host "Copying BFF source files to root..."
+        # Copy to current directory
         Copy-Item -Path "bff-source\*" -Destination "." -Recurse -Force
         
-        Write-Host "Current directory after copy:"
-        Get-ChildItem | Select-Object -First 15 | Format-Table Name, Mode
+        Write-Host "BFF files copied to current directory"
+
+    - name: Create modified CMakeLists.txt that uses SuiteSparse directory
+      shell: powershell
+      run: |
+        # Read the original CMakeLists.txt
+        $original = Get-Content -Path "CMakeLists.txt" -Raw
+        
+        # Modify it to use our SuiteSparse installation
+        $modified = $original -replace 'find_package\(SuiteSparse REQUIRED\)', @'
+# Use our SuiteSparse installation
+set(SuiteSparse_DIR "C:/SuiteSparse")
+set(SuiteSparse_INCLUDE_DIR "C:/SuiteSparse/include")
+set(SuiteSparse_LIBRARY_DIR "C:/SuiteSparse/lib")
+
+# Manually set the libraries
+set(SuiteSparse_CHOLMOD_LIBRARY "C:/SuiteSparse/lib/cholmod.lib")
+set(SuiteSparse_AMD_LIBRARY "C:/SuiteSparse/lib/amd.lib")
+set(SuiteSparse_CAMD_LIBRARY "C:/SuiteSparse/lib/camd.lib")
+set(SuiteSparse_COLAMD_LIBRARY "C:/SuiteSparse/lib/colamd.lib")
+set(SuiteSparse_CCOLAMD_LIBRARY "C:/SuiteSparse/lib/ccolamd.lib")
+set(SuiteSparse_METIS_LIBRARY "C:/SuiteSparse/lib/metis.lib")
+
+# Set that SuiteSparse was found
+set(SuiteSparse_FOUND ON)
+set(SuiteSparse_CHOLMOD_FOUND ON)
+set(SuiteSparse_AMD_FOUND ON)
+set(SuiteSparse_CAMD_FOUND ON)
+set(SuiteSparse_COLAMD_FOUND ON)
+set(SuiteSparse_CCOLAMD_FOUND ON)
+set(SuiteSparse_METIS_FOUND ON)
+'@
+        
+        # Save the modified version
+        $modified | Out-File -FilePath "CMakeLists.txt" -Encoding UTF8
+        Write-Host "Modified CMakeLists.txt to use local SuiteSparse"
 
     - name: Configure CMake
       shell: powershell
@@ -201,11 +157,13 @@ jobs:
         
         Write-Host "Configuring CMake with vcpkg toolchain..."
         
-        # Configure with CMake
+        # Configure with CMake - explicitly set SuiteSparse paths
         cmake -B build `
           -DCMAKE_BUILD_TYPE=Release `
           -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
           -DVCPKG_TARGET_TRIPLET=$env:VCPKG_DEFAULT_TRIPLET `
+          -DSuiteSparse_DIR="C:/SuiteSparse" `
+          -DSuiteSparse_INCLUDE_DIR="C:/SuiteSparse/include" `
           -G "Visual Studio 17 2022" `
           -A x64
 
@@ -230,11 +188,18 @@ jobs:
           Copy-Item -Path $exe.FullName -Destination "dist\" -Force
         }
         
-        # Copy DLLs
+        # Copy DLLs from vcpkg
         $vcpkgBinPath = "$env:VCPKG_ROOT\installed\$env:VCPKG_DEFAULT_TRIPLET\bin"
         if (Test-Path $vcpkgBinPath) {
           Write-Host "Copying DLLs from vcpkg..."
           Get-ChildItem -Path $vcpkgBinPath -Filter "*.dll" | Copy-Item -Destination "dist\" -Force
+        }
+        
+        # Copy DLLs from SuiteSparse
+        $suiteSparseLibPath = "C:\SuiteSparse\lib"
+        if (Test-Path $suiteSparseLibPath) {
+          Write-Host "Copying DLLs from SuiteSparse..."
+          Get-ChildItem -Path $suiteSparseLibPath -Filter "*.dll" | Copy-Item -Destination "dist\" -Force
         }
         
         # List what we have
