@@ -39,69 +39,40 @@ jobs:
         & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET freeglut
         & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET glm
 
-    - name: Download and install SuiteSparse-METIS with headers
+    - name: Download SuiteSparse-METIS
       shell: powershell
       run: |
-        Write-Host "Downloading SuiteSparse-METIS with headers..."
+        Write-Host "Downloading SuiteSparse-METIS..."
         
         # Create directories
         New-Item -ItemType Directory -Force -Path "C:\SuiteSparse"
         New-Item -ItemType Directory -Force -Path "C:\SuiteSparse\include"
         New-Item -ItemType Directory -Force -Path "C:\SuiteSparse\lib"
         
-        # Download from the actual release mentioned in BFF instructions
-        # Based on: https://github.com/jlblancoc/suitesparse-metis-for-windows
-        # Let's try to get the actual pre-built binaries
-        $url = "https://github.com/jlblancoc/suitesparse-metis-for-windows/releases/download/v1.5.0/SuiteSparse-5.4.0-METIS-5.1.0-Win-x64.zip"
+        # Download from GitHub releases
+        $url = "https://github.com/jlblancoc/suitesparse-metis-for-windows/releases/download/v1.4.0/SuiteSparse-4.5.1-METIS-5.1.0-Win-x64.zip"
         $output = "C:\SuiteSparse.zip"
         
         Write-Host "Downloading from: $url"
-        try {
-          Invoke-WebRequest -Uri $url -OutFile $output
-          Write-Host "Download successful"
-        } catch {
-          Write-Host "Failed to download from primary URL, trying alternative..."
-          # Try an alternative URL
-          $url = "https://github.com/jlblancoc/suitesparse-metis-for-windows/releases/download/v1.4.0/SuiteSparse-4.5.1-METIS-5.1.0-Win-x64.zip"
-          Invoke-WebRequest -Uri $url -OutFile $output
-        }
+        Invoke-WebRequest -Uri $url -OutFile $output
         
         # Extract
         Expand-Archive -Path $output -DestinationPath "C:\SuiteSparseTemp\" -Force
         
-        Write-Host "Extracted files:"
-        Get-ChildItem -Path "C:\SuiteSparseTemp" -Recurse | Select-Object -First 10
+        # Find and copy files
+        Write-Host "Looking for files..."
         
-        # Copy include files
-        $includeSrc = Get-ChildItem -Path "C:\SuiteSparseTemp" -Recurse -Directory | Where-Object { $_.Name -eq "include" } | Select-Object -First 1
-        if ($includeSrc) {
-          Write-Host "Found include directory: $($includeSrc.FullName)"
-          Copy-Item -Path "$($includeSrc.FullName)\*" -Destination "C:\SuiteSparse\include\" -Recurse -Force
+        # Copy all header files
+        Get-ChildItem -Path "C:\SuiteSparseTemp" -Recurse -Filter "*.h" | ForEach-Object {
+          Copy-Item -Path $_.FullName -Destination "C:\SuiteSparse\include\" -Force
         }
         
-        # Copy library files
-        $libSrc = Get-ChildItem -Path "C:\SuiteSparseTemp" -Recurse -Directory | Where-Object { $_.Name -eq "lib" } | Select-Object -First 1
-        if ($libSrc) {
-          Write-Host "Found lib directory: $($libSrc.FullName)"
-          Copy-Item -Path "$($libSrc.FullName)\*" -Destination "C:\SuiteSparse\lib\" -Recurse -Force
-        }
-        
-        # If no structured directories found, copy all .h and .lib files
-        if (-not $includeSrc -or -not $libSrc) {
-          Write-Host "No structured directories found, copying all files..."
-          Get-ChildItem -Path "C:\SuiteSparseTemp" -Recurse -Filter "*.h" | ForEach-Object {
-            Copy-Item -Path $_.FullName -Destination "C:\SuiteSparse\include\" -Force
-          }
-          Get-ChildItem -Path "C:\SuiteSparseTemp" -Recurse -Filter "*.lib" | ForEach-Object {
-            Copy-Item -Path $_.FullName -Destination "C:\SuiteSparse\lib\" -Force
-          }
+        # Copy all library files
+        Get-ChildItem -Path "C:\SuiteSparseTemp" -Recurse -Filter "*.lib" | ForEach-Object {
+          Copy-Item -Path $_.FullName -Destination "C:\SuiteSparse\lib\" -Force
         }
         
         Write-Host "SuiteSparse installation complete"
-        Write-Host "Files in include directory:"
-        Get-ChildItem -Path "C:\SuiteSparse\include" -Filter "*.h" | Select-Object -First 10
-        Write-Host "Files in lib directory:"
-        Get-ChildItem -Path "C:\SuiteSparse\lib" -Filter "*.lib" | Select-Object -First 10
 
     - name: Clone BFF source
       shell: powershell
@@ -114,39 +85,44 @@ jobs:
         
         Write-Host "BFF files copied to current directory"
 
-    - name: Create modified CMakeLists.txt that uses SuiteSparse directory
+    - name: Modify CMakeLists.txt
       shell: powershell
       run: |
-        # Read the original CMakeLists.txt
-        $original = Get-Content -Path "CMakeLists.txt" -Raw
+        # Read the original CMakeLists.txt line by line
+        $lines = Get-Content -Path "CMakeLists.txt"
+        $newLines = @()
         
-        # Modify it to use our SuiteSparse installation
-        $modified = $original -replace 'find_package\(SuiteSparse REQUIRED\)', @'
-# Use our SuiteSparse installation
-set(SuiteSparse_DIR "C:/SuiteSparse")
-set(SuiteSparse_INCLUDE_DIR "C:/SuiteSparse/include")
-set(SuiteSparse_LIBRARY_DIR "C:/SuiteSparse/lib")
-
-# Manually set the libraries
-set(SuiteSparse_CHOLMOD_LIBRARY "C:/SuiteSparse/lib/cholmod.lib")
-set(SuiteSparse_AMD_LIBRARY "C:/SuiteSparse/lib/amd.lib")
-set(SuiteSparse_CAMD_LIBRARY "C:/SuiteSparse/lib/camd.lib")
-set(SuiteSparse_COLAMD_LIBRARY "C:/SuiteSparse/lib/colamd.lib")
-set(SuiteSparse_CCOLAMD_LIBRARY "C:/SuiteSparse/lib/ccolamd.lib")
-set(SuiteSparse_METIS_LIBRARY "C:/SuiteSparse/lib/metis.lib")
-
-# Set that SuiteSparse was found
-set(SuiteSparse_FOUND ON)
-set(SuiteSparse_CHOLMOD_FOUND ON)
-set(SuiteSparse_AMD_FOUND ON)
-set(SuiteSparse_CAMD_FOUND ON)
-set(SuiteSparse_COLAMD_FOUND ON)
-set(SuiteSparse_CCOLAMD_FOUND ON)
-set(SuiteSparse_METIS_FOUND ON)
-'@
+        foreach ($line in $lines) {
+          if ($line -match 'find_package\(SuiteSparse REQUIRED\)') {
+            # Replace with our custom SuiteSparse setup
+            $newLines += "# Use our SuiteSparse installation"
+            $newLines += 'set(SuiteSparse_DIR "C:/SuiteSparse")'
+            $newLines += 'set(SuiteSparse_INCLUDE_DIR "C:/SuiteSparse/include")'
+            $newLines += 'set(SuiteSparse_LIBRARY_DIR "C:/SuiteSparse/lib")'
+            $newLines += ""
+            $newLines += "# Manually set the libraries"
+            $newLines += 'set(SuiteSparse_CHOLMOD_LIBRARY "C:/SuiteSparse/lib/cholmod.lib")'
+            $newLines += 'set(SuiteSparse_AMD_LIBRARY "C:/SuiteSparse/lib/amd.lib")'
+            $newLines += 'set(SuiteSparse_CAMD_LIBRARY "C:/SuiteSparse/lib/camd.lib")'
+            $newLines += 'set(SuiteSparse_COLAMD_LIBRARY "C:/SuiteSparse/lib/colamd.lib")'
+            $newLines += 'set(SuiteSparse_CCOLAMD_LIBRARY "C:/SuiteSparse/lib/ccolamd.lib")'
+            $newLines += 'set(SuiteSparse_METIS_LIBRARY "C:/SuiteSparse/lib/metis.lib")'
+            $newLines += ""
+            $newLines += "# Set that SuiteSparse was found"
+            $newLines += "set(SuiteSparse_FOUND ON)"
+            $newLines += "set(SuiteSparse_CHOLMOD_FOUND ON)"
+            $newLines += "set(SuiteSparse_AMD_FOUND ON)"
+            $newLines += "set(SuiteSparse_CAMD_FOUND ON)"
+            $newLines += "set(SuiteSparse_COLAMD_FOUND ON)"
+            $newLines += "set(SuiteSparse_CCOLAMD_FOUND ON)"
+            $newLines += "set(SuiteSparse_METIS_FOUND ON)"
+          } else {
+            $newLines += $line
+          }
+        }
         
-        # Save the modified version
-        $modified | Out-File -FilePath "CMakeLists.txt" -Encoding UTF8
+        # Write the modified content back
+        $newLines | Out-File -FilePath "CMakeLists.txt" -Encoding UTF8
         Write-Host "Modified CMakeLists.txt to use local SuiteSparse"
 
     - name: Configure CMake
@@ -155,15 +131,14 @@ set(SuiteSparse_METIS_FOUND ON)
         # Create build directory
         New-Item -ItemType Directory -Force -Path "build"
         
-        Write-Host "Configuring CMake with vcpkg toolchain..."
+        Write-Host "Configuring CMake..."
         
-        # Configure with CMake - explicitly set SuiteSparse paths
+        # Configure with CMake
         cmake -B build `
           -DCMAKE_BUILD_TYPE=Release `
           -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
           -DVCPKG_TARGET_TRIPLET=$env:VCPKG_DEFAULT_TRIPLET `
           -DSuiteSparse_DIR="C:/SuiteSparse" `
-          -DSuiteSparse_INCLUDE_DIR="C:/SuiteSparse/include" `
           -G "Visual Studio 17 2022" `
           -A x64
 
