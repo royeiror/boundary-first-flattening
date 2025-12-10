@@ -43,114 +43,78 @@ jobs:
         & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET freeglut
         & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET glm
 
-    - name: Download pre-built SuiteSparse-METIS
+    - name: Create CMakeLists.txt
       shell: powershell
       run: |
-        # Instead of building from source, let's use the pre-built binaries
-        # from the releases page mentioned in the instructions
-        Write-Host "Looking for pre-built SuiteSparse-METIS..."
-        
-        # Create directories
-        New-Item -ItemType Directory -Force -Path "C:\SuiteSparse"
-        New-Item -ItemType Directory -Force -Path "C:\SuiteSparse\include"
-        New-Item -ItemType Directory -Force -Path "C:\SuiteSparse\lib"
-        New-Item -ItemType Directory -Force -Path "C:\SuiteSparse\bin"
-        
-        # Since the exact download URL is problematic, let's check what vcpkg installed
-        Write-Host "Checking what vcpkg installed for SuiteSparse..."
-        $vcpkgInstalled = "$env:VCPKG_ROOT\installed\$env:VCPKG_DEFAULT_TRIPLET"
-        if (Test-Path $vcpkgInstalled) {
-          Write-Host "Looking for SuiteSparse in vcpkg installed directory..."
-          
-          # Copy include files
-          if (Test-Path "$vcpkgInstalled\include") {
-            Copy-Item -Path "$vcpkgInstalled\include\*" -Destination "C:\SuiteSparse\include\" -Recurse -Force
-            Write-Host "Copied include files from vcpkg"
-          }
-          
-          # Copy library files
-          if (Test-Path "$vcpkgInstalled\lib") {
-            $libFiles = Get-ChildItem -Path "$vcpkgInstalled\lib" -Filter "*metis*" -Recurse
-            foreach ($file in $libFiles) {
-              Copy-Item -Path $file.FullName -Destination "C:\SuiteSparse\lib\" -Force
-              Write-Host "Copied: $($file.Name)"
-            }
-          }
-        }
-
-    - name: Create simple CMakeLists.txt
-      shell: powershell
-      run: |
-        # Create a very simple CMakeLists.txt that uses the original BFF structure
-        $cmakeContent = @"
-cmake_minimum_required(VERSION 3.15)
-project(BFF)
-
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-
-# Use vcpkg
-set(CMAKE_TOOLCHAIN_FILE "\$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake")
-
-# Find packages
-find_package(Eigen3 REQUIRED)
-find_package(SuiteSparse REQUIRED)
-find_package(METIS REQUIRED)
-find_package(OpenGL REQUIRED)
-find_package(glfw3 REQUIRED)
-find_package(GLEW REQUIRED)
-
-# Include directories
-include_directories(
-    \${CMAKE_SOURCE_DIR}/include
-    \${CMAKE_SOURCE_DIR}/deps/libigl/include
-    \${CMAKE_SOURCE_DIR}/deps/spectra/include
-    \${Eigen3_INCLUDE_DIRS}
-    \${SuiteSparse_INCLUDE_DIRS}
-    \${METIS_INCLUDE_DIRS}
-)
-
-# Find source files
-file(GLOB_RECURSE SRC_FILES "src/*.cpp")
-file(GLOB_RECURSE SRC_HEADERS "src/*.h")
-
-if(NOT SRC_FILES)
-    message(FATAL_ERROR "No source files found in src/ directory")
-endif()
-
-# Create library
-add_library(bff-lib STATIC \${SRC_FILES})
-
-# Link libraries
-target_link_libraries(bff-lib
-    \${SuiteSparse_LIBRARIES}
-    \${METIS_LIBRARIES}
-)
-
-# GUI executable
-file(GLOB_RECURSE GUI_FILES "apps/*.cpp")
-if(GUI_FILES)
-    add_executable(bff-gui \${GUI_FILES})
-    target_link_libraries(bff-gui bff-lib 
-        \${OPENGL_LIBRARIES}
-        glfw
-        \${GLEW_LIBRARIES}
-    )
-    message(STATUS "Building GUI application")
-endif()
-
-# CLI executable  
-file(GLOB_RECURSE CLI_FILES "binaries/*.cpp")
-if(CLI_FILES)
-    add_executable(bff-cli \${CLI_FILES})
-    target_link_libraries(bff-cli bff-lib)
-    message(STATUS "Building CLI application")
-endif()
-"@
+        # Build CMakeLists.txt line by line
+        $lines = @()
+        $lines += "cmake_minimum_required(VERSION 3.15)"
+        $lines += "project(BFF)"
+        $lines += ""
+        $lines += "set(CMAKE_CXX_STANDARD 17)"
+        $lines += "set(CMAKE_CXX_STANDARD_REQUIRED ON)"
+        $lines += ""
+        $lines += "# Use vcpkg"
+        $lines += "set(CMAKE_TOOLCHAIN_FILE `"\$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake`")"
+        $lines += ""
+        $lines += "# Find packages"
+        $lines += "find_package(Eigen3 REQUIRED)"
+        $lines += "find_package(SuiteSparse REQUIRED)"
+        $lines += "find_package(METIS REQUIRED)"
+        $lines += "find_package(OpenGL REQUIRED)"
+        $lines += "find_package(glfw3 REQUIRED)"
+        $lines += "find_package(GLEW REQUIRED)"
+        $lines += ""
+        $lines += "# Include directories"
+        $lines += "include_directories("
+        $lines += "    \`\${CMAKE_SOURCE_DIR}/include"
+        $lines += "    \`\${CMAKE_SOURCE_DIR}/deps/libigl/include"
+        $lines += "    \`\${CMAKE_SOURCE_DIR}/deps/spectra/include"
+        $lines += "    \`\${Eigen3_INCLUDE_DIRS}"
+        $lines += "    \`\${SuiteSparse_INCLUDE_DIRS}"
+        $lines += "    \`\${METIS_INCLUDE_DIRS}"
+        $lines += ")"
+        $lines += ""
+        $lines += "# Find source files"
+        $lines += "file(GLOB_RECURSE SRC_FILES `"src/*.cpp`")"
+        $lines += "file(GLOB_RECURSE SRC_HEADERS `"src/*.h`")"
+        $lines += ""
+        $lines += "if(NOT SRC_FILES)"
+        $lines += "    message(FATAL_ERROR `"No source files found in src/ directory`")"
+        $lines += "endif()"
+        $lines += ""
+        $lines += "# Create library"
+        $lines += "add_library(bff-lib STATIC \`\${SRC_FILES})"
+        $lines += ""
+        $lines += "# Link libraries"
+        $lines += "target_link_libraries(bff-lib"
+        $lines += "    \`\${SuiteSparse_LIBRARIES}"
+        $lines += "    \`\${METIS_LIBRARIES}"
+        $lines += ")"
+        $lines += ""
+        $lines += "# GUI executable"
+        $lines += "file(GLOB_RECURSE GUI_FILES `"apps/*.cpp`")"
+        $lines += "if(GUI_FILES)"
+        $lines += "    add_executable(bff-gui \`\${GUI_FILES})"
+        $lines += "    target_link_libraries(bff-gui bff-lib"
+        $lines += "        \`\${OPENGL_LIBRARIES}"
+        $lines += "        glfw"
+        $lines += "        \`\${GLEW_LIBRARIES}"
+        $lines += "    )"
+        $lines += "    message(STATUS `"Building GUI application`")"
+        $lines += "endif()"
+        $lines += ""
+        $lines += "# CLI executable"
+        $lines += "file(GLOB_RECURSE CLI_FILES `"binaries/*.cpp`")"
+        $lines += "if(CLI_FILES)"
+        $lines += "    add_executable(bff-cli \`\${CLI_FILES})"
+        $lines += "    target_link_libraries(bff-cli bff-lib)"
+        $lines += "    message(STATUS `"Building CLI application`")"
+        $lines += "endif()"
         
         # Write to file
-        $cmakeContent | Out-File -FilePath "CMakeLists.txt" -Encoding UTF8 -Force
-        Write-Host "Created CMakeLists.txt"
+        $lines | Out-File -FilePath "CMakeLists.txt" -Encoding UTF8
+        Write-Host "Created CMakeLists.txt with $( $lines.Count ) lines"
 
     - name: Check if we need to clone BFF
       shell: powershell
@@ -169,10 +133,12 @@ endif()
         
         Write-Host "`nChecking for source files:"
         if (Test-Path "src") {
-          Write-Host "src directory exists with $( @(Get-ChildItem -Path "src" -Recurse -Filter "*.cpp").Count ) .cpp files"
+          $cppCount = @(Get-ChildItem -Path "src" -Recurse -Filter "*.cpp").Count
+          Write-Host "src directory exists with $cppCount .cpp files"
         }
         if (Test-Path "apps") {
-          Write-Host "apps directory exists with $( @(Get-ChildItem -Path "apps" -Recurse -Filter "*.cpp").Count ) .cpp files"
+          $cppCount = @(Get-ChildItem -Path "apps" -Recurse -Filter "*.cpp").Count
+          Write-Host "apps directory exists with $cppCount .cpp files"
         }
 
     - name: Configure CMake
