@@ -20,6 +20,8 @@ jobs:
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
+      with:
+        submodules: recursive
 
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v2
@@ -41,100 +43,89 @@ jobs:
         & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET freeglut
         & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET glm
 
-    - name: Clone BFF source
+    - name: Create CMakeLists.txt using WriteAllLines
       shell: powershell
       run: |
-        Write-Host "Cloning BFF v1.6..."
-        git clone --recursive --branch v1.6 https://github.com/GeometryCollective/boundary-first-flattening.git bff-source
-        
-        # Copy to current directory
-        Copy-Item -Path "bff-source\*" -Destination "." -Recurse -Force
-        
-        Write-Host "BFF files copied to current directory"
-
-    - name: Check what vcpkg installed for SuiteSparse
-      shell: powershell
-      run: |
-        Write-Host "Checking vcpkg SuiteSparse installation..."
-        $vcpkgInstalled = "$env:VCPKG_ROOT\installed\$env:VCPKG_DEFAULT_TRIPLET"
-        
-        Write-Host "Include files found:"
-        Get-ChildItem -Path "$vcpkgInstalled\include" -Filter "*cholmod*" -Recurse | Select-Object -First 5
-        
-        Write-Host "`nLibrary files found:"
-        Get-ChildItem -Path "$vcpkgInstalled\lib" -Filter "*cholmod*" -Recurse | Select-Object -First 5
-        
-        Write-Host "`nAll .h files in include:"
-        Get-ChildItem -Path "$vcpkgInstalled\include" -Filter "*.h" | Select-Object -First 10
-
-    - name: Modify CMakeLists.txt to use vcpkg SuiteSparse
-      shell: powershell
-      run: |
-        # Create a simple CMakeLists.txt that works with vcpkg
+        # Create CMakeLists.txt line by line
         $lines = @()
         
+        # Add each line individually
         $lines += "cmake_minimum_required(VERSION 3.15)"
         $lines += "project(BFF)"
         $lines += ""
         $lines += "set(CMAKE_CXX_STANDARD 17)"
         $lines += "set(CMAKE_CXX_STANDARD_REQUIRED ON)"
         $lines += ""
-        $lines += "# Get vcpkg paths"
+        $lines += "# Get vcpkg paths from environment"
         $lines += 'set(VCPKG_INSTALLED_DIR "$ENV{VCPKG_ROOT}/installed/$ENV{VCPKG_DEFAULT_TRIPLET}")'
         $lines += ""
-        $lines += "# Find packages"
+        $lines += "# Find Eigen3"
         $lines += "find_package(Eigen3 REQUIRED)"
+        $lines += ""
+        $lines += "# Find OpenGL"
         $lines += "find_package(OpenGL REQUIRED)"
-        $lines += "find_package(glfw3 REQUIRED)"
-        $lines += "find_package(GLEW REQUIRED)"
         $lines += ""
-        $lines += "# Manually set SuiteSparse paths from vcpkg"
-        $lines += 'set(SuiteSparse_DIR "${VCPKG_INSTALLED_DIR}")'
-        $lines += 'set(SuiteSparse_INCLUDE_DIR "${VCPKG_INSTALLED_DIR}/include")'
-        $lines += 'set(SuiteSparse_LIBRARY_DIR "${VCPKG_INSTALLED_DIR}/lib")'
+        $lines += "# Use file glob to find all needed libraries"
+        $lines += 'file(GLOB CHOLMOD_LIBS "${VCPKG_INSTALLED_DIR}/lib/*cholmod*.lib")'
+        $lines += 'file(GLOB AMD_LIBS "${VCPKG_INSTALLED_DIR}/lib/*amd*.lib")'
+        $lines += 'file(GLOB CAMD_LIBS "${VCPKG_INSTALLED_DIR}/lib/*camd*.lib")'
+        $lines += 'file(GLOB COLAMD_LIBS "${VCPKG_INSTALLED_DIR}/lib/*colamd*.lib")'
+        $lines += 'file(GLOB CCOLAMD_LIBS "${VCPKG_INSTALLED_DIR}/lib/*ccolamd*.lib")'
+        $lines += 'file(GLOB METIS_LIBS "${VCPKG_INSTALLED_DIR}/lib/*metis*.lib")'
+        $lines += 'file(GLOB GLFW_LIBS "${VCPKG_INSTALLED_DIR}/lib/*glfw*.lib")'
+        $lines += 'file(GLOB GLEW_LIBS "${VCPKG_INSTALLED_DIR}/lib/*glew*.lib")'
         $lines += ""
-        $lines += "# Manually find SuiteSparse libraries"
-        $lines += 'file(GLOB CHOLMOD_LIBS "${SuiteSparse_LIBRARY_DIR}/*cholmod*.lib")'
-        $lines += 'file(GLOB AMD_LIBS "${SuiteSparse_LIBRARY_DIR}/*amd*.lib")'
-        $lines += 'file(GLOB CAMD_LIBS "${SuiteSparse_LIBRARY_DIR}/*camd*.lib")'
-        $lines += 'file(GLOB COLAMD_LIBS "${SuiteSparse_LIBRARY_DIR}/*colamd*.lib")'
-        $lines += 'file(GLOB CCOLAMD_LIBS "${SuiteSparse_LIBRARY_DIR}/*ccolamd*.lib")'
-        $lines += 'file(GLOB METIS_LIBS "${SuiteSparse_LIBRARY_DIR}/*metis*.lib")'
-        $lines += ""
-        $lines += "if(CHOLMOD_LIBS)"
-        $lines += "    list(GET CHOLMOD_LIBS 0 SuiteSparse_CHOLMOD_LIBRARY)"
-        $lines += '    message(STATUS "Found CHOLMOD: ${SuiteSparse_CHOLMOD_LIBRARY}")'
-        $lines += "    set(SuiteSparse_CHOLMOD_FOUND ON)"
-        $lines += "else()"
+        $lines += "# Check if libraries were found"
+        $lines += "if(NOT CHOLMOD_LIBS)"
         $lines += '    message(FATAL_ERROR "CHOLMOD library not found")'
+        $lines += "else()"
+        $lines += "    list(GET CHOLMOD_LIBS 0 CHOLMOD_LIBRARY)"
+        $lines += '    message(STATUS "Found CHOLMOD: ${CHOLMOD_LIBRARY}")'
         $lines += "endif()"
         $lines += ""
-        $lines += "if(AMD_LIBS)"
-        $lines += "    list(GET AMD_LIBS 0 SuiteSparse_AMD_LIBRARY)"
-        $lines += "    set(SuiteSparse_AMD_FOUND ON)"
+        $lines += "if(NOT AMD_LIBS)"
+        $lines += '    message(FATAL_ERROR "AMD library not found")'
+        $lines += "else()"
+        $lines += "    list(GET AMD_LIBS 0 AMD_LIBRARY)"
         $lines += "endif()"
         $lines += ""
-        $lines += "if(CAMD_LIBS)"
-        $lines += "    list(GET CAMD_LIBS 0 SuiteSparse_CAMD_LIBRARY)"
-        $lines += "    set(SuiteSparse_CAMD_FOUND ON)"
+        $lines += "if(NOT CAMD_LIBS)"
+        $lines += '    message(FATAL_ERROR "CAMD library not found")'
+        $lines += "else()"
+        $lines += "    list(GET CAMD_LIBS 0 CAMD_LIBRARY)"
         $lines += "endif()"
         $lines += ""
-        $lines += "if(COLAMD_LIBS)"
-        $lines += "    list(GET COLAMD_LIBS 0 SuiteSparse_COLAMD_LIBRARY)"
-        $lines += "    set(SuiteSparse_COLAMD_FOUND ON)"
+        $lines += "if(NOT COLAMD_LIBS)"
+        $lines += '    message(FATAL_ERROR "COLAMD library not found")'
+        $lines += "else()"
+        $lines += "    list(GET COLAMD_LIBS 0 COLAMD_LIBRARY)"
         $lines += "endif()"
         $lines += ""
-        $lines += "if(CCOLAMD_LIBS)"
-        $lines += "    list(GET CCOLAMD_LIBS 0 SuiteSparse_CCOLAMD_LIBRARY)"
-        $lines += "    set(SuiteSparse_CCOLAMD_FOUND ON)"
+        $lines += "if(NOT CCOLAMD_LIBS)"
+        $lines += '    message(FATAL_ERROR "CCOLAMD library not found")'
+        $lines += "else()"
+        $lines += "    list(GET CCOLAMD_LIBS 0 CCOLAMD_LIBRARY)"
         $lines += "endif()"
         $lines += ""
-        $lines += "if(METIS_LIBS)"
-        $lines += "    list(GET METIS_LIBS 0 SuiteSparse_METIS_LIBRARY)"
-        $lines += "    set(SuiteSparse_METIS_FOUND ON)"
+        $lines += "if(NOT METIS_LIBS)"
+        $lines += '    message(FATAL_ERROR "METIS library not found")'
+        $lines += "else()"
+        $lines += "    list(GET METIS_LIBS 0 METIS_LIBRARY)"
         $lines += "endif()"
         $lines += ""
-        $lines += "set(SuiteSparse_FOUND ON)"
+        $lines += "if(NOT GLFW_LIBS)"
+        $lines += '    message(FATAL_ERROR "GLFW library not found")'
+        $lines += "else()"
+        $lines += "    list(GET GLFW_LIBS 0 GLFW_LIBRARY)"
+        $lines += '    message(STATUS "Found GLFW: ${GLFW_LIBRARY}")'
+        $lines += "endif()"
+        $lines += ""
+        $lines += "if(NOT GLEW_LIBS)"
+        $lines += '    message(FATAL_ERROR "GLEW library not found")'
+        $lines += "else()"
+        $lines += "    list(GET GLEW_LIBS 0 GLEW_LIBRARY)"
+        $lines += '    message(STATUS "Found GLEW: ${GLEW_LIBRARY}")'
+        $lines += "endif()"
         $lines += ""
         $lines += "# Include directories"
         $lines += "include_directories("
@@ -142,16 +133,15 @@ jobs:
         $lines += "    ${CMAKE_SOURCE_DIR}/deps/libigl/include"
         $lines += "    ${CMAKE_SOURCE_DIR}/deps/spectra/include"
         $lines += "    ${Eigen3_INCLUDE_DIRS}"
-        $lines += "    ${SuiteSparse_INCLUDE_DIR}"
         $lines += "    ${VCPKG_INSTALLED_DIR}/include"
         $lines += ")"
         $lines += ""
         $lines += "# Find source files"
-        $lines += 'file(GLOB_RECURSE SRC_FILES "lib/*.cpp")'
-        $lines += 'file(GLOB_RECURSE SRC_HEADERS "lib/*.h")'
+        $lines += 'file(GLOB_RECURSE SRC_FILES "src/*.cpp")'
+        $lines += 'file(GLOB_RECURSE SRC_HEADERS "src/*.h")'
         $lines += ""
         $lines += "if(NOT SRC_FILES)"
-        $lines += '    message(FATAL_ERROR "No source files found")'
+        $lines += '    message(FATAL_ERROR "No source files found in src/ directory")'
         $lines += "endif()"
         $lines += ""
         $lines += "# Create library"
@@ -159,12 +149,12 @@ jobs:
         $lines += ""
         $lines += "# Link libraries"
         $lines += "target_link_libraries(bff-lib"
-        $lines += "    ${SuiteSparse_CHOLMOD_LIBRARY}"
-        $lines += "    ${SuiteSparse_AMD_LIBRARY}"
-        $lines += "    ${SuiteSparse_CAMD_LIBRARY}"
-        $lines += "    ${SuiteSparse_COLAMD_LIBRARY}"
-        $lines += "    ${SuiteSparse_CCOLAMD_LIBRARY}"
-        $lines += "    ${SuiteSparse_METIS_LIBRARY}"
+        $lines += "    ${CHOLMOD_LIBRARY}"
+        $lines += "    ${AMD_LIBRARY}"
+        $lines += "    ${CAMD_LIBRARY}"
+        $lines += "    ${COLAMD_LIBRARY}"
+        $lines += "    ${CCOLAMD_LIBRARY}"
+        $lines += "    ${METIS_LIBRARY}"
         $lines += ")"
         $lines += ""
         $lines += "# GUI executable"
@@ -173,16 +163,36 @@ jobs:
         $lines += "    add_executable(bff-gui ${GUI_FILES})"
         $lines += "    target_link_libraries(bff-gui bff-lib"
         $lines += "        ${OPENGL_LIBRARIES}"
-        $lines += "        ${GLFW3_LIBRARY}"
-        $lines += "        ${GLEW_LIBRARIES}"
+        $lines += "        ${GLFW_LIBRARY}"
+        $lines += "        ${GLEW_LIBRARY}"
         $lines += "    )"
         $lines += "    target_include_directories(bff-gui PRIVATE ${CMAKE_SOURCE_DIR}/apps)"
         $lines += '    message(STATUS "Building GUI application")'
         $lines += "endif()"
+        $lines += ""
+        $lines += "# CLI executable"
+        $lines += 'file(GLOB_RECURSE CLI_FILES "binaries/*.cpp")'
+        $lines += "if(CLI_FILES)"
+        $lines += "    add_executable(bff-cli ${CLI_FILES})"
+        $lines += "    target_link_libraries(bff-cli bff-lib)"
+        $lines += "    target_include_directories(bff-cli PRIVATE ${CMAKE_SOURCE_DIR}/binaries)"
+        $lines += '    message(STATUS "Building CLI application")'
+        $lines += "endif()"
         
-        # Write to file
-        $lines | Out-File -FilePath "CMakeLists.txt" -Encoding UTF8
-        Write-Host "Created CMakeLists.txt"
+        # Write all lines to file
+        [System.IO.File]::WriteAllLines("CMakeLists.txt", $lines)
+        Write-Host "Created CMakeLists.txt with $($lines.Count) lines"
+
+    - name: Check if we need to clone BFF
+      shell: powershell
+      run: |
+        # Check if we have the BFF source files
+        if (-not (Test-Path "src") -and -not (Test-Path "apps")) {
+          Write-Host "BFF source not found, cloning v1.6..."
+          git clone --recursive --branch v1.6 https://github.com/GeometryCollective/boundary-first-flattening.git bff-temp
+          # Copy everything except .git
+          Get-ChildItem -Path "bff-temp" -Exclude ".git" | Copy-Item -Destination "." -Recurse -Force
+        }
 
     - name: Configure CMake
       shell: powershell
@@ -190,13 +200,11 @@ jobs:
         # Create build directory
         New-Item -ItemType Directory -Force -Path "build"
         
-        Write-Host "Configuring CMake..."
+        Write-Host "Configuring CMake with vcpkg toolchain..."
         
-        # Configure with CMake
+        # Configure with CMake - don't pass the toolchain file since we set it in CMakeLists.txt
         cmake -B build `
           -DCMAKE_BUILD_TYPE=Release `
-          -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
-          -DVCPKG_TARGET_TRIPLET=$env:VCPKG_DEFAULT_TRIPLET `
           -G "Visual Studio 17 2022" `
           -A x64
 
