@@ -43,16 +43,45 @@ jobs:
         & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET freeglut
         & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET glm
 
-    - name: Clone BFF repository
+    - name: Clone BFF repository v1.6
       shell: powershell
       run: |
         Write-Host "Cloning BFF v1.6..."
-        # Clone the BFF repository
-        git clone --recursive --branch v1.6 https://github.com/GeometryCollective/boundary-first-flattening.git bff-source
         
-        Write-Host "Copying BFF source files..."
-        # Copy all files from bff-source to current directory
-        Copy-Item -Path "bff-source\*" -Destination "." -Recurse -Force
+        # Clean up any existing files first
+        Remove-Item -Path "src" -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -Path "apps" -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -Path "include" -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -Path "deps" -Recurse -Force -ErrorAction SilentlyContinue
+        
+        # Clone the repository
+        git clone --depth 1 --branch v1.6 https://github.com/GeometryCollective/boundary-first-flattening.git bff-source
+        
+        # Copy the source files
+        Write-Host "Copying source files..."
+        Copy-Item -Path "bff-source/src" -Destination "." -Recurse -Force
+        Copy-Item -Path "bff-source/apps" -Destination "." -Recurse -Force
+        Copy-Item -Path "bff-source/include" -Destination "." -Recurse -Force
+        Copy-Item -Path "bff-source/deps" -Destination "." -Recurse -Force
+        Copy-Item -Path "bff-source/binaries" -Destination "." -Recurse -Force
+        
+        # Check what we have
+        Write-Host "Current directory structure:"
+        Get-ChildItem | Format-Table Name, Mode
+        
+        Write-Host "`nFiles in src directory:"
+        if (Test-Path "src") {
+          Get-ChildItem -Path "src" -Recurse -Filter "*.cpp" | Select-Object -First 10 | Format-Table Name
+        } else {
+          Write-Host "src directory not found!"
+        }
+        
+        Write-Host "`nFiles in apps directory:"
+        if (Test-Path "apps") {
+          Get-ChildItem -Path "apps" -Recurse -Filter "*.cpp" | Select-Object -First 10 | Format-Table Name
+        } else {
+          Write-Host "apps directory not found!"
+        }
 
     - name: Create CMakeLists.txt
       shell: powershell
@@ -90,46 +119,32 @@ jobs:
         $lines += 'file(GLOB GLEW_LIBS "${VCPKG_INSTALLED_DIR}/lib/*glew*.lib")'
         $lines += ""
         $lines += "# Check if libraries were found"
-        $lines += "if(CHOLMOD_LIBS)"
+        $lines += "if(NOT CHOLMOD_LIBS)"
+        $lines += '    message(FATAL_ERROR "CHOLMOD library not found")'
+        $lines += "else()"
         $lines += "    list(GET CHOLMOD_LIBS 0 CHOLMOD_LIBRARY)"
         $lines += '    message(STATUS "Found CHOLMOD: ${CHOLMOD_LIBRARY}")'
+        $lines += "endif()"
+        $lines += ""
+        $lines += "# Similar checks for other libraries"
+        $lines += "if(AMD_LIBS) list(GET AMD_LIBS 0 AMD_LIBRARY) endif()"
+        $lines += "if(CAMD_LIBS) list(GET CAMD_LIBS 0 CAMD_LIBRARY) endif()"
+        $lines += "if(COLAMD_LIBS) list(GET COLAMD_LIBS 0 COLAMD_LIBRARY) endif()"
+        $lines += "if(CCOLAMD_LIBS) list(GET CCOLAMD_LIBS 0 CCOLAMD_LIBRARY) endif()"
+        $lines += "if(METIS_LIBS) list(GET METIS_LIBS 0 METIS_LIBRARY) endif()"
+        $lines += ""
+        $lines += "if(NOT GLFW_LIBS)"
+        $lines += '    message(FATAL_ERROR "GLFW library not found")'
         $lines += "else()"
-        $lines += '    message(FATAL_ERROR "CHOLMOD library not found")'
-        $lines += "endif()"
-        $lines += ""
-        $lines += "# Set other libraries if found"
-        $lines += "if(AMD_LIBS)"
-        $lines += "    list(GET AMD_LIBS 0 AMD_LIBRARY)"
-        $lines += "endif()"
-        $lines += ""
-        $lines += "if(CAMD_LIBS)"
-        $lines += "    list(GET CAMD_LIBS 0 CAMD_LIBRARY)"
-        $lines += "endif()"
-        $lines += ""
-        $lines += "if(COLAMD_LIBS)"
-        $lines += "    list(GET COLAMD_LIBS 0 COLAMD_LIBRARY)"
-        $lines += "endif()"
-        $lines += ""
-        $lines += "if(CCOLAMD_LIBS)"
-        $lines += "    list(GET CCOLAMD_LIBS 0 CCOLAMD_LIBRARY)"
-        $lines += "endif()"
-        $lines += ""
-        $lines += "if(METIS_LIBS)"
-        $lines += "    list(GET METIS_LIBS 0 METIS_LIBRARY)"
-        $lines += "endif()"
-        $lines += ""
-        $lines += "if(GLFW_LIBS)"
         $lines += "    list(GET GLFW_LIBS 0 GLFW_LIBRARY)"
         $lines += '    message(STATUS "Found GLFW: ${GLFW_LIBRARY}")'
-        $lines += "else()"
-        $lines += '    message(FATAL_ERROR "GLFW library not found")'
         $lines += "endif()"
         $lines += ""
-        $lines += "if(GLEW_LIBS)"
+        $lines += "if(NOT GLEW_LIBS)"
+        $lines += '    message(FATAL_ERROR "GLEW library not found")'
+        $lines += "else()"
         $lines += "    list(GET GLEW_LIBS 0 GLEW_LIBRARY)"
         $lines += '    message(STATUS "Found GLEW: ${GLEW_LIBRARY}")'
-        $lines += "else()"
-        $lines += '    message(FATAL_ERROR "GLEW library not found")'
         $lines += "endif()"
         $lines += ""
         $lines += "# OpenGL libraries (system libraries)"
@@ -139,16 +154,29 @@ jobs:
         $lines += '    set(OPENGL_LIBRARIES "GL")'
         $lines += "endif()"
         $lines += ""
-        $lines += "# Find source files - store as variable"
-        $lines += 'file(GLOB_RECURSE BFF_SRC_FILES "src/*.cpp")'
-        $lines += "if(NOT BFF_SRC_FILES)"
-        $lines += '    message(FATAL_ERROR "No source files found in src/ directory")'
-        $lines += "else()"
-        $lines += '    message(STATUS "Found source files")'
-        $lines += "endif()"
+        $lines += "# Find source files - use explicit list if glob doesn't work"
+        $lines += "set(SRC_FILES"
+        $lines += '    "${CMAKE_SOURCE_DIR}/src/bff.cpp"'
+        $lines += '    "${CMAKE_SOURCE_DIR}/src/ConePlacement.cpp"'
+        $lines += '    "${CMAKE_SOURCE_DIR}/src/Cutting.cpp"'
+        $lines += '    "${CMAKE_SOURCE_DIR}/src/Distance.cpp"'
+        $lines += '    "${CMAKE_SOURCE_DIR}/src/HodgeDecomposition.cpp"'
+        $lines += '    "${CMAKE_SOURCE_DIR}/src/LinearSolver.cpp"'
+        $lines += '    "${CMAKE_SOURCE_DIR}/src/Mesh.cpp"'
+        $lines += '    "${CMAKE_SOURCE_DIR}/src/Projection.cpp"'
+        $lines += '    "${CMAKE_SOURCE_DIR}/src/Serialization.cpp"'
+        $lines += '    "${CMAKE_SOURCE_DIR}/src/Vertex.cpp"'
+        $lines += ")"
         $lines += ""
-        $lines += "# Create library - pass files directly"
-        $lines += "add_library(bff-lib ${BFF_SRC_FILES})"
+        $lines += "# Check if source files exist"
+        $lines += "foreach(src ${SRC_FILES})"
+        $lines += "    if(NOT EXISTS ${src})"
+        $lines += '        message(WARNING "Source file not found: ${src}")'
+        $lines += "    endif()"
+        $lines += "endforeach()"
+        $lines += ""
+        $lines += "# Create library"
+        $lines += "add_library(bff-lib STATIC ${SRC_FILES})"
         $lines += ""
         $lines += "# Link libraries"
         $lines += "target_link_libraries(bff-lib"
@@ -160,10 +188,14 @@ jobs:
         $lines += "    ${METIS_LIBRARY}"
         $lines += ")"
         $lines += ""
-        $lines += "# GUI executable"
-        $lines += 'file(GLOB_RECURSE BFF_GUI_FILES "apps/*.cpp")'
-        $lines += "if(BFF_GUI_FILES)"
-        $lines += "    add_executable(bff-gui ${BFF_GUI_FILES})"
+        $lines += "# GUI executable - use explicit file list"
+        $lines += "set(GUI_FILES"
+        $lines += '    "${CMAKE_SOURCE_DIR}/apps/main.cpp"'
+        $lines += '    "${CMAKE_SOURCE_DIR}/apps/Viewer.cpp"'
+        $lines += ")"
+        $lines += ""
+        $lines += "if(EXISTS \"${CMAKE_SOURCE_DIR}/apps/main.cpp\")"
+        $lines += "    add_executable(bff-gui ${GUI_FILES})"
         $lines += "    target_link_libraries(bff-gui bff-lib"
         $lines += "        ${OPENGL_LIBRARIES}"
         $lines += "        ${GLFW_LIBRARY}"
@@ -171,12 +203,14 @@ jobs:
         $lines += "    )"
         $lines += "    target_include_directories(bff-gui PRIVATE ${CMAKE_SOURCE_DIR}/apps)"
         $lines += '    message(STATUS "Building GUI application")'
+        $lines += "else()"
+        $lines += '    message(WARNING "GUI source files not found")'
         $lines += "endif()"
         $lines += ""
         $lines += "# CLI executable"
-        $lines += 'file(GLOB_RECURSE BFF_CLI_FILES "binaries/*.cpp")'
-        $lines += "if(BFF_CLI_FILES)"
-        $lines += "    add_executable(bff-cli ${BFF_CLI_FILES})"
+        $lines += 'file(GLOB_RECURSE CLI_FILES "${CMAKE_SOURCE_DIR}/binaries/*.cpp")'
+        $lines += "if(CLI_FILES)"
+        $lines += "    add_executable(bff-cli ${CLI_FILES})"
         $lines += "    target_link_libraries(bff-cli bff-lib)"
         $lines += "    target_include_directories(bff-cli PRIVATE ${CMAKE_SOURCE_DIR}/binaries)"
         $lines += '    message(STATUS "Building CLI application")'
@@ -219,6 +253,11 @@ jobs:
         foreach ($exe in $exes) {
           Write-Host "Found executable: $($exe.FullName)"
           Copy-Item -Path $exe.FullName -Destination "dist\" -Force
+        }
+        
+        if ($exes.Count -eq 0) {
+          Write-Host "No executables found! Checking build directory..."
+          Get-ChildItem -Path "build" -Recurse | Select-Object -First 20 | Format-Table Name
         }
         
         # Copy DLLs
