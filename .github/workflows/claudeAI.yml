@@ -323,52 +323,35 @@ jobs:
     - name: Create README for Artifacts
       shell: powershell
       run: |
-        $readmeContent = @"
-# Boundary First Flattening (BFF) - Windows Build
-
-This package contains the Windows x64 build of BFF (Boundary First Flattening).
-
-## Contents
-
-- bff-command-line.exe: Command-line interface for BFF
-- bff-viewer.exe: GUI application for BFF
-- *.dll: Required runtime libraries (BLAS, LAPACK, SuiteSparse)
-
-## Usage
-
-### Command-Line Interface
-``````
-bff-command-line.exe input.obj output.obj
-``````
-
-Optional flags:
-- --nCones=N: Use N cone singularities to reduce area distortion
-- --normalizeUVs: Scale UVs to [0,1] x [0,1] range
-- --writeOnlyUVs: Write UVs using vertex 'v' flag instead of 'vt'
-- --scaling=X: Multiplicative scale factor for UV islands
-- --mapToSphere: Map to unit sphere (for genus-0 surfaces)
-- --flattenToDisk: Map to unit circular disk
-
-### GUI Application
-Simply double-click bff-viewer.exe and use the GUI to load and flatten meshes.
-
-## System Requirements
-
-- Windows 10 or later (x64)
-- OpenGL 4.1 or higher (for GUI)
-
-## Built From
-
-Repository: https://github.com/GeometryCollective/boundary-first-flattening
-Build Date: $(Get-Date -Format "yyyy-MM-dd HH:mm:ss UTC")
-Commit: ${{ github.sha }}
-
-## License
-
-MIT License - See https://github.com/GeometryCollective/boundary-first-flattening/blob/master/LICENSE
-"@
+        $readme = "# Boundary First Flattening (BFF) - Windows Build`n`n"
+        $readme += "This package contains the Windows x64 build of BFF (Boundary First Flattening).`n`n"
+        $readme += "## Contents`n`n"
+        $readme += "- bff-command-line.exe: Command-line interface for BFF`n"
+        $readme += "- bff-viewer.exe: GUI application for BFF`n"
+        $readme += "- *.dll: Required runtime libraries (BLAS, LAPACK, SuiteSparse)`n`n"
+        $readme += "## Usage`n`n"
+        $readme += "### Command-Line Interface`n"
+        $readme += "bff-command-line.exe input.obj output.obj`n`n"
+        $readme += "Optional flags:`n"
+        $readme += "- --nCones=N: Use N cone singularities to reduce area distortion`n"
+        $readme += "- --normalizeUVs: Scale UVs to [0,1] x [0,1] range`n"
+        $readme += "- --writeOnlyUVs: Write UVs using vertex 'v' flag instead of 'vt'`n"
+        $readme += "- --scaling=X: Multiplicative scale factor for UV islands`n"
+        $readme += "- --mapToSphere: Map to unit sphere (for genus-0 surfaces)`n"
+        $readme += "- --flattenToDisk: Map to unit circular disk`n`n"
+        $readme += "### GUI Application`n"
+        $readme += "Simply double-click bff-viewer.exe and use the GUI to load and flatten meshes.`n`n"
+        $readme += "## System Requirements`n`n"
+        $readme += "- Windows 10 or later (x64)`n"
+        $readme += "- OpenGL 4.1 or higher (for GUI)`n`n"
+        $readme += "## Built From`n`n"
+        $readme += "Repository: https://github.com/GeometryCollective/boundary-first-flattening`n"
+        $readme += "Build Date: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss UTC')`n"
+        $readme += "Commit: ${{ github.sha }}`n`n"
+        $readme += "## License`n`n"
+        $readme += "MIT License - See https://github.com/GeometryCollective/boundary-first-flattening/blob/master/LICENSE`n"
         
-        Set-Content -Path "${{ github.workspace }}\artifacts\README.txt" -Value $readmeContent
+        Set-Content -Path "${{ github.workspace }}\artifacts\README.txt" -Value $readme
         Write-Host "README created successfully"
     
     - name: Upload Build Artifacts
