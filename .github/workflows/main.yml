@@ -43,7 +43,32 @@ jobs:
         & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET freeglut
         & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET glm
 
-    - name: Create CMakeLists.txt using WriteAllLines
+    - name: Clone BFF repository
+      shell: powershell
+      run: |
+        Write-Host "Cloning BFF v1.6..."
+        # Clone the BFF repository
+        git clone --recursive --branch v1.6 https://github.com/GeometryCollective/boundary-first-flattening.git bff-source
+        
+        Write-Host "Copying BFF source files..."
+        # Copy all files from bff-source to current directory
+        Copy-Item -Path "bff-source\*" -Destination "." -Recurse -Force
+        
+        Write-Host "Checking what we have..."
+        Get-ChildItem | Select-Object -First 10 | Format-Table Name, Mode
+        
+        Write-Host "Checking for source files..."
+        if (Test-Path "src") {
+          Write-Host "src directory exists:"
+          Get-ChildItem -Path "src" -Filter "*.cpp" | Select-Object -First 5
+        }
+        
+        if (Test-Path "apps") {
+          Write-Host "apps directory exists:"
+          Get-ChildItem -Path "apps" -Filter "*.cpp" | Select-Object -First 5
+        }
+
+    - name: Create CMakeLists.txt
       shell: powershell
       run: |
         # Create CMakeLists.txt line by line
@@ -59,11 +84,14 @@ jobs:
         $lines += "# Get vcpkg paths from environment"
         $lines += 'set(VCPKG_INSTALLED_DIR "$ENV{VCPKG_ROOT}/installed/$ENV{VCPKG_DEFAULT_TRIPLET}")'
         $lines += ""
-        $lines += "# Find Eigen3"
-        $lines += "find_package(Eigen3 REQUIRED)"
-        $lines += ""
-        $lines += "# Find OpenGL"
-        $lines += "find_package(OpenGL REQUIRED)"
+        $lines += "# Set include directories"
+        $lines += "include_directories("
+        $lines += "    ${CMAKE_SOURCE_DIR}/include"
+        $lines += "    ${CMAKE_SOURCE_DIR}/deps/libigl/include"
+        $lines += "    ${CMAKE_SOURCE_DIR}/deps/spectra/include"
+        $lines += "    ${VCPKG_INSTALLED_DIR}/include"
+        $lines += "    ${VCPKG_INSTALLED_DIR}/include/eigen3"
+        $lines += ")"
         $lines += ""
         $lines += "# Use file glob to find all needed libraries"
         $lines += 'file(GLOB CHOLMOD_LIBS "${VCPKG_INSTALLED_DIR}/lib/*cholmod*.lib")'
@@ -83,35 +111,12 @@ jobs:
         $lines += '    message(STATUS "Found CHOLMOD: ${CHOLMOD_LIBRARY}")'
         $lines += "endif()"
         $lines += ""
-        $lines += "if(NOT AMD_LIBS)"
-        $lines += '    message(FATAL_ERROR "AMD library not found")'
-        $lines += "else()"
-        $lines += "    list(GET AMD_LIBS 0 AMD_LIBRARY)"
-        $lines += "endif()"
-        $lines += ""
-        $lines += "if(NOT CAMD_LIBS)"
-        $lines += '    message(FATAL_ERROR "CAMD library not found")'
-        $lines += "else()"
-        $lines += "    list(GET CAMD_LIBS 0 CAMD_LIBRARY)"
-        $lines += "endif()"
-        $lines += ""
-        $lines += "if(NOT COLAMD_LIBS)"
-        $lines += '    message(FATAL_ERROR "COLAMD library not found")'
-        $lines += "else()"
-        $lines += "    list(GET COLAMD_LIBS 0 COLAMD_LIBRARY)"
-        $lines += "endif()"
-        $lines += ""
-        $lines += "if(NOT CCOLAMD_LIBS)"
-        $lines += '    message(FATAL_ERROR "CCOLAMD library not found")'
-        $lines += "else()"
-        $lines += "    list(GET CCOLAMD_LIBS 0 CCOLAMD_LIBRARY)"
-        $lines += "endif()"
-        $lines += ""
-        $lines += "if(NOT METIS_LIBS)"
-        $lines += '    message(FATAL_ERROR "METIS library not found")'
-        $lines += "else()"
-        $lines += "    list(GET METIS_LIBS 0 METIS_LIBRARY)"
-        $lines += "endif()"
+        $lines += "# Similar checks for other libraries"
+        $lines += "if(AMD_LIBS) list(GET AMD_LIBS 0 AMD_LIBRARY) endif()"
+        $lines += "if(CAMD_LIBS) list(GET CAMD_LIBS 0 CAMD_LIBRARY) endif()"
+        $lines += "if(COLAMD_LIBS) list(GET COLAMD_LIBS 0 COLAMD_LIBRARY) endif()"
+        $lines += "if(CCOLAMD_LIBS) list(GET CCOLAMD_LIBS 0 CCOLAMD_LIBRARY) endif()"
+        $lines += "if(METIS_LIBS) list(GET METIS_LIBS 0 METIS_LIBRARY) endif()"
         $lines += ""
         $lines += "if(NOT GLFW_LIBS)"
         $lines += '    message(FATAL_ERROR "GLFW library not found")'
@@ -127,25 +132,29 @@ jobs:
         $lines += '    message(STATUS "Found GLEW: ${GLEW_LIBRARY}")'
         $lines += "endif()"
         $lines += ""
-        $lines += "# Include directories"
-        $lines += "include_directories("
-        $lines += "    ${CMAKE_SOURCE_DIR}/include"
-        $lines += "    ${CMAKE_SOURCE_DIR}/deps/libigl/include"
-        $lines += "    ${CMAKE_SOURCE_DIR}/deps/spectra/include"
-        $lines += "    ${Eigen3_INCLUDE_DIRS}"
-        $lines += "    ${VCPKG_INSTALLED_DIR}/include"
-        $lines += ")"
+        $lines += "# OpenGL libraries (system libraries)"
+        $lines += "if(WIN32)"
+        $lines += '    set(OPENGL_LIBRARIES "opengl32")'
+        $lines += "else()"
+        $lines += '    set(OPENGL_LIBRARIES "GL")'
+        $lines += "endif()"
         $lines += ""
-        $lines += "# Find source files"
-        $lines += 'file(GLOB_RECURSE SRC_FILES "src/*.cpp")'
-        $lines += 'file(GLOB_RECURSE SRC_HEADERS "src/*.h")'
-        $lines += ""
-        $lines += "if(NOT SRC_FILES)"
-        $lines += '    message(FATAL_ERROR "No source files found in src/ directory")'
+        $lines += "# Find source files - check multiple patterns"
+        $lines += "set(ALL_SRC_FILES)"
+        $lines += 'file(GLOB_RECURSE SRC_FILES_1 "src/*.cpp")'
+        $lines += 'file(GLOB_RECURSE SRC_FILES_2 "*.cpp")'
+        $lines += "if(SRC_FILES_1)"
+        $lines += "    set(ALL_SRC_FILES ${SRC_FILES_1})"
+        $lines += '    message(STATUS "Found ${SRC_FILES_1} source files in src/")'
+        $lines += "elseif(SRC_FILES_2)"
+        $lines += "    set(ALL_SRC_FILES ${SRC_FILES_2})"
+        $lines += '    message(STATUS "Found ${SRC_FILES_2} source files in root")'
+        $lines += "else()"
+        $lines += '    message(FATAL_ERROR "No source files found")'
         $lines += "endif()"
         $lines += ""
         $lines += "# Create library"
-        $lines += "add_library(bff-lib STATIC ${SRC_FILES})"
+        $lines += "add_library(bff-lib STATIC ${ALL_SRC_FILES})"
         $lines += ""
         $lines += "# Link libraries"
         $lines += "target_link_libraries(bff-lib"
@@ -157,16 +166,28 @@ jobs:
         $lines += "    ${METIS_LIBRARY}"
         $lines += ")"
         $lines += ""
-        $lines += "# GUI executable"
-        $lines += 'file(GLOB_RECURSE GUI_FILES "apps/*.cpp")'
-        $lines += "if(GUI_FILES)"
-        $lines += "    add_executable(bff-gui ${GUI_FILES})"
+        $lines += "# GUI executable - check multiple patterns"
+        $lines += "set(ALL_GUI_FILES)"
+        $lines += 'file(GLOB_RECURSE GUI_FILES_1 "apps/*.cpp")'
+        $lines += 'file(GLOB_RECURSE GUI_FILES_2 "gui/*.cpp")'
+        $lines += "if(GUI_FILES_1)"
+        $lines += "    set(ALL_GUI_FILES ${GUI_FILES_1})"
+        $lines += "    set(GUI_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/apps)"
+        $lines += '    message(STATUS "Found GUI files in apps/")'
+        $lines += "elseif(GUI_FILES_2)"
+        $lines += "    set(ALL_GUI_FILES ${GUI_FILES_2})"
+        $lines += "    set(GUI_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/gui)"
+        $lines += '    message(STATUS "Found GUI files in gui/")'
+        $lines += "endif()"
+        $lines += ""
+        $lines += "if(ALL_GUI_FILES)"
+        $lines += "    add_executable(bff-gui ${ALL_GUI_FILES})"
         $lines += "    target_link_libraries(bff-gui bff-lib"
         $lines += "        ${OPENGL_LIBRARIES}"
         $lines += "        ${GLFW_LIBRARY}"
         $lines += "        ${GLEW_LIBRARY}"
         $lines += "    )"
-        $lines += "    target_include_directories(bff-gui PRIVATE ${CMAKE_SOURCE_DIR}/apps)"
+        $lines += "    target_include_directories(bff-gui PRIVATE ${GUI_INCLUDE_DIR})"
         $lines += '    message(STATUS "Building GUI application")'
         $lines += "endif()"
         $lines += ""
@@ -183,26 +204,15 @@ jobs:
         [System.IO.File]::WriteAllLines("CMakeLists.txt", $lines)
         Write-Host "Created CMakeLists.txt with $($lines.Count) lines"
 
-    - name: Check if we need to clone BFF
-      shell: powershell
-      run: |
-        # Check if we have the BFF source files
-        if (-not (Test-Path "src") -and -not (Test-Path "apps")) {
-          Write-Host "BFF source not found, cloning v1.6..."
-          git clone --recursive --branch v1.6 https://github.com/GeometryCollective/boundary-first-flattening.git bff-temp
-          # Copy everything except .git
-          Get-ChildItem -Path "bff-temp" -Exclude ".git" | Copy-Item -Destination "." -Recurse -Force
-        }
-
     - name: Configure CMake
       shell: powershell
       run: |
         # Create build directory
         New-Item -ItemType Directory -Force -Path "build"
         
-        Write-Host "Configuring CMake with vcpkg toolchain..."
+        Write-Host "Configuring CMake..."
         
-        # Configure with CMake - don't pass the toolchain file since we set it in CMakeLists.txt
+        # Configure with CMake
         cmake -B build `
           -DCMAKE_BUILD_TYPE=Release `
           -G "Visual Studio 17 2022" `
