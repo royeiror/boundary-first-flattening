@@ -139,8 +139,9 @@ jobs:
     - name: Configure BFF
       shell: powershell
       run: |
-        Remove-Item "${{ github.workspace }}\build\CMakeCache.txt" -ErrorAction SilentlyContinue
-        Remove-Item "${{ github.workspace }}\build\CMakeFiles" -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Host "Cleaning build directory..."
+        Remove-Item "${{ github.workspace }}\build" -Recurse -Force -ErrorAction SilentlyContinue
+        New-Item -ItemType Directory -Force -Path "${{ github.workspace }}\build"
         
         cd "${{ github.workspace }}\build"
         
@@ -149,16 +150,31 @@ jobs:
         $openblasLib = "${{ github.workspace }}\deps\openblas-windows\lib"
         $libPath = "$suiteSparsePath\lib"
         
+        Write-Host "`nSearching for SuiteSparse libraries..."
+        
         function Find-Library {
           param($name)
-          $patterns = @("$name.lib", "lib$name.lib")
+          $patterns = @("$name.lib", "lib$name.lib", "${name}_static.lib")
           foreach ($pattern in $patterns) {
             $found = Get-ChildItem -Path $libPath -Filter $pattern -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
             if ($found) {
+              Write-Host "  Found $name : $($found.FullName)"
               return $found.FullName
             }
           }
-          Write-Warning "Library not found: $name"
+          
+          $lapackBlasPath = "$suiteSparsePath\lib\lapack_blas_windows"
+          if (Test-Path $lapackBlasPath) {
+            foreach ($pattern in $patterns) {
+              $found = Get-ChildItem -Path $lapackBlasPath -Filter $pattern -ErrorAction SilentlyContinue | Select-Object -First 1
+              if ($found) {
+                Write-Host "  Found $name : $($found.FullName)"
+                return $found.FullName
+              }
+            }
+          }
+          
+          Write-Warning "  Library not found: $name"
           return "$libPath\$name.lib"
         }
         
@@ -175,20 +191,15 @@ jobs:
         $suitesparseconfigLib = Find-Library "suitesparseconfig"
         $umfpackLib = Find-Library "umfpack"
         $blasLib = Find-Library "blas"
-        if (-not (Test-Path $blasLib)) {
-          $blasLib = Find-Library "libblas"
-        }
         $lapackLib = Find-Library "lapack"
-        if (-not (Test-Path $lapackLib)) {
-          $lapackLib = Find-Library "liblapack"
-        }
         
-        Write-Host "Using libraries:"
-        Write-Host "  CHOLMOD: $cholmodLib (exists: $(Test-Path $cholmodLib))"
-        Write-Host "  AMD: $amdLib (exists: $(Test-Path $amdLib))"
-        Write-Host "  BLAS: $blasLib (exists: $(Test-Path $blasLib))"
-        Write-Host "  LAPACK: $lapackLib (exists: $(Test-Path $lapackLib))"
+        Write-Host "`nVerifying critical libraries exist:"
+        Write-Host "  CHOLMOD: $(Test-Path $cholmodLib)"
+        Write-Host "  AMD: $(Test-Path $amdLib)"
+        Write-Host "  BLAS: $(Test-Path $blasLib)"
+        Write-Host "  LAPACK: $(Test-Path $lapackLib)"
         
+        Write-Host "`nConfiguring CMake..."
         cmake -G "Visual Studio 17 2022" -A x64 `
           -DCMAKE_BUILD_TYPE=Release `
           -DCMAKE_PREFIX_PATH="$suiteSparsePath" `
@@ -246,6 +257,13 @@ jobs:
           -DSuiteSparse_BLAS_LIBRARY="$blasLib" `
           -DSuiteSparse_LAPACK_LIBRARY="$lapackLib" `
           ..
+        
+        if ($LASTEXITCODE -ne 0) {
+          Write-Error "CMake configuration failed!"
+          exit 1
+        }
+        
+        Write-Host "`nCMake configuration completed successfully"
     
     - name: Build BFF Static Library
       shell: powershell
