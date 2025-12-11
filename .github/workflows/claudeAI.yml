@@ -85,18 +85,56 @@ jobs:
         
         if (Test-Path "$installPath\lib") {
           Write-Host "Library directory exists"
-          Get-ChildItem "$installPath\lib" -Recurse -Filter "*.lib" | Select-Object FullName
+          Write-Host "`nAll .lib files:"
+          Get-ChildItem "$installPath\lib" -Recurse -Filter "*.lib" | ForEach-Object {
+            Write-Host "  $($_.FullName)"
+          }
+          Write-Host "`nAll .dll files:"
+          Get-ChildItem "$installPath\lib" -Recurse -Filter "*.dll" | ForEach-Object {
+            Write-Host "  $($_.FullName)"
+          }
         } else {
           Write-Error "Library directory not found!"
           exit 1
         }
         
         if (Test-Path "$installPath\include") {
-          Write-Host "Include directory exists"
+          Write-Host "`nInclude directory exists"
         } else {
           Write-Error "Include directory not found!"
           exit 1
         }
+    
+    - name: Map SuiteSparse Library Names
+      shell: powershell
+      run: |
+        $installPath = "${{ github.workspace }}\suitesparse-install\lib"
+        
+        Write-Host "Mapping actual library file names..."
+        $libMapping = @{}
+        
+        $expectedLibs = @('amd', 'btf', 'camd', 'ccolamd', 'cholmod', 'colamd', 'cxsparse', 'klu', 'ldl', 'spqr', 'suitesparseconfig', 'umfpack', 'libblas', 'liblapack')
+        
+        foreach ($lib in $expectedLibs) {
+          $found = $false
+          $patterns = @("$lib.lib", "lib$lib.lib", "$lib*.lib")
+          
+          foreach ($pattern in $patterns) {
+            $files = Get-ChildItem -Path $installPath -Filter $pattern -Recurse -ErrorAction SilentlyContinue
+            if ($files) {
+              $libMapping[$lib] = $files[0].FullName
+              Write-Host "  $lib -> $($files[0].Name)"
+              $found = $true
+              break
+            }
+          }
+          
+          if (-not $found) {
+            Write-Warning "  $lib -> NOT FOUND"
+          }
+        }
+        
+        $libMapping | ConvertTo-Json | Out-File "${{ github.workspace }}\lib-mapping.json"
     
     - name: Configure BFF
       shell: powershell
