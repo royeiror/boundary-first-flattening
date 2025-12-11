@@ -5,8 +5,6 @@ on:
     branches: [main, master]
   pull_request:
     branches: [main, master]
-  release:
-    types: [created]
   workflow_dispatch:
 
 env:
@@ -18,255 +16,208 @@ jobs:
     runs-on: windows-latest
     
     steps:
-    - name: Checkout repository
+    - name: Checkout BFF Repository
       uses: actions/checkout@v4
       with:
         submodules: recursive
-
-    - name: Setup MSBuild
+    
+    - name: Setup MSVC
       uses: microsoft/setup-msbuild@v2
-
-    - name: Install vcpkg and dependencies
+    
+    - name: Install CMake
+      uses: lukka/get-cmake@latest
+    
+    - name: Clone and Build SuiteSparse-METIS
       shell: powershell
       run: |
-        # Install vcpkg
-        git clone https://github.com/Microsoft/vcpkg.git $env:VCPKG_ROOT
-        & "$env:VCPKG_ROOT\bootstrap-vcpkg.bat"
-        
-        # Install required dependencies
-        & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET eigen3
-        & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET libigl
-        & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET suitesparse
-        & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET metis
-        & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET glfw3
-        & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET glew
-        & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET freeglut
-        & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET glm
-
-    - name: Clone BFF repository v1.6
-      shell: powershell
-      run: |
-        Write-Host "Cloning BFF v1.6..."
-        
-        # Clean up any existing files first
-        Remove-Item -Path "src" -Recurse -Force -ErrorAction SilentlyContinue
-        Remove-Item -Path "apps" -Recurse -Force -ErrorAction SilentlyContinue
-        Remove-Item -Path "include" -Recurse -Force -ErrorAction SilentlyContinue
-        Remove-Item -Path "deps" -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Host "Building SuiteSparse-METIS from source..."
         
         # Clone the repository
-        git clone --depth 1 --branch v1.6 https://github.com/GeometryCollective/boundary-first-flattening.git bff-source
+        git clone https://github.com/jlblancoc/suitesparse-metis-for-windows.git suitesparse-source
         
-        # Copy the source files
-        Write-Host "Copying source files..."
-        Copy-Item -Path "bff-source/src" -Destination "." -Recurse -Force
-        Copy-Item -Path "bff-source/apps" -Destination "." -Recurse -Force
-        Copy-Item -Path "bff-source/include" -Destination "." -Recurse -Force
-        Copy-Item -Path "bff-source/deps" -Destination "." -Recurse -Force
-        Copy-Item -Path "bff-source/binaries" -Destination "." -Recurse -Force
-
-    - name: Download pre-made CMakeLists.txt
-      shell: powershell
-      run: |
-        # Since creating CMakeLists.txt with PowerShell in YAML is problematic,
-        # let's download a pre-made one or create it with minimal PowerShell
-        Write-Host "Creating CMakeLists.txt with minimal PowerShell..."
-        
-        # Create the file line by line using simple echo-style commands
-        # We'll use a different approach: write each line individually
-        
-        # First, create an empty file
-        New-Item -ItemType File -Path "CMakeLists.txt" -Force
-        
-        # Now append each line using Add-Content with simple strings
-        # We'll use single quotes for CMake variables to avoid PowerShell expansion
-        
-        # Basic CMake setup
-        'cmake_minimum_required(VERSION 3.15)' | Add-Content -Path "CMakeLists.txt"
-        'project(BFF)' | Add-Content -Path "CMakeLists.txt"
-        '' | Add-Content -Path "CMakeLists.txt"
-        'set(CMAKE_CXX_STANDARD 17)' | Add-Content -Path "CMakeLists.txt"
-        'set(CMAKE_CXX_STANDARD_REQUIRED ON)' | Add-Content -Path "CMakeLists.txt"
-        '' | Add-Content -Path "CMakeLists.txt"
-        
-        # VCPKG paths
-        'set(VCPKG_INSTALLED_DIR "$ENV{VCPKG_ROOT}/installed/$ENV{VCPKG_DEFAULT_TRIPLET}")' | Add-Content -Path "CMakeLists.txt"
-        '' | Add-Content -Path "CMakeLists.txt"
-        
-        # Include directories
-        'include_directories(' | Add-Content -Path "CMakeLists.txt"
-        '    ${CMAKE_SOURCE_DIR}/include' | Add-Content -Path "CMakeLists.txt"
-        '    ${CMAKE_SOURCE_DIR}/deps/libigl/include' | Add-Content -Path "CMakeLists.txt"
-        '    ${CMAKE_SOURCE_DIR}/deps/spectra/include' | Add-Content -Path "CMakeLists.txt"
-        '    ${VCPKG_INSTALLED_DIR}/include' | Add-Content -Path "CMakeLists.txt"
-        '    ${VCPKG_INSTALLED_DIR}/include/eigen3' | Add-Content -Path "CMakeLists.txt"
-        ')' | Add-Content -Path "CMakeLists.txt"
-        '' | Add-Content -Path "CMakeLists.txt"
-        
-        # Find libraries
-        'file(GLOB CHOLMOD_LIBS "${VCPKG_INSTALLED_DIR}/lib/*cholmod*.lib")' | Add-Content -Path "CMakeLists.txt"
-        'file(GLOB AMD_LIBS "${VCPKG_INSTALLED_DIR}/lib/*amd*.lib")' | Add-Content -Path "CMakeLists.txt"
-        'file(GLOB CAMD_LIBS "${VCPKG_INSTALLED_DIR}/lib/*camd*.lib")' | Add-Content -Path "CMakeLists.txt"
-        'file(GLOB COLAMD_LIBS "${VCPKG_INSTALLED_DIR}/lib/*colamd*.lib")' | Add-Content -Path "CMakeLists.txt"
-        'file(GLOB CCOLAMD_LIBS "${VCPKG_INSTALLED_DIR}/lib/*ccolamd*.lib")' | Add-Content -Path "CMakeLists.txt"
-        'file(GLOB METIS_LIBS "${VCPKG_INSTALLED_DIR}/lib/*metis*.lib")' | Add-Content -Path "CMakeLists.txt"
-        'file(GLOB GLFW_LIBS "${VCPKG_INSTALLED_DIR}/lib/*glfw*.lib")' | Add-Content -Path "CMakeLists.txt"
-        'file(GLOB GLEW_LIBS "${VCPKG_INSTALLED_DIR}/lib/*glew*.lib")' | Add-Content -Path "CMakeLists.txt"
-        '' | Add-Content -Path "CMakeLists.txt"
-        
-        # Get libraries
-        'if(CHOLMOD_LIBS)' | Add-Content -Path "CMakeLists.txt"
-        '    list(GET CHOLMOD_LIBS 0 CHOLMOD_LIBRARY)' | Add-Content -Path "CMakeLists.txt"
-        '    message(STATUS "Found CHOLMOD: ${CHOLMOD_LIBRARY}")' | Add-Content -Path "CMakeLists.txt"
-        'else()' | Add-Content -Path "CMakeLists.txt"
-        '    message(FATAL_ERROR "CHOLMOD library not found")' | Add-Content -Path "CMakeLists.txt"
-        'endif()' | Add-Content -Path "CMakeLists.txt"
-        '' | Add-Content -Path "CMakeLists.txt"
-        
-        # Other libraries (simplified)
-        'if(AMD_LIBS) list(GET AMD_LIBS 0 AMD_LIBRARY) endif()' | Add-Content -Path "CMakeLists.txt"
-        'if(CAMD_LIBS) list(GET CAMD_LIBS 0 CAMD_LIBRARY) endif()' | Add-Content -Path "CMakeLists.txt"
-        'if(COLAMD_LIBS) list(GET COLAMD_LIBS 0 COLAMD_LIBRARY) endif()' | Add-Content -Path "CMakeLists.txt"
-        'if(CCOLAMD_LIBS) list(GET CCOLAMD_LIBS 0 CCOLAMD_LIBRARY) endif()' | Add-Content -Path "CMakeLists.txt"
-        'if(METIS_LIBS) list(GET METIS_LIBS 0 METIS_LIBRARY) endif()' | Add-Content -Path "CMakeLists.txt"
-        '' | Add-Content -Path "CMakeLists.txt"
-        
-        'if(GLFW_LIBS)' | Add-Content -Path "CMakeLists.txt"
-        '    list(GET GLFW_LIBS 0 GLFW_LIBRARY)' | Add-Content -Path "CMakeLists.txt"
-        '    message(STATUS "Found GLFW: ${GLFW_LIBRARY}")' | Add-Content -Path "CMakeLists.txt"
-        'else()' | Add-Content -Path "CMakeLists.txt"
-        '    message(FATAL_ERROR "GLFW library not found")' | Add-Content -Path "CMakeLists.txt"
-        'endif()' | Add-Content -Path "CMakeLists.txt"
-        '' | Add-Content -Path "CMakeLists.txt"
-        
-        'if(GLEW_LIBS)' | Add-Content -Path "CMakeLists.txt"
-        '    list(GET GLEW_LIBS 0 GLEW_LIBRARY)' | Add-Content -Path "CMakeLists.txt"
-        '    message(STATUS "Found GLEW: ${GLEW_LIBRARY}")' | Add-Content -Path "CMakeLists.txt"
-        'else()' | Add-Content -Path "CMakeLists.txt"
-        '    message(FATAL_ERROR "GLEW library not found")' | Add-Content -Path "CMakeLists.txt"
-        'endif()' | Add-Content -Path "CMakeLists.txt"
-        '' | Add-Content -Path "CMakeLists.txt"
-        
-        # OpenGL
-        'if(WIN32)' | Add-Content -Path "CMakeLists.txt"
-        '    set(OPENGL_LIBRARIES "opengl32")' | Add-Content -Path "CMakeLists.txt"
-        'else()' | Add-Content -Path "CMakeLists.txt"
-        '    set(OPENGL_LIBRARIES "GL")' | Add-Content -Path "CMakeLists.txt"
-        'endif()' | Add-Content -Path "CMakeLists.txt"
-        '' | Add-Content -Path "CMakeLists.txt"
-        
-        # Source files
-        'set(SRC_FILES' | Add-Content -Path "CMakeLists.txt"
-        '    ${CMAKE_SOURCE_DIR}/src/bff.cpp' | Add-Content -Path "CMakeLists.txt"
-        '    ${CMAKE_SOURCE_DIR}/src/ConePlacement.cpp' | Add-Content -Path "CMakeLists.txt"
-        '    ${CMAKE_SOURCE_DIR}/src/Cutting.cpp' | Add-Content -Path "CMakeLists.txt"
-        '    ${CMAKE_SOURCE_DIR}/src/Distance.cpp' | Add-Content -Path "CMakeLists.txt"
-        '    ${CMAKE_SOURCE_DIR}/src/HodgeDecomposition.cpp' | Add-Content -Path "CMakeLists.txt"
-        '    ${CMAKE_SOURCE_DIR}/src/LinearSolver.cpp' | Add-Content -Path "CMakeLists.txt"
-        '    ${CMAKE_SOURCE_DIR}/src/Mesh.cpp' | Add-Content -Path "CMakeLists.txt"
-        '    ${CMAKE_SOURCE_DIR}/src/Projection.cpp' | Add-Content -Path "CMakeLists.txt"
-        '    ${CMAKE_SOURCE_DIR}/src/Serialization.cpp' | Add-Content -Path "CMakeLists.txt"
-        '    ${CMAKE_SOURCE_DIR}/src/Vertex.cpp' | Add-Content -Path "CMakeLists.txt"
-        ')' | Add-Content -Path "CMakeLists.txt"
-        '' | Add-Content -Path "CMakeLists.txt"
-        
-        # Create library
-        'add_library(bff-lib STATIC ${SRC_FILES})' | Add-Content -Path "CMakeLists.txt"
-        '' | Add-Content -Path "CMakeLists.txt"
-        
-        # Link libraries
-        'target_link_libraries(bff-lib' | Add-Content -Path "CMakeLists.txt"
-        '    ${CHOLMOD_LIBRARY}' | Add-Content -Path "CMakeLists.txt"
-        '    ${AMD_LIBRARY}' | Add-Content -Path "CMakeLists.txt"
-        '    ${CAMD_LIBRARY}' | Add-Content -Path "CMakeLists.txt"
-        '    ${COLAMD_LIBRARY}' | Add-Content -Path "CMakeLists.txt"
-        '    ${CCOLAMD_LIBRARY}' | Add-Content -Path "CMakeLists.txt"
-        '    ${METIS_LIBRARY}' | Add-Content -Path "CMakeLists.txt"
-        ')' | Add-Content -Path "CMakeLists.txt"
-        '' | Add-Content -Path "CMakeLists.txt"
-        
-        # GUI executable
-        'set(GUI_FILES' | Add-Content -Path "CMakeLists.txt"
-        '    ${CMAKE_SOURCE_DIR}/apps/main.cpp' | Add-Content -Path "CMakeLists.txt"
-        '    ${CMAKE_SOURCE_DIR}/apps/Viewer.cpp' | Add-Content -Path "CMakeLists.txt"
-        ')' | Add-Content -Path "CMakeLists.txt"
-        '' | Add-Content -Path "CMakeLists.txt"
-        
-        'if(EXISTS "${CMAKE_SOURCE_DIR}/apps/main.cpp")' | Add-Content -Path "CMakeLists.txt"
-        '    add_executable(bff-gui ${GUI_FILES})' | Add-Content -Path "CMakeLists.txt"
-        '    target_link_libraries(bff-gui bff-lib' | Add-Content -Path "CMakeLists.txt"
-        '        ${OPENGL_LIBRARIES}' | Add-Content -Path "CMakeLists.txt"
-        '        ${GLFW_LIBRARY}' | Add-Content -Path "CMakeLists.txt"
-        '        ${GLEW_LIBRARY}' | Add-Content -Path "CMakeLists.txt"
-        '    )' | Add-Content -Path "CMakeLists.txt"
-        '    target_include_directories(bff-gui PRIVATE ${CMAKE_SOURCE_DIR}/apps)' | Add-Content -Path "CMakeLists.txt"
-        '    message(STATUS "Building GUI application")' | Add-Content -Path "CMakeLists.txt"
-        'else()' | Add-Content -Path "CMakeLists.txt"
-        '    message(WARNING "GUI source files not found")' | Add-Content -Path "CMakeLists.txt"
-        'endif()' | Add-Content -Path "CMakeLists.txt"
-        
-        Write-Host "Created CMakeLists.txt"
-
-    - name: Configure CMake
-      shell: powershell
-      run: |
         # Create build directory
-        New-Item -ItemType Directory -Force -Path "build"
-        
-        Write-Host "Configuring CMake..."
+        New-Item -ItemType Directory -Force -Path "suitesparse-build"
+        cd suitesparse-build
         
         # Configure with CMake
-        cmake -B build `
+        cmake -G "Visual Studio 17 2022" -A x64 `
+          -DCMAKE_INSTALL_PREFIX="${{ github.workspace }}/suitesparse-install" `
           -DCMAKE_BUILD_TYPE=Release `
-          -G "Visual Studio 17 2022" `
-          -A x64
+          -DBUILD_METIS=ON `
+          ../suitesparse-source
+        
+        # Build and install
+        cmake --build . --config Release --target install -j 4
+        
+        Write-Host "SuiteSparse-METIS built successfully"
+        
+        # Verify installation
+        Write-Host "`nChecking installation..."
+        if (Test-Path "${{ github.workspace }}/suitesparse-install/lib") {
+          Write-Host "Library files found:"
+          Get-ChildItem "${{ github.workspace }}/suitesparse-install/lib" -Filter "*.lib" | Select-Object -First 10
+        }
+    
+    - name: Create Minimal CMakeLists.txt
+      shell: powershell
+      run: |
+        # Create a simple CMakeLists.txt that works
+        # We'll write it directly without complex string operations
+        $cmakeFile = "CMakeLists.txt"
+        
+        # Use a here-string but make sure it's properly formatted
+        # We'll write to a temporary file first to avoid YAML issues
+        $tempFile = "temp_cmake.cmake"
+        
+        # Write the CMake content
+        @"
+cmake_minimum_required(VERSION 3.15)
+project(BFF)
 
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# Set SuiteSparse paths
+set(SUITESPARSE_INSTALL_DIR "\$ENV{SUITESPARSE_INSTALL}")
+set(SUITESPARSE_INCLUDE_DIR "\${SUITESPARSE_INSTALL_DIR}/include")
+set(SUITESPARSE_LIB_DIR "\${SUITESPARSE_INSTALL_DIR}/lib")
+
+# Find libraries using file glob
+file(GLOB CHOLMOD_LIBS "\${SUITESPARSE_LIB_DIR}/*cholmod*.lib")
+file(GLOB AMD_LIBS "\${SUITESPARSE_LIB_DIR}/*amd*.lib")
+file(GLOB CAMD_LIBS "\${SUITESPARSE_LIB_DIR}/*camd*.lib")
+file(GLOB COLAMD_LIBS "\${SUITESPARSE_LIB_DIR}/*colamd*.lib")
+file(GLOB CCOLAMD_LIBS "\${SUITESPARSE_LIB_DIR}/*ccolamd*.lib")
+file(GLOB METIS_LIBS "\${SUITESPARSE_LIB_DIR}/*metis*.lib")
+
+# Get first library found
+if(CHOLMOD_LIBS)
+    list(GET CHOLMOD_LIBS 0 CHOLMOD_LIBRARY)
+    message(STATUS "Found CHOLMOD: \${CHOLMOD_LIBRARY}")
+else()
+    message(FATAL_ERROR "CHOLMOD library not found")
+endif()
+
+if(AMD_LIBS) 
+    list(GET AMD_LIBS 0 AMD_LIBRARY)
+endif()
+
+if(CAMD_LIBS)
+    list(GET CAMD_LIBS 0 CAMD_LIBRARY)
+endif()
+
+if(COLAMD_LIBS)
+    list(GET COLAMD_LIBS 0 COLAMD_LIBRARY)
+endif()
+
+if(CCOLAMD_LIBS)
+    list(GET CCOLAMD_LIBS 0 CCOLAMD_LIBRARY)
+endif()
+
+if(METIS_LIBS)
+    list(GET METIS_LIBS 0 METIS_LIBRARY)
+endif()
+
+# Include directories
+include_directories(
+    \${CMAKE_SOURCE_DIR}/include
+    \${CMAKE_SOURCE_DIR}/deps/libigl/include
+    \${CMAKE_SOURCE_DIR}/deps/spectra/include
+    \${SUITESPARSE_INCLUDE_DIR}
+)
+
+# Find source files
+file(GLOB_RECURSE SRC_FILES "src/*.cpp")
+
+if(NOT SRC_FILES)
+    message(FATAL_ERROR "No source files found")
+endif()
+
+# Create library
+add_library(bff-lib STATIC \${SRC_FILES})
+
+# Link SuiteSparse libraries
+target_link_libraries(bff-lib
+    \${CHOLMOD_LIBRARY}
+    \${AMD_LIBRARY}
+    \${CAMD_LIBRARY}
+    \${COLAMD_LIBRARY}
+    \${CCOLAMD_LIBRARY}
+    \${METIS_LIBRARY}
+)
+
+# Find and build GUI if it exists
+file(GLOB_RECURSE GUI_FILES "apps/*.cpp")
+if(GUI_FILES)
+    add_executable(bff-gui \${GUI_FILES})
+    target_link_libraries(bff-gui bff-lib)
+    target_include_directories(bff-gui PRIVATE \${CMAKE_SOURCE_DIR}/apps)
+    message(STATUS "Building GUI application")
+endif()
+"@ | Out-File -FilePath $tempFile -Encoding UTF8
+        
+        # Now copy it to the right location
+        Copy-Item -Path $tempFile -Destination $cmakeFile -Force
+        Remove-Item -Path $tempFile
+        
+        Write-Host "Created CMakeLists.txt"
+    
+    - name: Configure BFF
+      shell: powershell
+      run: |
+        # Set environment variable for SuiteSparse
+        echo "SUITESPARSE_INSTALL=${{ github.workspace }}/suitesparse-install" >> $env:GITHUB_ENV
+        
+        # Create build directory
+        New-Item -ItemType Directory -Force -Path "build"
+        cd build
+        
+        Write-Host "Configuring BFF..."
+        
+        # Simple CMake configure
+        cmake -G "Visual Studio 17 2022" -A x64 `
+          -DCMAKE_BUILD_TYPE=Release `
+          ..
+        
+        if ($LASTEXITCODE -ne 0) {
+          Write-Error "CMake configuration failed"
+          exit 1
+        }
+    
     - name: Build BFF
       shell: powershell
       run: |
-        Write-Host "Building project..."
-        cmake --build build --config Release --parallel 4
-
-    - name: Find and copy executables
+        cd build
+        Write-Host "Building BFF..."
+        cmake --build . --config Release --parallel 4
+    
+    - name: Collect Artifacts
       shell: powershell
       run: |
-        # Create distribution directory
-        New-Item -ItemType Directory -Force -Path "dist"
+        # Create artifacts directory
+        New-Item -ItemType Directory -Force -Path "artifacts"
         
-        Write-Host "Searching for executables..."
-        
-        # Search for executables
+        # Find executables
         $exes = Get-ChildItem -Path "build" -Filter "*.exe" -Recurse
         foreach ($exe in $exes) {
-          Write-Host "Found executable: $($exe.FullName)"
-          Copy-Item -Path $exe.FullName -Destination "dist\" -Force
+          Write-Host "Found: $($exe.FullName)"
+          Copy-Item -Path $exe.FullName -Destination "artifacts\" -Force
         }
         
-        if ($exes.Count -eq 0) {
-          Write-Host "No executables found! Checking build directory..."
-          Get-ChildItem -Path "build" -Recurse | Select-Object -First 20 | Format-Table Name
+        # Copy SuiteSparse DLLs
+        $suiteSparseLib = "${{ github.workspace }}/suitesparse-install/lib"
+        if (Test-Path $suiteSparseLib) {
+          Get-ChildItem -Path $suiteSparseLib -Filter "*.dll" | ForEach-Object {
+            Copy-Item -Path $_.FullName -Destination "artifacts\" -Force
+            Write-Host "Copied DLL: $($_.Name)"
+          }
         }
         
-        # Copy DLLs
-        $vcpkgBinPath = "$env:VCPKG_ROOT\installed\$env:VCPKG_DEFAULT_TRIPLET\bin"
-        if (Test-Path $vcpkgBinPath) {
-          Write-Host "Copying DLLs from vcpkg..."
-          Get-ChildItem -Path $vcpkgBinPath -Filter "*.dll" | Copy-Item -Destination "dist\" -Force
-        }
-        
-        # List what we have
-        Write-Host "`nFiles in dist directory:"
-        Get-ChildItem -Path "dist"
-
-    - name: Upload artifacts
+        Write-Host "Artifacts collected:"
+        Get-ChildItem -Path "artifacts"
+    
+    - name: Upload Artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: BFF-Windows-Binaries
-        path: dist/
-
-    - name: Create release
-      if: startsWith(github.ref, 'refs/tags/')
-      uses: softprops/action-gh-release@v1
-      with:
-        files: dist/**
-        generate_release_notes: true
+        name: BFF-Windows
+        path: artifacts/
