@@ -49,11 +49,6 @@ jobs:
         New-Item -ItemType Directory -Force -Path "C:\SuiteSparse\bin" | Out-Null
         New-Item -ItemType Directory -Force -Path "C:\SuiteSparse\include\suitesparse" | Out-Null
         
-        # Download the pre-built SuiteSparse-METIS binaries from the repository
-        # According to the BFF v1.6 release notes, we need specific SuiteSparse binaries
-        # The repository at https://github.com/jlblancoc/suitesparse-metis-for-windows
-        # doesn't have pre-built binaries, so we need to build them or find them
-        
         Write-Host "Cloning SuiteSparse-METIS repository to build it..."
         
         # Clone the SuiteSparse-METIS for Windows repository
@@ -178,48 +173,14 @@ jobs:
                     }
                     
                     # Add library linking (simplified approach)
-                    $cmakeContent = $cmakeContent + @"
-
-`n# SuiteSparse libraries
-find_library(CHOLMOD_LIBRARY NAMES cholmod libcholmod PATHS `${SUITESPARSE_LIB_DIR} NO_DEFAULT_PATH)
-find_library(AMD_LIBRARY NAMES amd libamd PATHS `${SUITESPARSE_LIB_DIR} NO_DEFAULT_PATH)
-find_library(CAMD_LIBRARY NAMES camd libcamd PATHS `${SUITESPARSE_LIB_DIR} NO_DEFAULT_PATH)
-find_library(COLAMD_LIBRARY NAMES colamd libcolamd PATHS `${SUITESPARSE_LIB_DIR} NO_DEFAULT_PATH)
-find_library(CCOLAMD_LIBRARY NAMES ccolamd libccolamd PATHS `${SUITESPARSE_LIB_DIR} NO_DEFAULT_PATH)
-find_library(METIS_LIBRARY NAMES metis libmetis PATHS `${SUITESPARSE_LIB_DIR} NO_DEFAULT_PATH)
-
-if(NOT CHOLMOD_LIBRARY)
-    message(FATAL_ERROR "CHOLMOD library not found in `${SUITESPARSE_LIB_DIR}")
-endif()
-
-# Link SuiteSparse libraries to targets
-if(TARGET bff-lib)
-    target_link_libraries(bff-lib
-        `${CHOLMOD_LIBRARY}
-        `${AMD_LIBRARY}
-        `${CAMD_LIBRARY}
-        `${COLAMD_LIBRARY}
-        `${CCOLAMD_LIBRARY}
-        `${METIS_LIBRARY}
-    )
-endif()
-"@
+                    $cmakeContent = $cmakeContent + "`n# SuiteSparse libraries`nfind_library(CHOLMOD_LIBRARY NAMES cholmod libcholmod PATHS `${SUITESPARSE_LIB_DIR} NO_DEFAULT_PATH)`nfind_library(AMD_LIBRARY NAMES amd libamd PATHS `${SUITESPARSE_LIB_DIR} NO_DEFAULT_PATH)`nfind_library(CAMD_LIBRARY NAMES camd libcamd PATHS `${SUITESPARSE_LIB_DIR} NO_DEFAULT_PATH)`nfind_library(COLAMD_LIBRARY NAMES colamd libcolamd PATHS `${SUITESPARSE_LIB_DIR} NO_DEFAULT_PATH)`nfind_library(CCOLAMD_LIBRARY NAMES ccolamd libccolamd PATHS `${SUITESPARSE_LIB_DIR} NO_DEFAULT_PATH)`nfind_library(METIS_LIBRARY NAMES metis libmetis PATHS `${SUITESPARSE_LIB_DIR} NO_DEFAULT_PATH)`n`nif(NOT CHOLMOD_LIBRARY)`n    message(FATAL_ERROR `"CHOLMOD library not found in `${SUITESPARSE_LIB_DIR}`")`nendif()`n`n# Link SuiteSparse libraries to targets`nif(TARGET bff-lib)`n    target_link_libraries(bff-lib`n        `${CHOLMOD_LIBRARY}`n        `${AMD_LIBRARY}`n        `${CAMD_LIBRARY}`n        `${COLAMD_LIBRARY}`n        `${CCOLAMD_LIBRARY}`n        `${METIS_LIBRARY}`n    )`nendif()"
                     
                     Set-Content -Path "CMakeLists.txt" -Value $cmakeContent
                 }
             } else {
                 Write-Host "Original CMakeLists.txt doesn't look valid, creating a new one..."
-                # Create new CMakeLists.txt from scratch
-                CreateNewCMakeLists
-            }
-        } else {
-            # Create new CMakeLists.txt
-            CreateNewCMakeLists
-        }
-        
-        # Function to create new CMakeLists.txt
-        function CreateNewCMakeLists {
-            @'
+                # Create new CMakeLists.txt from scratch using a different approach
+                $cmakeContent = @"
 cmake_minimum_required(VERSION 3.10)
 project(BFF)
 
@@ -228,30 +189,30 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # SuiteSparse configuration
 set(SUITESPARSE_DIR "C:/SuiteSparse")
-set(SUITESPARSE_INCLUDE_DIR "${SUITESPARSE_DIR}/include")
-set(SUITESPARSE_LIB_DIR "${SUITESPARSE_DIR}/lib")
+set(SUITESPARSE_INCLUDE_DIR "\${SUITESPARSE_DIR}/include")
+set(SUITESPARSE_LIB_DIR "\${SUITESPARSE_DIR}/lib")
 
 # Find SuiteSparse libraries
-find_library(CHOLMOD_LIBRARY NAMES cholmod libcholmod PATHS ${SUITESPARSE_LIB_DIR} NO_DEFAULT_PATH)
-find_library(AMD_LIBRARY NAMES amd libamd PATHS ${SUITESPARSE_LIB_DIR} NO_DEFAULT_PATH)
-find_library(CAMD_LIBRARY NAMES camd libcamd PATHS ${SUITESPARSE_LIB_DIR} NO_DEFAULT_PATH)
-find_library(COLAMD_LIBRARY NAMES colamd libcolamd PATHS ${SUITESPARSE_LIB_DIR} NO_DEFAULT_PATH)
-find_library(CCOLAMD_LIBRARY NAMES ccolamd libccolamd PATHS ${SUITESPARSE_LIB_DIR} NO_DEFAULT_PATH)
-find_library(METIS_LIBRARY NAMES metis libmetis PATHS ${SUITESPARSE_LIB_DIR} NO_DEFAULT_PATH)
+find_library(CHOLMOD_LIBRARY NAMES cholmod libcholmod PATHS \${SUITESPARSE_LIB_DIR} NO_DEFAULT_PATH)
+find_library(AMD_LIBRARY NAMES amd libamd PATHS \${SUITESPARSE_LIB_DIR} NO_DEFAULT_PATH)
+find_library(CAMD_LIBRARY NAMES camd libcamd PATHS \${SUITESPARSE_LIB_DIR} NO_DEFAULT_PATH)
+find_library(COLAMD_LIBRARY NAMES colamd libcolamd PATHS \${SUITESPARSE_LIB_DIR} NO_DEFAULT_PATH)
+find_library(CCOLAMD_LIBRARY NAMES ccolamd libccolamd PATHS \${SUITESPARSE_LIB_DIR} NO_DEFAULT_PATH)
+find_library(METIS_LIBRARY NAMES metis libmetis PATHS \${SUITESPARSE_LIB_DIR} NO_DEFAULT_PATH)
 
 if(NOT CHOLMOD_LIBRARY)
-    message(FATAL_ERROR "CHOLMOD library not found in ${SUITESPARSE_LIB_DIR}")
+    message(FATAL_ERROR "CHOLMOD library not found in \${SUITESPARSE_LIB_DIR}")
 else()
-    message(STATUS "Found CHOLMOD: ${CHOLMOD_LIBRARY}")
+    message(STATUS "Found CHOLMOD: \${CHOLMOD_LIBRARY}")
 endif()
 
 # Include directories
 include_directories(
-    ${CMAKE_SOURCE_DIR}/include
-    ${CMAKE_SOURCE_DIR}/deps/libigl/include
-    ${CMAKE_SOURCE_DIR}/deps/spectra/include
-    ${SUITESPARSE_INCLUDE_DIR}
-    ${SUITESPARSE_INCLUDE_DIR}/suitesparse
+    \${CMAKE_SOURCE_DIR}/include
+    \${CMAKE_SOURCE_DIR}/deps/libigl/include
+    \${CMAKE_SOURCE_DIR}/deps/spectra/include
+    \${SUITESPARSE_INCLUDE_DIR}
+    \${SUITESPARSE_INCLUDE_DIR}/suitesparse
 )
 
 # Find source files for library
@@ -261,29 +222,99 @@ if(NOT SRC_FILES)
 endif()
 
 # Create library
-add_library(bff-lib STATIC ${SRC_FILES})
+add_library(bff-lib STATIC \${SRC_FILES})
 
 # Link SuiteSparse libraries
 target_link_libraries(bff-lib
-    ${CHOLMOD_LIBRARY}
-    ${AMD_LIBRARY}
-    ${CAMD_LIBRARY}
-    ${COLAMD_LIBRARY}
-    ${CCOLAMD_LIBRARY}
-    ${METIS_LIBRARY}
+    \${CHOLMOD_LIBRARY}
+    \${AMD_LIBRARY}
+    \${CAMD_LIBRARY}
+    \${COLAMD_LIBRARY}
+    \${CCOLAMD_LIBRARY}
+    \${METIS_LIBRARY}
 )
 
 # Find and add GUI application
 file(GLOB_RECURSE GUI_FILES "apps/*.cpp")
 if(GUI_FILES)
-    add_executable(bff-gui ${GUI_FILES})
+    add_executable(bff-gui \${GUI_FILES})
     target_link_libraries(bff-gui bff-lib)
-    target_include_directories(bff-gui PRIVATE ${CMAKE_SOURCE_DIR}/apps)
+    target_include_directories(bff-gui PRIVATE \${CMAKE_SOURCE_DIR}/apps)
     message(STATUS "Building GUI application")
 else()
     message(WARNING "No GUI files found in apps/ directory")
 endif()
-'@ | Set-Content -Path "CMakeLists.txt"
+"@
+                Set-Content -Path "CMakeLists.txt" -Value $cmakeContent
+            }
+        } else {
+            # Create new CMakeLists.txt
+            $cmakeContent = @"
+cmake_minimum_required(VERSION 3.10)
+project(BFF)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# SuiteSparse configuration
+set(SUITESPARSE_DIR "C:/SuiteSparse")
+set(SUITESPARSE_INCLUDE_DIR "\${SUITESPARSE_DIR}/include")
+set(SUITESPARSE_LIB_DIR "\${SUITESPARSE_DIR}/lib")
+
+# Find SuiteSparse libraries
+find_library(CHOLMOD_LIBRARY NAMES cholmod libcholmod PATHS \${SUITESPARSE_LIB_DIR} NO_DEFAULT_PATH)
+find_library(AMD_LIBRARY NAMES amd libamd PATHS \${SUITESPARSE_LIB_DIR} NO_DEFAULT_PATH)
+find_library(CAMD_LIBRARY NAMES camd libcamd PATHS \${SUITESPARSE_LIB_DIR} NO_DEFAULT_PATH)
+find_library(COLAMD_LIBRARY NAMES colamd libcolamd PATHS \${SUITESPARSE_LIB_DIR} NO_DEFAULT_PATH)
+find_library(CCOLAMD_LIBRARY NAMES ccolamd libccolamd PATHS \${SUITESPARSE_LIB_DIR} NO_DEFAULT_PATH)
+find_library(METIS_LIBRARY NAMES metis libmetis PATHS \${SUITESPARSE_LIB_DIR} NO_DEFAULT_PATH)
+
+if(NOT CHOLMOD_LIBRARY)
+    message(FATAL_ERROR "CHOLMOD library not found in \${SUITESPARSE_LIB_DIR}")
+else()
+    message(STATUS "Found CHOLMOD: \${CHOLMOD_LIBRARY}")
+endif()
+
+# Include directories
+include_directories(
+    \${CMAKE_SOURCE_DIR}/include
+    \${CMAKE_SOURCE_DIR}/deps/libigl/include
+    \${CMAKE_SOURCE_DIR}/deps/spectra/include
+    \${SUITESPARSE_INCLUDE_DIR}
+    \${SUITESPARSE_INCLUDE_DIR}/suitesparse
+)
+
+# Find source files for library
+file(GLOB_RECURSE SRC_FILES "src/*.cpp")
+if(NOT SRC_FILES)
+    message(FATAL_ERROR "No source files found in src/ directory")
+endif()
+
+# Create library
+add_library(bff-lib STATIC \${SRC_FILES})
+
+# Link SuiteSparse libraries
+target_link_libraries(bff-lib
+    \${CHOLMOD_LIBRARY}
+    \${AMD_LIBRARY}
+    \${CAMD_LIBRARY}
+    \${COLAMD_LIBRARY}
+    \${CCOLAMD_LIBRARY}
+    \${METIS_LIBRARY}
+)
+
+# Find and add GUI application
+file(GLOB_RECURSE GUI_FILES "apps/*.cpp")
+if(GUI_FILES)
+    add_executable(bff-gui \${GUI_FILES})
+    target_link_libraries(bff-gui bff-lib)
+    target_include_directories(bff-gui PRIVATE \${CMAKE_SOURCE_DIR}/apps)
+    message(STATUS "Building GUI application")
+else()
+    message(WARNING "No GUI files found in apps/ directory")
+endif()
+"@
+            Set-Content -Path "CMakeLists.txt" -Value $cmakeContent
         }
         
         Write-Host "CMakeLists.txt created/updated successfully"
@@ -367,10 +398,10 @@ endif()
             Write-Host "No executables found"
         }
     
-    - name: Copy required DLLs
+    - name: Copy required DLLs and create artifacts
       shell: powershell
       run: |
-        Write-Host "Copying required DLLs..."
+        Write-Host "Copying required DLLs and creating artifacts..."
         
         # Create artifacts directory
         New-Item -ItemType Directory -Force -Path "artifacts"
@@ -395,7 +426,7 @@ endif()
                 # Copy executable
                 Copy-Item -Path $exe.FullName -Destination "artifacts\" -Force
                 
-                # Check for required DLLs using dumpbin
+                # Check for required DLLs
                 Write-Host "    Checking dependencies for $($exe.Name)..."
                 
                 # Common DLLs that might be needed
@@ -438,7 +469,7 @@ endif()
             }
             
             # Create a simple batch file to run the application
-            @'
+            $batchContent = @'
 @echo off
 echo BFF (Boundary First Flattening) Application
 echo ============================================
@@ -446,19 +477,21 @@ echo.
 echo Make sure all DLLs are in the same directory as the executable.
 echo.
 echo Available executables:
-'@ | Set-Content -Path "artifacts\RUN_ME.bat" -Encoding ASCII
+'@
             
             $bffExes | ForEach-Object {
-                "echo   $($_.Name)" | Add-Content -Path "artifacts\RUN_ME.bat" -Encoding ASCII
+                $batchContent += "`necho   $($_.Name)"
             }
             
-            @'
+            $batchContent += @'
 echo.
 echo To run an executable, type its name in the command prompt.
 echo Example: bff-gui.exe
 echo.
 pause
-'@ | Add-Content -Path "artifacts\RUN_ME.bat" -Encoding ASCII
+'@
+            
+            Set-Content -Path "artifacts\RUN_ME.bat" -Value $batchContent -Encoding ASCII
             
         } else {
             Write-Host "No executables found to package"
