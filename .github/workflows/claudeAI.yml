@@ -104,10 +104,14 @@ jobs:
         cd "${{ github.workspace }}\build"
         
         $suiteSparsePath = "${{ github.workspace }}\suitesparse-install"
+        $openblasInclude = "${{ github.workspace }}\deps\openblas-windows\include"
+        $openblasLib = "${{ github.workspace }}\deps\openblas-windows\lib"
         
         cmake -G "Visual Studio 17 2022" -A x64 `
           -DCMAKE_BUILD_TYPE=Release `
           -DCMAKE_PREFIX_PATH="$suiteSparsePath" `
+          -DCMAKE_CXX_FLAGS="/I`"$openblasInclude`"" `
+          -DCMAKE_C_FLAGS="/I`"$openblasInclude`"" `
           -DSuiteSparse_DIR="$suiteSparsePath\lib\cmake\SuiteSparse" `
           -DSuiteSparse_CHOLMOD_DIR="$suiteSparsePath\lib" `
           -DSuiteSparse_CHOLMOD_INCLUDE_DIR="$suiteSparsePath\include\suitesparse" `
