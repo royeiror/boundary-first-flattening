@@ -1,0 +1,66 @@
+name: Build BFF Windows v1.6
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-2022
+    
+    steps:
+    - name: Checkout BFF
+      uses: actions/checkout@v4
+      with:
+        repository: GeometryCollective/boundary-first-flattening
+        ref: v1.6
+        submodules: recursive
+        path: bff
+
+    - name: Setup MSVC & CMake
+      uses: ilammy/msvc-dev-cmd@v1
+
+    - name: Clone SuiteSparse-METIS
+      run: |
+        git clone https://github.com/jlblancoc/suitesparse-metis-for-windows.git
+        cd suitesparse-metis-for-windows
+        git checkout master
+
+    - name: Build SuiteSparse-METIS
+      shell: pwsh
+      run: |
+        cd suitesparse-metis-for-windows
+        mkdir build
+        cd build
+        cmake .. -G "Visual Studio 17 2022" -A x64 `
+          -DSUITESPARSE_INSTALL_PREFIX=${{ github.workspace }}/SuiteSparse_Install `
+          -DBUILD_METIS=ON `
+          -DHAVE_COMPLEX=ON
+        cmake --build . --config Release --target install
+
+    - name: Build BFF
+      shell: pwsh
+      run: |
+        cd bff
+        mkdir build
+        cd build
+        cmake .. -G "Visual Studio 17 2022" -A x64 `
+          -DSuiteSparse_DIR="${{ github.workspace }}/SuiteSparse_Install/lib/cmake/SuiteSparse" `
+          -DBFF_BUILD_GUI=ON
+        cmake --build . --config Release
+
+    - name: Package Artifacts
+      shell: pwsh
+      run: |
+        mkdir dist
+        if (Test-Path "bff/build/Release/bff.exe") { copy bff/build/Release/bff.exe dist/ }
+        if (Test-Path "bff/build/Release/bff-gui.exe") { copy bff/build/Release/bff-gui.exe dist/ }
+        # Collect necessary DLLs if dynamic linking occurred
+        Get-ChildItem -Path "SuiteSparse_Install/bin/*.dll" | Copy-Item -Destination dist/ -ErrorAction SilentlyContinue
+
+    - name: Upload Build Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: BFF-Windows-v1.6
+        path: dist/
