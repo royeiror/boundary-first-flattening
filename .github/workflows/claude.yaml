@@ -1,0 +1,389 @@
+name: Build BFF for Windows
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout BFF Repository
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+    
+    - name: Setup MSVC
+      uses: microsoft/setup-msbuild@v2
+    
+    - name: Install CMake
+      uses: lukka/get-cmake@latest
+    
+    - name: Create Build Directory Structure
+      shell: powershell
+      run: |
+        New-Item -ItemType Directory -Force -Path "${{ github.workspace }}\build"
+        New-Item -ItemType Directory -Force -Path "${{ github.workspace }}\suitesparse-build"
+    
+    - name: Clone SuiteSparse-METIS for Windows
+      shell: powershell
+      run: |
+        cd "${{ github.workspace }}"
+        git clone https://github.com/jlblancoc/suitesparse-metis-for-windows.git suitesparse-metis
+        cd suitesparse-metis
+        Write-Host "SuiteSparse-METIS cloned successfully"
+    
+    - name: Configure SuiteSparse
+      shell: powershell
+      run: |
+        cd "${{ github.workspace }}\suitesparse-build"
+        cmake -G "Visual Studio 17 2022" -A x64 `
+          -DCMAKE_INSTALL_PREFIX="${{ github.workspace }}\suitesparse-install" `
+          -DCMAKE_BUILD_TYPE=Release `
+          -DBUILD_METIS=OFF `
+          -DHAVE_COMPLEX=OFF `
+          "${{ github.workspace }}\suitesparse-metis"
+    
+    - name: Build SuiteSparse
+      shell: powershell
+      run: |
+        cd "${{ github.workspace }}\suitesparse-build"
+        cmake --build . --config Release --target install -j 4
+        Write-Host "SuiteSparse built and installed successfully"
+    
+    - name: Verify SuiteSparse Installation
+      shell: powershell
+      run: |
+        $installPath = "${{ github.workspace }}\suitesparse-install"
+        Write-Host "Checking SuiteSparse installation at: $installPath"
+        
+        if (Test-Path "$installPath\lib") {
+          Write-Host "Library directory exists"
+          Get-ChildItem "$installPath\lib" -Recurse -Filter "*.lib" | Select-Object FullName
+        } else {
+          Write-Error "Library directory not found!"
+          exit 1
+        }
+        
+        if (Test-Path "$installPath\include") {
+          Write-Host "Include directory exists"
+        } else {
+          Write-Error "Include directory not found!"
+          exit 1
+        }
+    
+    - name: Configure BFF
+      shell: powershell
+      run: |
+        cd "${{ github.workspace }}\build"
+        
+        $suiteSparsePath = "${{ github.workspace }}\suitesparse-install"
+        
+        cmake -G "Visual Studio 17 2022" -A x64 `
+          -DCMAKE_BUILD_TYPE=Release `
+          -DCMAKE_PREFIX_PATH="$suiteSparsePath" `
+          -DSuiteSparse_DIR="$suiteSparsePath\lib\cmake\SuiteSparse" `
+          -DSuiteSparse_CHOLMOD_DIR="$suiteSparsePath\lib" `
+          -DSuiteSparse_CHOLMOD_INCLUDE_DIR="$suiteSparsePath\include\suitesparse" `
+          -DSuiteSparse_CHOLMOD_LIBRARY_DEBUG="$suiteSparsePath\lib\cholmod.lib" `
+          -DSuiteSparse_CHOLMOD_LIBRARY_RELEASE="$suiteSparsePath\lib\cholmod.lib" `
+          -DSuiteSparse_AMD_DIR="$suiteSparsePath\lib" `
+          -DSuiteSparse_AMD_INCLUDE_DIR="$suiteSparsePath\include\suitesparse" `
+          -DSuiteSparse_AMD_LIBRARY_DEBUG="$suiteSparsePath\lib\amd.lib" `
+          -DSuiteSparse_AMD_LIBRARY_RELEASE="$suiteSparsePath\lib\amd.lib" `
+          -DSuiteSparse_BTF_DIR="$suiteSparsePath\lib" `
+          -DSuiteSparse_BTF_INCLUDE_DIR="$suiteSparsePath\include\suitesparse" `
+          -DSuiteSparse_BTF_LIBRARY_DEBUG="$suiteSparsePath\lib\btf.lib" `
+          -DSuiteSparse_BTF_LIBRARY_RELEASE="$suiteSparsePath\lib\btf.lib" `
+          -DSuiteSparse_CAMD_DIR="$suiteSparsePath\lib" `
+          -DSuiteSparse_CAMD_INCLUDE_DIR="$suiteSparsePath\include\suitesparse" `
+          -DSuiteSparse_CAMD_LIBRARY_DEBUG="$suiteSparsePath\lib\camd.lib" `
+          -DSuiteSparse_CAMD_LIBRARY_RELEASE="$suiteSparsePath\lib\camd.lib" `
+          -DSuiteSparse_CCOLAMD_DIR="$suiteSparsePath\lib" `
+          -DSuiteSparse_CCOLAMD_INCLUDE_DIR="$suiteSparsePath\include\suitesparse" `
+          -DSuiteSparse_CCOLAMD_LIBRARY_DEBUG="$suiteSparsePath\lib\ccolamd.lib" `
+          -DSuiteSparse_CCOLAMD_LIBRARY_RELEASE="$suiteSparsePath\lib\ccolamd.lib" `
+          -DSuiteSparse_COLAMD_DIR="$suiteSparsePath\lib" `
+          -DSuiteSparse_COLAMD_INCLUDE_DIR="$suiteSparsePath\include\suitesparse" `
+          -DSuiteSparse_COLAMD_LIBRARY_DEBUG="$suiteSparsePath\lib\colamd.lib" `
+          -DSuiteSparse_COLAMD_LIBRARY_RELEASE="$suiteSparsePath\lib\colamd.lib" `
+          -DSuiteSparse_CXSPARSE_DIR="$suiteSparsePath\lib" `
+          -DSuiteSparse_CXSPARSE_INCLUDE_DIR="$suiteSparsePath\include\suitesparse" `
+          -DSuiteSparse_CXSPARSE_LIBRARY_DEBUG="$suiteSparsePath\lib\cxsparse.lib" `
+          -DSuiteSparse_CXSPARSE_LIBRARY_RELEASE="$suiteSparsePath\lib\cxsparse.lib" `
+          -DSuiteSparse_KLU_DIR="$suiteSparsePath\lib" `
+          -DSuiteSparse_KLU_INCLUDE_DIR="$suiteSparsePath\include\suitesparse" `
+          -DSuiteSparse_KLU_LIBRARY_DEBUG="$suiteSparsePath\lib\klu.lib" `
+          -DSuiteSparse_KLU_LIBRARY_RELEASE="$suiteSparsePath\lib\klu.lib" `
+          -DSuiteSparse_LDL_DIR="$suiteSparsePath\lib" `
+          -DSuiteSparse_LDL_INCLUDE_DIR="$suiteSparsePath\include\suitesparse" `
+          -DSuiteSparse_LDL_LIBRARY_DEBUG="$suiteSparsePath\lib\ldl.lib" `
+          -DSuiteSparse_LDL_LIBRARY_RELEASE="$suiteSparsePath\lib\ldl.lib" `
+          -DSuiteSparse_SPQR_DIR="$suiteSparsePath\lib" `
+          -DSuiteSparse_SPQR_INCLUDE_DIR="$suiteSparsePath\include\suitesparse" `
+          -DSuiteSparse_SPQR_LIBRARY_DEBUG="$suiteSparsePath\lib\spqr.lib" `
+          -DSuiteSparse_SPQR_LIBRARY_RELEASE="$suiteSparsePath\lib\spqr.lib" `
+          -DSuiteSparse_SUITESPARSECONFIG_DIR="$suiteSparsePath\lib" `
+          -DSuiteSparse_SUITESPARSECONFIG_INCLUDE_DIR="$suiteSparsePath\include\suitesparse" `
+          -DSuiteSparse_SUITESPARSECONFIG_LIBRARY_DEBUG="$suiteSparsePath\lib\suitesparseconfig.lib" `
+          -DSuiteSparse_SUITESPARSECONFIG_LIBRARY_RELEASE="$suiteSparsePath\lib\suitesparseconfig.lib" `
+          -DSuiteSparse_UMFPACK_DIR="$suiteSparsePath\lib" `
+          -DSuiteSparse_UMFPACK_INCLUDE_DIR="$suiteSparsePath\include\suitesparse" `
+          -DSuiteSparse_UMFPACK_LIBRARY_DEBUG="$suiteSparsePath\lib\umfpack.lib" `
+          -DSuiteSparse_UMFPACK_LIBRARY_RELEASE="$suiteSparsePath\lib\umfpack.lib" `
+          -DSuiteSparse_BLAS_LIBRARY="$suiteSparsePath\lib\libblas.lib" `
+          -DSuiteSparse_LAPACK_LIBRARY="$suiteSparsePath\lib\liblapack.lib" `
+          ..
+    
+    - name: Build BFF Static Library
+      shell: powershell
+      run: |
+        cd "${{ github.workspace }}\build"
+        cmake --build . --config Release --target bff -j 4
+        Write-Host "BFF static library built successfully"
+    
+    - name: Configure BFF Library as Static
+      shell: powershell
+      run: |
+        $vcxprojPath = Get-ChildItem -Path "${{ github.workspace }}\build" -Recurse -Filter "bff.vcxproj" | Select-Object -First 1
+        if ($vcxprojPath) {
+          Write-Host "Found bff.vcxproj at: $($vcxprojPath.FullName)"
+          
+          [xml]$project = Get-Content $vcxprojPath.FullName
+          
+          $propertyGroups = $project.Project.PropertyGroup | Where-Object { $_.Label -eq "Configuration" }
+          foreach ($pg in $propertyGroups) {
+            if ($pg.ConfigurationType) {
+              $pg.ConfigurationType = "StaticLibrary"
+              Write-Host "Set ConfigurationType to StaticLibrary for configuration"
+            }
+            if ($pg.TargetExt) {
+              $pg.TargetExt = ".lib"
+            } else {
+              $targetExtNode = $project.CreateElement("TargetExt", $project.Project.xmlns)
+              $targetExtNode.InnerText = ".lib"
+              $pg.AppendChild($targetExtNode) | Out-Null
+            }
+          }
+          
+          $project.Save($vcxprojPath.FullName)
+          Write-Host "Modified bff.vcxproj to build as static library"
+        } else {
+          Write-Warning "Could not find bff.vcxproj file"
+        }
+    
+    - name: Rebuild BFF Static Library
+      shell: powershell
+      run: |
+        cd "${{ github.workspace }}\build"
+        cmake --build . --config Release --target bff -j 4
+    
+    - name: Add OpenBLAS Include Paths to Command-Line and Viewer
+      shell: powershell
+      run: |
+        $openblasInclude = "${{ github.workspace }}\deps\openblas-windows\include"
+        $openblasLib = "${{ github.workspace }}\deps\openblas-windows\lib"
+        
+        $targets = @("bff-command-line", "bff-viewer")
+        
+        foreach ($target in $targets) {
+          $vcxprojPath = Get-ChildItem -Path "${{ github.workspace }}\build" -Recurse -Filter "$target.vcxproj" | Select-Object -First 1
+          
+          if ($vcxprojPath) {
+            Write-Host "Configuring $target at: $($vcxprojPath.FullName)"
+            
+            [xml]$project = Get-Content $vcxprojPath.FullName
+            
+            $itemDefGroups = $project.Project.ItemDefinitionGroup | Where-Object { $_.Condition -like "*Release*" }
+            
+            foreach ($idg in $itemDefGroups) {
+              if (-not $idg.ClCompile) {
+                $clCompile = $project.CreateElement("ClCompile", $project.Project.xmlns)
+                $idg.AppendChild($clCompile) | Out-Null
+              }
+              
+              if (-not $idg.ClCompile.AdditionalIncludeDirectories) {
+                $addIncNode = $project.CreateElement("AdditionalIncludeDirectories", $project.Project.xmlns)
+                $idg.ClCompile.AppendChild($addIncNode) | Out-Null
+              }
+              
+              $currentIncludes = $idg.ClCompile.AdditionalIncludeDirectories
+              if ($currentIncludes -notlike "*openblas*") {
+                $idg.ClCompile.AdditionalIncludeDirectories = "$openblasInclude;$currentIncludes"
+              }
+              
+              if (-not $idg.Link) {
+                $link = $project.CreateElement("Link", $project.Project.xmlns)
+                $idg.AppendChild($link) | Out-Null
+              }
+              
+              if (-not $idg.Link.AdditionalLibraryDirectories) {
+                $addLibNode = $project.CreateElement("AdditionalLibraryDirectories", $project.Project.xmlns)
+                $idg.Link.AppendChild($addLibNode) | Out-Null
+              }
+              
+              $currentLibDirs = $idg.Link.AdditionalLibraryDirectories
+              if ($currentLibDirs -notlike "*openblas*") {
+                $idg.Link.AdditionalLibraryDirectories = "$openblasLib;$currentLibDirs"
+              }
+              
+              if (-not $idg.Link.AdditionalDependencies) {
+                $addDepNode = $project.CreateElement("AdditionalDependencies", $project.Project.xmlns)
+                $idg.Link.AppendChild($addDepNode) | Out-Null
+              }
+              
+              $currentDeps = $idg.Link.AdditionalDependencies
+              $newDeps = @("$openblasLib\libopenblas.lib", "$openblasLib\libopenblas.dll.a")
+              foreach ($dep in $newDeps) {
+                if ($currentDeps -notlike "*$dep*") {
+                  $idg.Link.AdditionalDependencies = "$dep;$currentDeps"
+                }
+              }
+            }
+            
+            $project.Save($vcxprojPath.FullName)
+            Write-Host "Successfully configured $target with OpenBLAS paths"
+          } else {
+            Write-Warning "Could not find $target.vcxproj"
+          }
+        }
+    
+    - name: Build BFF Command-Line
+      shell: powershell
+      run: |
+        cd "${{ github.workspace }}\build"
+        cmake --build . --config Release --target bff-command-line -j 4
+        Write-Host "BFF command-line built successfully"
+    
+    - name: Build BFF Viewer (GUI)
+      shell: powershell
+      run: |
+        cd "${{ github.workspace }}\build"
+        cmake --build . --config Release --target bff-viewer -j 4
+        Write-Host "BFF viewer (GUI) built successfully"
+    
+    - name: Collect Build Artifacts
+      shell: powershell
+      run: |
+        New-Item -ItemType Directory -Force -Path "${{ github.workspace }}\artifacts"
+        
+        $buildPath = "${{ github.workspace }}\build"
+        $suiteSparsePath = "${{ github.workspace }}\suitesparse-install"
+        $openblasPath = "${{ github.workspace }}\deps\openblas-windows"
+        $artifactsPath = "${{ github.workspace }}\artifacts"
+        
+        Write-Host "Searching for executables..."
+        $cmdExe = Get-ChildItem -Path $buildPath -Recurse -Filter "bff-command-line.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+        $viewerExe = Get-ChildItem -Path $buildPath -Recurse -Filter "bff-viewer.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+        
+        if ($cmdExe) {
+          Write-Host "Found bff-command-line.exe at: $($cmdExe.FullName)"
+          Copy-Item $cmdExe.FullName "$artifactsPath\bff-command-line.exe"
+        } else {
+          Write-Warning "bff-command-line.exe not found!"
+        }
+        
+        if ($viewerExe) {
+          Write-Host "Found bff-viewer.exe at: $($viewerExe.FullName)"
+          Copy-Item $viewerExe.FullName "$artifactsPath\bff-viewer.exe"
+        } else {
+          Write-Warning "bff-viewer.exe not found!"
+        }
+        
+        Write-Host "Copying required DLLs..."
+        
+        if (Test-Path "$suiteSparsePath\lib\lapack_blas_windows") {
+          Get-ChildItem "$suiteSparsePath\lib\lapack_blas_windows" -Filter "*.dll" | ForEach-Object {
+            Copy-Item $_.FullName "$artifactsPath\"
+            Write-Host "Copied: $($_.Name)"
+          }
+        }
+        
+        if (Test-Path "$suiteSparsePath\lib") {
+          Get-ChildItem "$suiteSparsePath\lib" -Filter "*.dll" -Recurse | ForEach-Object {
+            Copy-Item $_.FullName "$artifactsPath\" -ErrorAction SilentlyContinue
+            Write-Host "Copied: $($_.Name)"
+          }
+        }
+        
+        if (Test-Path "$openblasPath\bin") {
+          Get-ChildItem "$openblasPath\bin" -Filter "*.dll" | ForEach-Object {
+            Copy-Item $_.FullName "$artifactsPath\"
+            Write-Host "Copied OpenBLAS: $($_.Name)"
+          }
+        }
+        
+        Write-Host "`nArtifacts collected:"
+        Get-ChildItem "$artifactsPath" | ForEach-Object { Write-Host "  $($_.Name)" }
+    
+    - name: Create README for Artifacts
+      shell: powershell
+      run: |
+        $readmeContent = @"
+# Boundary First Flattening (BFF) - Windows Build
+
+This package contains the Windows x64 build of BFF (Boundary First Flattening).
+
+## Contents
+
+- bff-command-line.exe: Command-line interface for BFF
+- bff-viewer.exe: GUI application for BFF
+- *.dll: Required runtime libraries (BLAS, LAPACK, SuiteSparse)
+
+## Usage
+
+### Command-Line Interface
+``````
+bff-command-line.exe input.obj output.obj
+``````
+
+Optional flags:
+- --nCones=N: Use N cone singularities to reduce area distortion
+- --normalizeUVs: Scale UVs to [0,1] x [0,1] range
+- --writeOnlyUVs: Write UVs using vertex 'v' flag instead of 'vt'
+- --scaling=X: Multiplicative scale factor for UV islands
+- --mapToSphere: Map to unit sphere (for genus-0 surfaces)
+- --flattenToDisk: Map to unit circular disk
+
+### GUI Application
+Simply double-click bff-viewer.exe and use the GUI to load and flatten meshes.
+
+## System Requirements
+
+- Windows 10 or later (x64)
+- OpenGL 4.1 or higher (for GUI)
+
+## Built From
+
+Repository: https://github.com/GeometryCollective/boundary-first-flattening
+Build Date: $(Get-Date -Format "yyyy-MM-dd HH:mm:ss UTC")
+Commit: ${{ github.sha }}
+
+## License
+
+MIT License - See https://github.com/GeometryCollective/boundary-first-flattening/blob/master/LICENSE
+"@
+        
+        Set-Content -Path "${{ github.workspace }}\artifacts\README.txt" -Value $readmeContent
+        Write-Host "README created successfully"
+    
+    - name: Upload Build Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: BFF-Windows-x64
+        path: ${{ github.workspace }}/artifacts
+        retention-days: 90
+    
+    - name: Create Release (on tag)
+      if: startsWith(github.ref, 'refs/tags/')
+      uses: softprops/action-gh-release@v1
+      with:
+        files: ${{ github.workspace }}/artifacts/*
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
