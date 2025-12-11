@@ -53,20 +53,6 @@ jobs:
         Write-Host "Copying BFF source files..."
         # Copy all files from bff-source to current directory
         Copy-Item -Path "bff-source\*" -Destination "." -Recurse -Force
-        
-        Write-Host "Checking what we have..."
-        Get-ChildItem | Select-Object -First 10 | Format-Table Name, Mode
-        
-        Write-Host "Checking for source files..."
-        if (Test-Path "src") {
-          Write-Host "src directory exists:"
-          Get-ChildItem -Path "src" -Filter "*.cpp" | Select-Object -First 5
-        }
-        
-        if (Test-Path "apps") {
-          Write-Host "apps directory exists:"
-          Get-ChildItem -Path "apps" -Filter "*.cpp" | Select-Object -First 5
-        }
 
     - name: Create CMakeLists.txt
       shell: powershell
@@ -104,32 +90,46 @@ jobs:
         $lines += 'file(GLOB GLEW_LIBS "${VCPKG_INSTALLED_DIR}/lib/*glew*.lib")'
         $lines += ""
         $lines += "# Check if libraries were found"
-        $lines += "if(NOT CHOLMOD_LIBS)"
-        $lines += '    message(FATAL_ERROR "CHOLMOD library not found")'
-        $lines += "else()"
+        $lines += "if(CHOLMOD_LIBS)"
         $lines += "    list(GET CHOLMOD_LIBS 0 CHOLMOD_LIBRARY)"
         $lines += '    message(STATUS "Found CHOLMOD: ${CHOLMOD_LIBRARY}")'
+        $lines += "else()"
+        $lines += '    message(FATAL_ERROR "CHOLMOD library not found")'
         $lines += "endif()"
         $lines += ""
-        $lines += "# Similar checks for other libraries"
-        $lines += "if(AMD_LIBS) list(GET AMD_LIBS 0 AMD_LIBRARY) endif()"
-        $lines += "if(CAMD_LIBS) list(GET CAMD_LIBS 0 CAMD_LIBRARY) endif()"
-        $lines += "if(COLAMD_LIBS) list(GET COLAMD_LIBS 0 COLAMD_LIBRARY) endif()"
-        $lines += "if(CCOLAMD_LIBS) list(GET CCOLAMD_LIBS 0 CCOLAMD_LIBRARY) endif()"
-        $lines += "if(METIS_LIBS) list(GET METIS_LIBS 0 METIS_LIBRARY) endif()"
+        $lines += "# Set other libraries if found"
+        $lines += "if(AMD_LIBS)"
+        $lines += "    list(GET AMD_LIBS 0 AMD_LIBRARY)"
+        $lines += "endif()"
         $lines += ""
-        $lines += "if(NOT GLFW_LIBS)"
-        $lines += '    message(FATAL_ERROR "GLFW library not found")'
-        $lines += "else()"
+        $lines += "if(CAMD_LIBS)"
+        $lines += "    list(GET CAMD_LIBS 0 CAMD_LIBRARY)"
+        $lines += "endif()"
+        $lines += ""
+        $lines += "if(COLAMD_LIBS)"
+        $lines += "    list(GET COLAMD_LIBS 0 COLAMD_LIBRARY)"
+        $lines += "endif()"
+        $lines += ""
+        $lines += "if(CCOLAMD_LIBS)"
+        $lines += "    list(GET CCOLAMD_LIBS 0 CCOLAMD_LIBRARY)"
+        $lines += "endif()"
+        $lines += ""
+        $lines += "if(METIS_LIBS)"
+        $lines += "    list(GET METIS_LIBS 0 METIS_LIBRARY)"
+        $lines += "endif()"
+        $lines += ""
+        $lines += "if(GLFW_LIBS)"
         $lines += "    list(GET GLFW_LIBS 0 GLFW_LIBRARY)"
         $lines += '    message(STATUS "Found GLFW: ${GLFW_LIBRARY}")'
+        $lines += "else()"
+        $lines += '    message(FATAL_ERROR "GLFW library not found")'
         $lines += "endif()"
         $lines += ""
-        $lines += "if(NOT GLEW_LIBS)"
-        $lines += '    message(FATAL_ERROR "GLEW library not found")'
-        $lines += "else()"
+        $lines += "if(GLEW_LIBS)"
         $lines += "    list(GET GLEW_LIBS 0 GLEW_LIBRARY)"
         $lines += '    message(STATUS "Found GLEW: ${GLEW_LIBRARY}")'
+        $lines += "else()"
+        $lines += '    message(FATAL_ERROR "GLEW library not found")'
         $lines += "endif()"
         $lines += ""
         $lines += "# OpenGL libraries (system libraries)"
@@ -139,18 +139,12 @@ jobs:
         $lines += '    set(OPENGL_LIBRARIES "GL")'
         $lines += "endif()"
         $lines += ""
-        $lines += "# Find source files - check multiple patterns"
-        $lines += "set(ALL_SRC_FILES)"
-        $lines += 'file(GLOB_RECURSE SRC_FILES_1 "src/*.cpp")'
-        $lines += 'file(GLOB_RECURSE SRC_FILES_2 "*.cpp")'
-        $lines += "if(SRC_FILES_1)"
-        $lines += "    set(ALL_SRC_FILES ${SRC_FILES_1})"
-        $lines += '    message(STATUS "Found ${SRC_FILES_1} source files in src/")'
-        $lines += "elseif(SRC_FILES_2)"
-        $lines += "    set(ALL_SRC_FILES ${SRC_FILES_2})"
-        $lines += '    message(STATUS "Found ${SRC_FILES_2} source files in root")'
+        $lines += "# Find source files"
+        $lines += 'file(GLOB_RECURSE ALL_SRC_FILES "src/*.cpp")'
+        $lines += "if(NOT ALL_SRC_FILES)"
+        $lines += '    message(FATAL_ERROR "No source files found in src/ directory")'
         $lines += "else()"
-        $lines += '    message(FATAL_ERROR "No source files found")'
+        $lines += '    message(STATUS "Found source files: ${ALL_SRC_FILES}")'
         $lines += "endif()"
         $lines += ""
         $lines += "# Create library"
@@ -166,28 +160,16 @@ jobs:
         $lines += "    ${METIS_LIBRARY}"
         $lines += ")"
         $lines += ""
-        $lines += "# GUI executable - check multiple patterns"
-        $lines += "set(ALL_GUI_FILES)"
-        $lines += 'file(GLOB_RECURSE GUI_FILES_1 "apps/*.cpp")'
-        $lines += 'file(GLOB_RECURSE GUI_FILES_2 "gui/*.cpp")'
-        $lines += "if(GUI_FILES_1)"
-        $lines += "    set(ALL_GUI_FILES ${GUI_FILES_1})"
-        $lines += "    set(GUI_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/apps)"
-        $lines += '    message(STATUS "Found GUI files in apps/")'
-        $lines += "elseif(GUI_FILES_2)"
-        $lines += "    set(ALL_GUI_FILES ${GUI_FILES_2})"
-        $lines += "    set(GUI_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/gui)"
-        $lines += '    message(STATUS "Found GUI files in gui/")'
-        $lines += "endif()"
-        $lines += ""
-        $lines += "if(ALL_GUI_FILES)"
-        $lines += "    add_executable(bff-gui ${ALL_GUI_FILES})"
+        $lines += "# GUI executable"
+        $lines += 'file(GLOB_RECURSE GUI_FILES "apps/*.cpp")'
+        $lines += "if(GUI_FILES)"
+        $lines += "    add_executable(bff-gui ${GUI_FILES})"
         $lines += "    target_link_libraries(bff-gui bff-lib"
         $lines += "        ${OPENGL_LIBRARIES}"
         $lines += "        ${GLFW_LIBRARY}"
         $lines += "        ${GLEW_LIBRARY}"
         $lines += "    )"
-        $lines += "    target_include_directories(bff-gui PRIVATE ${GUI_INCLUDE_DIR})"
+        $lines += "    target_include_directories(bff-gui PRIVATE ${CMAKE_SOURCE_DIR}/apps)"
         $lines += '    message(STATUS "Building GUI application")'
         $lines += "endif()"
         $lines += ""
