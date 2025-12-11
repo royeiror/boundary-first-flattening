@@ -139,11 +139,55 @@ jobs:
     - name: Configure BFF
       shell: powershell
       run: |
+        Remove-Item "${{ github.workspace }}\build\CMakeCache.txt" -ErrorAction SilentlyContinue
+        Remove-Item "${{ github.workspace }}\build\CMakeFiles" -Recurse -Force -ErrorAction SilentlyContinue
+        
         cd "${{ github.workspace }}\build"
         
         $suiteSparsePath = "${{ github.workspace }}\suitesparse-install"
         $openblasInclude = "${{ github.workspace }}\deps\openblas-windows\include"
         $openblasLib = "${{ github.workspace }}\deps\openblas-windows\lib"
+        $libPath = "$suiteSparsePath\lib"
+        
+        function Find-Library {
+          param($name)
+          $patterns = @("$name.lib", "lib$name.lib")
+          foreach ($pattern in $patterns) {
+            $found = Get-ChildItem -Path $libPath -Filter $pattern -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($found) {
+              return $found.FullName
+            }
+          }
+          Write-Warning "Library not found: $name"
+          return "$libPath\$name.lib"
+        }
+        
+        $cholmodLib = Find-Library "cholmod"
+        $amdLib = Find-Library "amd"
+        $btfLib = Find-Library "btf"
+        $camdLib = Find-Library "camd"
+        $ccolamdLib = Find-Library "ccolamd"
+        $colamdLib = Find-Library "colamd"
+        $cxsparseLib = Find-Library "cxsparse"
+        $kluLib = Find-Library "klu"
+        $ldlLib = Find-Library "ldl"
+        $spqrLib = Find-Library "spqr"
+        $suitesparseconfigLib = Find-Library "suitesparseconfig"
+        $umfpackLib = Find-Library "umfpack"
+        $blasLib = Find-Library "blas"
+        if (-not (Test-Path $blasLib)) {
+          $blasLib = Find-Library "libblas"
+        }
+        $lapackLib = Find-Library "lapack"
+        if (-not (Test-Path $lapackLib)) {
+          $lapackLib = Find-Library "liblapack"
+        }
+        
+        Write-Host "Using libraries:"
+        Write-Host "  CHOLMOD: $cholmodLib (exists: $(Test-Path $cholmodLib))"
+        Write-Host "  AMD: $amdLib (exists: $(Test-Path $amdLib))"
+        Write-Host "  BLAS: $blasLib (exists: $(Test-Path $blasLib))"
+        Write-Host "  LAPACK: $lapackLib (exists: $(Test-Path $lapackLib))"
         
         cmake -G "Visual Studio 17 2022" -A x64 `
           -DCMAKE_BUILD_TYPE=Release `
@@ -151,56 +195,56 @@ jobs:
           -DCMAKE_CXX_FLAGS="/I`"$openblasInclude`"" `
           -DCMAKE_C_FLAGS="/I`"$openblasInclude`"" `
           -DSuiteSparse_DIR="$suiteSparsePath\lib\cmake\SuiteSparse" `
-          -DSuiteSparse_CHOLMOD_DIR="$suiteSparsePath\lib" `
+          -DSuiteSparse_CHOLMOD_DIR="$libPath" `
           -DSuiteSparse_CHOLMOD_INCLUDE_DIR="$suiteSparsePath\include\suitesparse" `
-          -DSuiteSparse_CHOLMOD_LIBRARY_DEBUG="$suiteSparsePath\lib\cholmod.lib" `
-          -DSuiteSparse_CHOLMOD_LIBRARY_RELEASE="$suiteSparsePath\lib\cholmod.lib" `
-          -DSuiteSparse_AMD_DIR="$suiteSparsePath\lib" `
+          -DSuiteSparse_CHOLMOD_LIBRARY_DEBUG="$cholmodLib" `
+          -DSuiteSparse_CHOLMOD_LIBRARY_RELEASE="$cholmodLib" `
+          -DSuiteSparse_AMD_DIR="$libPath" `
           -DSuiteSparse_AMD_INCLUDE_DIR="$suiteSparsePath\include\suitesparse" `
-          -DSuiteSparse_AMD_LIBRARY_DEBUG="$suiteSparsePath\lib\amd.lib" `
-          -DSuiteSparse_AMD_LIBRARY_RELEASE="$suiteSparsePath\lib\amd.lib" `
-          -DSuiteSparse_BTF_DIR="$suiteSparsePath\lib" `
+          -DSuiteSparse_AMD_LIBRARY_DEBUG="$amdLib" `
+          -DSuiteSparse_AMD_LIBRARY_RELEASE="$amdLib" `
+          -DSuiteSparse_BTF_DIR="$libPath" `
           -DSuiteSparse_BTF_INCLUDE_DIR="$suiteSparsePath\include\suitesparse" `
-          -DSuiteSparse_BTF_LIBRARY_DEBUG="$suiteSparsePath\lib\btf.lib" `
-          -DSuiteSparse_BTF_LIBRARY_RELEASE="$suiteSparsePath\lib\btf.lib" `
-          -DSuiteSparse_CAMD_DIR="$suiteSparsePath\lib" `
+          -DSuiteSparse_BTF_LIBRARY_DEBUG="$btfLib" `
+          -DSuiteSparse_BTF_LIBRARY_RELEASE="$btfLib" `
+          -DSuiteSparse_CAMD_DIR="$libPath" `
           -DSuiteSparse_CAMD_INCLUDE_DIR="$suiteSparsePath\include\suitesparse" `
-          -DSuiteSparse_CAMD_LIBRARY_DEBUG="$suiteSparsePath\lib\camd.lib" `
-          -DSuiteSparse_CAMD_LIBRARY_RELEASE="$suiteSparsePath\lib\camd.lib" `
-          -DSuiteSparse_CCOLAMD_DIR="$suiteSparsePath\lib" `
+          -DSuiteSparse_CAMD_LIBRARY_DEBUG="$camdLib" `
+          -DSuiteSparse_CAMD_LIBRARY_RELEASE="$camdLib" `
+          -DSuiteSparse_CCOLAMD_DIR="$libPath" `
           -DSuiteSparse_CCOLAMD_INCLUDE_DIR="$suiteSparsePath\include\suitesparse" `
-          -DSuiteSparse_CCOLAMD_LIBRARY_DEBUG="$suiteSparsePath\lib\ccolamd.lib" `
-          -DSuiteSparse_CCOLAMD_LIBRARY_RELEASE="$suiteSparsePath\lib\ccolamd.lib" `
-          -DSuiteSparse_COLAMD_DIR="$suiteSparsePath\lib" `
+          -DSuiteSparse_CCOLAMD_LIBRARY_DEBUG="$ccolamdLib" `
+          -DSuiteSparse_CCOLAMD_LIBRARY_RELEASE="$ccolamdLib" `
+          -DSuiteSparse_COLAMD_DIR="$libPath" `
           -DSuiteSparse_COLAMD_INCLUDE_DIR="$suiteSparsePath\include\suitesparse" `
-          -DSuiteSparse_COLAMD_LIBRARY_DEBUG="$suiteSparsePath\lib\colamd.lib" `
-          -DSuiteSparse_COLAMD_LIBRARY_RELEASE="$suiteSparsePath\lib\colamd.lib" `
-          -DSuiteSparse_CXSPARSE_DIR="$suiteSparsePath\lib" `
+          -DSuiteSparse_COLAMD_LIBRARY_DEBUG="$colamdLib" `
+          -DSuiteSparse_COLAMD_LIBRARY_RELEASE="$colamdLib" `
+          -DSuiteSparse_CXSPARSE_DIR="$libPath" `
           -DSuiteSparse_CXSPARSE_INCLUDE_DIR="$suiteSparsePath\include\suitesparse" `
-          -DSuiteSparse_CXSPARSE_LIBRARY_DEBUG="$suiteSparsePath\lib\cxsparse.lib" `
-          -DSuiteSparse_CXSPARSE_LIBRARY_RELEASE="$suiteSparsePath\lib\cxsparse.lib" `
-          -DSuiteSparse_KLU_DIR="$suiteSparsePath\lib" `
+          -DSuiteSparse_CXSPARSE_LIBRARY_DEBUG="$cxsparseLib" `
+          -DSuiteSparse_CXSPARSE_LIBRARY_RELEASE="$cxsparseLib" `
+          -DSuiteSparse_KLU_DIR="$libPath" `
           -DSuiteSparse_KLU_INCLUDE_DIR="$suiteSparsePath\include\suitesparse" `
-          -DSuiteSparse_KLU_LIBRARY_DEBUG="$suiteSparsePath\lib\klu.lib" `
-          -DSuiteSparse_KLU_LIBRARY_RELEASE="$suiteSparsePath\lib\klu.lib" `
-          -DSuiteSparse_LDL_DIR="$suiteSparsePath\lib" `
+          -DSuiteSparse_KLU_LIBRARY_DEBUG="$kluLib" `
+          -DSuiteSparse_KLU_LIBRARY_RELEASE="$kluLib" `
+          -DSuiteSparse_LDL_DIR="$libPath" `
           -DSuiteSparse_LDL_INCLUDE_DIR="$suiteSparsePath\include\suitesparse" `
-          -DSuiteSparse_LDL_LIBRARY_DEBUG="$suiteSparsePath\lib\ldl.lib" `
-          -DSuiteSparse_LDL_LIBRARY_RELEASE="$suiteSparsePath\lib\ldl.lib" `
-          -DSuiteSparse_SPQR_DIR="$suiteSparsePath\lib" `
+          -DSuiteSparse_LDL_LIBRARY_DEBUG="$ldlLib" `
+          -DSuiteSparse_LDL_LIBRARY_RELEASE="$ldlLib" `
+          -DSuiteSparse_SPQR_DIR="$libPath" `
           -DSuiteSparse_SPQR_INCLUDE_DIR="$suiteSparsePath\include\suitesparse" `
-          -DSuiteSparse_SPQR_LIBRARY_DEBUG="$suiteSparsePath\lib\spqr.lib" `
-          -DSuiteSparse_SPQR_LIBRARY_RELEASE="$suiteSparsePath\lib\spqr.lib" `
-          -DSuiteSparse_SUITESPARSECONFIG_DIR="$suiteSparsePath\lib" `
+          -DSuiteSparse_SPQR_LIBRARY_DEBUG="$spqrLib" `
+          -DSuiteSparse_SPQR_LIBRARY_RELEASE="$spqrLib" `
+          -DSuiteSparse_SUITESPARSECONFIG_DIR="$libPath" `
           -DSuiteSparse_SUITESPARSECONFIG_INCLUDE_DIR="$suiteSparsePath\include\suitesparse" `
-          -DSuiteSparse_SUITESPARSECONFIG_LIBRARY_DEBUG="$suiteSparsePath\lib\suitesparseconfig.lib" `
-          -DSuiteSparse_SUITESPARSECONFIG_LIBRARY_RELEASE="$suiteSparsePath\lib\suitesparseconfig.lib" `
-          -DSuiteSparse_UMFPACK_DIR="$suiteSparsePath\lib" `
+          -DSuiteSparse_SUITESPARSECONFIG_LIBRARY_DEBUG="$suitesparseconfigLib" `
+          -DSuiteSparse_SUITESPARSECONFIG_LIBRARY_RELEASE="$suitesparseconfigLib" `
+          -DSuiteSparse_UMFPACK_DIR="$libPath" `
           -DSuiteSparse_UMFPACK_INCLUDE_DIR="$suiteSparsePath\include\suitesparse" `
-          -DSuiteSparse_UMFPACK_LIBRARY_DEBUG="$suiteSparsePath\lib\umfpack.lib" `
-          -DSuiteSparse_UMFPACK_LIBRARY_RELEASE="$suiteSparsePath\lib\umfpack.lib" `
-          -DSuiteSparse_BLAS_LIBRARY="$suiteSparsePath\lib\libblas.lib" `
-          -DSuiteSparse_LAPACK_LIBRARY="$suiteSparsePath\lib\liblapack.lib" `
+          -DSuiteSparse_UMFPACK_LIBRARY_DEBUG="$umfpackLib" `
+          -DSuiteSparse_UMFPACK_LIBRARY_RELEASE="$umfpackLib" `
+          -DSuiteSparse_BLAS_LIBRARY="$blasLib" `
+          -DSuiteSparse_LAPACK_LIBRARY="$lapackLib" `
           ..
     
     - name: Build BFF Static Library
