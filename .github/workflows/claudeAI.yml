@@ -22,6 +22,8 @@ jobs:
     
     - name: Install CMake
       uses: lukka/get-cmake@latest
+      with:
+        cmakeVersion: '3.27.0'
     
     - name: Create Build Directory Structure
       shell: powershell
@@ -36,6 +38,26 @@ jobs:
         git clone https://github.com/jlblancoc/suitesparse-metis-for-windows.git suitesparse-metis
         cd suitesparse-metis
         Write-Host "SuiteSparse-METIS cloned successfully"
+    
+    - name: Patch CMake Version Requirements
+      shell: powershell
+      run: |
+        Write-Host "Checking and patching CMake version requirements..."
+        
+        $cmakeFiles = Get-ChildItem -Path "${{ github.workspace }}\suitesparse-metis" -Filter "CMakeLists.txt" -Recurse
+        foreach ($file in $cmakeFiles) {
+          $content = Get-Content $file.FullName -Raw
+          if ($content -match 'cmake_minimum_required\s*\(\s*VERSION\s+(\d+\.\d+)') {
+            $version = [double]$matches[1]
+            if ($version -lt 3.5) {
+              Write-Host "Patching $($file.FullName) - upgrading minimum version from $version to 3.5"
+              $content = $content -replace 'cmake_minimum_required\s*\(\s*VERSION\s+\d+\.\d+', 'cmake_minimum_required(VERSION 3.5'
+              Set-Content -Path $file.FullName -Value $content -NoNewline
+            }
+          }
+        }
+        
+        Write-Host "CMake version requirements patched successfully"
     
     - name: Configure SuiteSparse
       shell: powershell
