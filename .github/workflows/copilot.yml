@@ -11,12 +11,10 @@ jobs:
   build-windows:
     runs-on: windows-latest
     env:
-      # Use explicit paths to avoid issues with PowerShell quoting, and keep them consistent.
       SUITESPARSE_ROOT: ${{ github.workspace }}\suitesparse-src
       SUITESPARSE_BUILD: ${{ github.workspace }}\suitesparse-build
       SUITESPARSE_INSTALL: ${{ github.workspace }}\suitesparse-install
       BFF_BUILD: ${{ github.workspace }}\build
-      # Toolchain and generator
       CMAKE_GENERATOR: "Visual Studio 17 2022"
       CMAKE_ARCH: "x64"
 
@@ -26,11 +24,11 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Ensure clean install and build directories
+      - name: Prepare directories
         shell: pwsh
         run: |
-          if (Test-Path "$env:SUITESPARSE_BUILD") { Remove-Item -Recurse -Force "$env:SUITESPARSE_BUILD" }
-          if (Test-Path "$env:SUITESPARSE_INSTALL") { Remove-Item -Recurse -Force "$env:SUITESPARSE_INSTALL" }
+          Remove-Item -Recurse -Force "$env:SUITESPARSE_BUILD" -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force "$env:SUITESPARSE_INSTALL" -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force -Path "$env:SUITESPARSE_ROOT" | Out-Null
           New-Item -ItemType Directory -Force -Path "$env:SUITESPARSE_BUILD" | Out-Null
           New-Item -ItemType Directory -Force -Path "$env:SUITESPARSE_INSTALL" | Out-Null
@@ -42,71 +40,46 @@ jobs:
           repository: jlblancoc/suitesparse-metis-for-windows
           path: suitesparse-src
 
-      - name: Configure SuiteSparse with CMake (MSVC, install prefix)
+      - name: Configure SuiteSparse
         shell: pwsh
         run: |
           cmake -S "$env:SUITESPARSE_ROOT" -B "$env:SUITESPARSE_BUILD" `
             -G "$env:CMAKE_GENERATOR" `
             -A "$env:CMAKE_ARCH" `
-            -DCMAKE_INSTALL_PREFIX="$env:SUITESPARSE_INSTALL" `
-            -DHAVE_COMPLEX=OFF `
-            -DWITH_OPENBLAS=OFF
-          # Note: The project ships BLAS/LAPACK DLLs and config. LAPACK_DIR will be set for BFF later.
-
-      - name: Build and install SuiteSparse (Debug)
-        shell: pwsh
-        run: |
-          cmake --build "$env:SUITESPARSE_BUILD" --config Debug --target INSTALL
+            -DCMAKE_INSTALL_PREFIX="$env:SUITESPARSE_INSTALL"
 
       - name: Build and install SuiteSparse (Release)
         shell: pwsh
         run: |
           cmake --build "$env:SUITESPARSE_BUILD" --config Release --target INSTALL
 
-      - name: Verify SuiteSparseConfig.cmake presence
+      - name: Add SuiteSparse DLLs to PATH
         shell: pwsh
         run: |
-          $cfg = Get-ChildItem -Recurse -Path "$env:SUITESPARSE_INSTALL" -Filter "SuiteSparseConfig.cmake" | Select-Object -First 1
-          if (-not $cfg) {
-            Write-Host "SuiteSparseConfig.cmake not found in install dir"
-            Exit 1
-          }
-
-      - name: Set environment for BLAS/LAPACK DLL resolution
-        shell: pwsh
-        run: |
-          # Required by suitesparse-metis-for-windows on Windows to resolve BLAS/Fortran DLLs at runtime.
-          # We append lapack_blas_windows and lib to PATH, as documented.
-          $lapackDir = Join-Path "$env:SUITESPARSE_INSTALL" "lib" "lapack_blas_windows"
+          $lapackDir = Join-Path "$env:SUITESPARSE_ROOT" "lapack_windows" "x64"
           $libDir = Join-Path "$env:SUITESPARSE_INSTALL" "lib"
-          # Prepend to PATH for this job context
-          echo "Adding $lapackDir and $libDir to PATH"
           echo "$lapackDir" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           echo "$libDir"    | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
-      - name: Configure BFF with CMake (point to SuiteSparse + LAPACK_DIR)
+      - name: Configure BFF
         shell: pwsh
         run: |
-          # Per BFF v1.6, we must provide SuiteSparse_* include/lib paths or SuiteSparse_DIR.
-          # suitesparse-metis-for-windows installs a config making find_package(SuiteSparse CONFIG REQUIRED) work.
-          # Also set LAPACK_DIR to the lapack_windows folder for CMake to find LAPACK if needed.
-          $suiteSparseConfigDir = (Get-ChildItem -Recurse -Path "$env:SUITESPARSE_INSTALL" -Filter "SuiteSparseConfig.cmake" | Select-Object -First 1).DirectoryName
-          # LAPACK_DIR is the x64 directory inside the suitesparse project structure.
+          $ssInc = Join-Path "$env:SUITESPARSE_INSTALL" "include"
+          $ssLib = Join-Path "$env:SUITESPARSE_INSTALL" "lib"
           $lapackDirCandidate = Join-Path "$env:SUITESPARSE_ROOT" "lapack_windows" "x64"
 
-          if (-not (Test-Path $lapackDirCandidate)) {
-            Write-Host "Expected LAPACK_DIR not found: $lapackDirCandidate"
-            Exit 1
-          }
+          # List all SuiteSparse libs you need
+          $libs = "$ssLib\cholmod.lib;$ssLib\amd.lib;$ssLib\colamd.lib;$ssLib\metis.lib;$ssLib\spqr.lib;$ssLib\camd.lib;$ssLib\ccolamd.lib"
 
           cmake -S "${{ github.workspace }}" -B "$env:BFF_BUILD" `
             -G "$env:CMAKE_GENERATOR" `
             -A "$env:CMAKE_ARCH" `
             -DCMAKE_BUILD_TYPE=Release `
-            -DSuiteSparse_DIR="$suiteSparseConfigDir" `
+            -DSuiteSparse_INCLUDE_DIRS="$ssInc" `
+            -DSuiteSparse_LIBRARIES="$libs" `
             -DLAPACK_DIR="$lapackDirCandidate"
 
-      - name: Build BFF targets (Release)
+      - name: Build BFF targets
         shell: pwsh
         run: |
           cmake --build "$env:BFF_BUILD" --config Release --target bff
@@ -117,41 +90,16 @@ jobs:
         shell: pwsh
         run: |
           $art = Join-Path "${{ github.workspace }}" "artifacts"
-          if (Test-Path $art) { Remove-Item -Recurse -Force $art }
+          Remove-Item -Recurse -Force $art -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force -Path $art | Out-Null
 
-          # Executables from MSVC build output layout:
           $binRelease = Join-Path "$env:BFF_BUILD" "Release"
-          $viewerExe = Join-Path $binRelease "bff-viewer.exe"
-          $cliExe    = Join-Path $binRelease "bff-command-line.exe"
+          Copy-Item (Join-Path $binRelease "bff-viewer.exe") -Destination $art
+          Copy-Item (Join-Path $binRelease "bff-command-line.exe") -Destination $art
 
-          if (-not (Test-Path $viewerExe)) { Write-Host "bff-viewer.exe not found"; Exit 1 }
-          if (-not (Test-Path $cliExe))    { Write-Host "bff-command-line.exe not found"; Exit 1 }
-
-          Copy-Item $viewerExe -Destination $art
-          Copy-Item $cliExe    -Destination $art
-
-          # Copy OpenBLAS libs from repo deps (per v1.6 guidance). If they exist, include them.
-          $openblasLibDir = Join-Path "${{ github.workspace }}" "deps" "openblas-windows" "lib"
-          $openblasIncDir = Join-Path "${{ github.workspace }}" "deps" "openblas-windows" "include"
-          if (Test-Path $openblasLibDir) {
-            New-Item -ItemType Directory -Force -Path (Join-Path $art "openblas-lib") | Out-Null
-            Copy-Item (Join-Path $openblasLibDir "*") -Destination (Join-Path $art "openblas-lib") -Recurse
-          }
-          if (Test-Path $openblasIncDir) {
-            New-Item -ItemType Directory -Force -Path (Join-Path $art "openblas-include") | Out-Null
-            Copy-Item (Join-Path $openblasIncDir "*") -Destination (Join-Path $art "openblas-include") -Recurse
-          }
-
-          # Include SuiteSparse runtime DLLs so the executables are usable out of the box.
-          $ssLib = Join-Path "$env:SUITESPARSE_INSTALL" "lib"
-          $ssLapackDlls = Join-Path "$env:SUITESPARSE_INSTALL" "lib" "lapack_blas_windows"
-          New-Item -ItemType Directory -Force -Path (Join-Path $art "suitesparse-lib") | Out-Null
-          Copy-Item (Join-Path $ssLib "*.dll") -Destination (Join-Path $art "suitesparse-lib") -ErrorAction SilentlyContinue
-          if (Test-Path $ssLapackDlls) {
-            New-Item -ItemType Directory -Force -Path (Join-Path $art "lapack_blas_windows") | Out-Null
-            Copy-Item (Join-Path $ssLapackDlls "*") -Destination (Join-Path $art "lapack_blas_windows") -Recurse
-          }
+          # Copy SuiteSparse DLLs
+          Copy-Item (Join-Path "$env:SUITESPARSE_INSTALL\lib" "*.dll") -Destination $art -ErrorAction SilentlyContinue
+          Copy-Item (Join-Path "$env:SUITESPARSE_ROOT\lapack_windows\x64" "*.dll") -Destination $art -ErrorAction SilentlyContinue
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
