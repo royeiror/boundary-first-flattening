@@ -16,6 +16,8 @@ jobs:
       uses: actions/checkout@v4
       with:
         submodules: recursive
+        repository: GeometryCollective/boundary-first-flattening
+        ref: v1.6
     
     - name: Setup MSVC
       uses: microsoft/setup-msbuild@v2
@@ -23,276 +25,455 @@ jobs:
     - name: Install CMake
       uses: lukka/get-cmake@latest
     
-    - name: Download SuiteSparse-METIS from BFF releases
+    - name: Install Visual Studio Build Tools (for SuiteSparse)
+      shell: powershell
+      run: |
+        # Install Visual Studio Build Tools components needed for SuiteSparse
+        choco install visualstudio2022buildtools -y
+        choco install visualstudio2022-workload-vctools -y
+    
+    - name: Download and Extract SuiteSparse-METIS for Windows
       shell: powershell
       run: |
         Write-Host "Downloading SuiteSparse-METIS pre-built binaries..."
         
+        # Clean up any existing SuiteSparse directory
+        if (Test-Path "C:\SuiteSparse") {
+            Remove-Item -Path "C:\SuiteSparse" -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        
         # Create SuiteSparse directory structure
-        New-Item -ItemType Directory -Force -Path "C:\SuiteSparse" -ErrorAction SilentlyContinue
-        New-Item -ItemType Directory -Force -Path "C:\SuiteSparse\include" -ErrorAction SilentlyContinue
-        New-Item -ItemType Directory -Force -Path "C:\SuiteSparse\lib" -ErrorAction SilentlyContinue
-        New-Item -ItemType Directory -Force -Path "C:\SuiteSparse\include\suitesparse" -ErrorAction SilentlyContinue
+        New-Item -ItemType Directory -Force -Path "C:\SuiteSparse" | Out-Null
+        New-Item -ItemType Directory -Force -Path "C:\SuiteSparse\include" | Out-Null
+        New-Item -ItemType Directory -Force -Path "C:\SuiteSparse\lib" | Out-Null
+        New-Item -ItemType Directory -Force -Path "C:\SuiteSparse\bin" | Out-Null
+        New-Item -ItemType Directory -Force -Path "C:\SuiteSparse\include\suitesparse" | Out-Null
         
-        # Based on the BFF v1.6 release notes, we need specific SuiteSparse binaries
-        # Let's try to download from the repository mentioned in the instructions
+        # Download the pre-built SuiteSparse-METIS binaries from the repository
+        # According to the BFF v1.6 release notes, we need specific SuiteSparse binaries
+        # The repository at https://github.com/jlblancoc/suitesparse-metis-for-windows
+        # doesn't have pre-built binaries, so we need to build them or find them
         
-        # First, check if we have the binaries in the BFF repository
-        Write-Host "Checking for SuiteSparse in BFF repository..."
+        Write-Host "Cloning SuiteSparse-METIS repository to build it..."
         
-        # Look for any .h files that might be SuiteSparse headers
-        $hFiles = Get-ChildItem -Path "." -Filter "*.h" -Recurse | Where-Object { 
-            $_.Directory.Name -match "suitesparse|cholmod|amd|camd|colamd|ccolamd|metis" -or
-            $_.Name -match "cholmod|amd|camd|colamd|ccolamd|metis"
+        # Clone the SuiteSparse-METIS for Windows repository
+        git clone --depth 1 https://github.com/jlblancoc/suitesparse-metis-for-windows.git C:\suite-temp
+        
+        # Build SuiteSparse
+        cd C:\suite-temp
+        
+        # Check if we have the build script
+        if (Test-Path "build_windows.bat") {
+            Write-Host "Running build_windows.bat..."
+            cmd /c "build_windows.bat"
+        } else {
+            Write-Host "No build script found, trying to build manually..."
+            
+            # Create build directory
+            New-Item -ItemType Directory -Force -Path "build" | Out-Null
+            cd build
+            
+            # Configure with CMake
+            cmake -G "Visual Studio 17 2022" -A x64 ..
+            
+            # Build
+            cmake --build . --config Release
         }
         
-        if ($hFiles) {
-            Write-Host "Found potential header files:"
-            $hFiles | Select-Object -First 10 | ForEach-Object { 
-                Write-Host "  $($_.FullName)"
-                # Copy to SuiteSparse include directory
-                Copy-Item -Path $_.FullName -Destination "C:\SuiteSparse\include\" -Force
+        # Copy the built libraries and headers
+        Write-Host "Copying built libraries and headers..."
+        
+        # Look for built libraries
+        $libDirs = @("build\lib\Release", "build\Release", "lib", "build\lib")
+        foreach ($dir in $libDirs) {
+            if (Test-Path $dir) {
+                Get-ChildItem -Path $dir -Filter "*.lib" | ForEach-Object {
+                    Copy-Item -Path $_.FullName -Destination "C:\SuiteSparse\lib\" -Force
+                    Write-Host "  Copied library: $($_.Name)"
+                }
+                
+                Get-ChildItem -Path $dir -Filter "*.dll" | ForEach-Object {
+                    Copy-Item -Path $_.FullName -Destination "C:\SuiteSparse\bin\" -Force
+                    Write-Host "  Copied DLL: $($_.Name)"
+                }
             }
         }
         
-        # Look for .lib files
-        $libFiles = Get-ChildItem -Path "." -Filter "*.lib" -Recurse
-        if ($libFiles) {
-            Write-Host "Found library files:"
-            $libFiles | ForEach-Object { 
-                Write-Host "  $($_.FullName)"
-                Copy-Item -Path $_.FullName -Destination "C:\SuiteSparse\lib\" -Force
+        # Copy headers
+        if (Test-Path "Include") {
+            Get-ChildItem -Path "Include" -Filter "*.h" -Recurse | ForEach-Object {
+                $destPath = "C:\SuiteSparse\include\suitesparse\$($_.Name)"
+                Copy-Item -Path $_.FullName -Destination $destPath -Force
             }
         }
         
-        # If we didn't find headers, download them from a known source
-        if (-not (Test-Path "C:\SuiteSparse\include\cholmod.h")) {
-            Write-Host "Downloading SuiteSparse headers from GitHub..."
-            
-            # Download SuiteSparse source for headers
-            $headersUrl = "https://github.com/jlblancoc/suitesparse-metis-for-windows/archive/master.zip"
-            $headersZip = "C:\suitesparse-headers.zip"
-            
-            Invoke-WebRequest -Uri $headersUrl -OutFile $headersZip
-            
-            # Extract
-            Expand-Archive -Path $headersZip -DestinationPath "C:\suitesparse-temp" -Force
-            
-            # Find and copy headers
-            Get-ChildItem -Path "C:\suitesparse-temp" -Recurse -Filter "*.h" | Where-Object {
-                $_.Directory.Name -match "Include|include" -or
-                $_.Name -match "cholmod|amd|camd|colamd|ccolamd|metis"
-            } | ForEach-Object {
-                Copy-Item -Path $_.FullName -Destination "C:\SuiteSparse\include\" -Force
-                Write-Host "  Copied header: $($_.Name)"
+        # Also copy from SuiteSparse_config directory if it exists
+        if (Test-Path "SuiteSparse_config") {
+            Get-ChildItem -Path "SuiteSparse_config" -Filter "*.h" -Recurse | ForEach-Object {
+                $destPath = "C:\SuiteSparse\include\suitesparse\$($_.Name)"
+                Copy-Item -Path $_.FullName -Destination $destPath -Force
             }
-            
-            # Also look for .lib files in the downloaded package
-            Get-ChildItem -Path "C:\suitesparse-temp" -Recurse -Filter "*.lib" | ForEach-Object {
-                Copy-Item -Path $_.FullName -Destination "C:\SuiteSparse\lib\" -Force
-                Write-Host "  Copied library: $($_.Name)"
-            }
-            
-            # Clean up
-            Remove-Item -Path "C:\suitesparse-temp" -Recurse -Force -ErrorAction SilentlyContinue
-            Remove-Item -Path $headersZip -Force -ErrorAction SilentlyContinue
         }
         
-        Write-Host "SuiteSparse directory contents:"
+        # Check what we have
+        Write-Host "`nSuiteSparse directory contents:"
         Write-Host "Headers in C:\SuiteSparse\include:"
-        Get-ChildItem -Path "C:\SuiteSparse\include" -Filter "*.h" | Select-Object -First 10
+        Get-ChildItem -Path "C:\SuiteSparse\include" -Recurse -Filter "*.h" | Select-Object -First 20
         
         Write-Host "`nLibraries in C:\SuiteSparse\lib:"
-        Get-ChildItem -Path "C:\SuiteSparse\lib" -Filter "*.lib" | Select-Object -First 10
+        Get-ChildItem -Path "C:\SuiteSparse\lib" -Filter "*.lib" | Select-Object -First 20
+        
+        Write-Host "`nBinaries in C:\SuiteSparse\bin:"
+        Get-ChildItem -Path "C:\SuiteSparse\bin" -Filter "*.dll" | Select-Object -First 10
     
-    - name: Create CMakeLists.txt with fixed include paths
+    - name: Create proper CMakeLists.txt for BFF
       shell: powershell
       run: |
-        Write-Host "Creating CMakeLists.txt with proper include paths..."
+        Write-Host "Creating proper CMakeLists.txt for BFF..."
         
-        # Start fresh
+        # Check if we have the original CMakeLists.txt
         if (Test-Path "CMakeLists.txt") {
-            Remove-Item "CMakeLists.txt"
+            Write-Host "Backing up original CMakeLists.txt..."
+            Copy-Item "CMakeLists.txt" "CMakeLists.txt.orig" -Force
         }
         
-        # Create new file
-        New-Item -ItemType File -Path "CMakeLists.txt" -Force
+        # Create a new CMakeLists.txt based on the original but fixed
+        # First, let's see what files we have
+        Write-Host "Checking BFF source structure..."
         
-        # Add lines one by one
-        'cmake_minimum_required(VERSION 3.5)' | Add-Content -Path "CMakeLists.txt"
-        'project(BFF)' | Add-Content -Path "CMakeLists.txt"
-        '' | Add-Content -Path "CMakeLists.txt"
-        'set(CMAKE_CXX_STANDARD 17)' | Add-Content -Path "CMakeLists.txt"
-        'set(CMAKE_CXX_STANDARD_REQUIRED ON)' | Add-Content -Path "CMakeLists.txt"
-        '' | Add-Content -Path "CMakeLists.txt"
+        # List main directories
+        Get-ChildItem -Path "." -Directory | Select-Object Name
         
-        # Set SuiteSparse paths
-        'set(SUITESPARSE_DIR "C:/SuiteSparse")' | Add-Content -Path "CMakeLists.txt"
-        'set(SUITESPARSE_INCLUDE_DIR "${SUITESPARSE_DIR}/include")' | Add-Content -Path "CMakeLists.txt"
-        'set(SUITESPARSE_LIB_DIR "${SUITESPARSE_DIR}/lib")' | Add-Content -Path "CMakeLists.txt"
-        '' | Add-Content -Path "CMakeLists.txt"
+        # Check for existing CMakeLists.txt patterns
+        $cmakeFiles = Get-ChildItem -Path "." -Filter "CMakeLists.txt" -Recurse
+        if ($cmakeFiles) {
+            Write-Host "Found CMakeLists.txt files:"
+            $cmakeFiles | ForEach-Object { Write-Host "  $($_.FullName)" }
+        }
         
-        # Find libraries
-        'find_library(CHOLMOD_LIBRARY NAMES cholmod libcholmod PATHS "${SUITESPARSE_LIB_DIR}" NO_DEFAULT_PATH)' | Add-Content -Path "CMakeLists.txt"
-        'find_library(AMD_LIBRARY NAMES amd libamd PATHS "${SUITESPARSE_LIB_DIR}" NO_DEFAULT_PATH)' | Add-Content -Path "CMakeLists.txt"
-        'find_library(CAMD_LIBRARY NAMES camd libcamd PATHS "${SUITESPARSE_LIB_DIR}" NO_DEFAULT_PATH)' | Add-Content -Path "CMakeLists.txt"
-        'find_library(COLAMD_LIBRARY NAMES colamd libcolamd PATHS "${SUITESPARSE_LIB_DIR}" NO_DEFAULT_PATH)' | Add-Content -Path "CMakeLists.txt"
-        'find_library(CCOLAMD_LIBRARY NAMES ccolamd libccolamd PATHS "${SUITESPARSE_LIB_DIR}" NO_DEFAULT_PATH)' | Add-Content -Path "CMakeLists.txt"
-        'find_library(METIS_LIBRARY NAMES metis libmetis PATHS "${SUITESPARSE_LIB_DIR}" NO_DEFAULT_PATH)' | Add-Content -Path "CMakeLists.txt"
-        '' | Add-Content -Path "CMakeLists.txt"
+        # Use the original CMakeLists.txt if it exists and looks reasonable
+        if (Test-Path "CMakeLists.txt.orig") {
+            $content = Get-Content "CMakeLists.txt.orig" -Raw
+            if ($content -match "project|add_executable|add_library") {
+                Write-Host "Original CMakeLists.txt looks valid, using it as base..."
+                Copy-Item "CMakeLists.txt.orig" "CMakeLists.txt" -Force
+                
+                # Now we need to patch it to find SuiteSparse properly
+                $cmakeContent = Get-Content "CMakeLists.txt" -Raw
+                
+                # Replace or add SuiteSparse configuration
+                if ($cmakeContent -notmatch "SUITESPARSE_DIR") {
+                    Write-Host "Adding SuiteSparse configuration..."
+                    
+                    # Add SuiteSparse configuration after project() call
+                    $cmakeContent = $cmakeContent -replace '(project\(.*?\))', "`$1`n`n# SuiteSparse configuration`nset(SUITESPARSE_DIR `"C:/SuiteSparse`")`nset(SUITESPARSE_INCLUDE_DIR `"`${SUITESPARSE_DIR}/include`")`nset(SUITESPARSE_LIB_DIR `"`${SUITESPARSE_DIR}/lib`")"
+                    
+                    # Add include directories
+                    if ($cmakeContent -match 'include_directories\(') {
+                        # Add to existing include_directories
+                        $cmakeContent = $cmakeContent -replace 'include_directories\(', "include_directories(`n    `${SUITESPARSE_INCLUDE_DIR}`n    `${SUITESPARSE_INCLUDE_DIR}/suitesparse"
+                    } else {
+                        # Add new include_directories
+                        $cmakeContent = $cmakeContent + "`n`ninclude_directories(`${SUITESPARSE_INCLUDE_DIR} `${SUITESPARSE_INCLUDE_DIR}/suitesparse)"
+                    }
+                    
+                    # Add library linking (simplified approach)
+                    $cmakeContent = $cmakeContent + @"
+
+`n# SuiteSparse libraries
+find_library(CHOLMOD_LIBRARY NAMES cholmod libcholmod PATHS `${SUITESPARSE_LIB_DIR} NO_DEFAULT_PATH)
+find_library(AMD_LIBRARY NAMES amd libamd PATHS `${SUITESPARSE_LIB_DIR} NO_DEFAULT_PATH)
+find_library(CAMD_LIBRARY NAMES camd libcamd PATHS `${SUITESPARSE_LIB_DIR} NO_DEFAULT_PATH)
+find_library(COLAMD_LIBRARY NAMES colamd libcolamd PATHS `${SUITESPARSE_LIB_DIR} NO_DEFAULT_PATH)
+find_library(CCOLAMD_LIBRARY NAMES ccolamd libccolamd PATHS `${SUITESPARSE_LIB_DIR} NO_DEFAULT_PATH)
+find_library(METIS_LIBRARY NAMES metis libmetis PATHS `${SUITESPARSE_LIB_DIR} NO_DEFAULT_PATH)
+
+if(NOT CHOLMOD_LIBRARY)
+    message(FATAL_ERROR "CHOLMOD library not found in `${SUITESPARSE_LIB_DIR}")
+endif()
+
+# Link SuiteSparse libraries to targets
+if(TARGET bff-lib)
+    target_link_libraries(bff-lib
+        `${CHOLMOD_LIBRARY}
+        `${AMD_LIBRARY}
+        `${CAMD_LIBRARY}
+        `${COLAMD_LIBRARY}
+        `${CCOLAMD_LIBRARY}
+        `${METIS_LIBRARY}
+    )
+endif()
+"@
+                    
+                    Set-Content -Path "CMakeLists.txt" -Value $cmakeContent
+                }
+            } else {
+                Write-Host "Original CMakeLists.txt doesn't look valid, creating a new one..."
+                # Create new CMakeLists.txt from scratch
+                CreateNewCMakeLists
+            }
+        } else {
+            # Create new CMakeLists.txt
+            CreateNewCMakeLists
+        }
         
-        # Check if libraries were found
-        'if(NOT CHOLMOD_LIBRARY)' | Add-Content -Path "CMakeLists.txt"
-        '    message(FATAL_ERROR "CHOLMOD library not found in ${SUITESPARSE_LIB_DIR}")' | Add-Content -Path "CMakeLists.txt"
-        'else()' | Add-Content -Path "CMakeLists.txt"
-        '    message(STATUS "Found CHOLMOD: ${CHOLMOD_LIBRARY}")' | Add-Content -Path "CMakeLists.txt"
-        'endif()' | Add-Content -Path "CMakeLists.txt"
-        '' | Add-Content -Path "CMakeLists.txt"
+        # Function to create new CMakeLists.txt
+        function CreateNewCMakeLists {
+            @'
+cmake_minimum_required(VERSION 3.10)
+project(BFF)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# SuiteSparse configuration
+set(SUITESPARSE_DIR "C:/SuiteSparse")
+set(SUITESPARSE_INCLUDE_DIR "${SUITESPARSE_DIR}/include")
+set(SUITESPARSE_LIB_DIR "${SUITESPARSE_DIR}/lib")
+
+# Find SuiteSparse libraries
+find_library(CHOLMOD_LIBRARY NAMES cholmod libcholmod PATHS ${SUITESPARSE_LIB_DIR} NO_DEFAULT_PATH)
+find_library(AMD_LIBRARY NAMES amd libamd PATHS ${SUITESPARSE_LIB_DIR} NO_DEFAULT_PATH)
+find_library(CAMD_LIBRARY NAMES camd libcamd PATHS ${SUITESPARSE_LIB_DIR} NO_DEFAULT_PATH)
+find_library(COLAMD_LIBRARY NAMES colamd libcolamd PATHS ${SUITESPARSE_LIB_DIR} NO_DEFAULT_PATH)
+find_library(CCOLAMD_LIBRARY NAMES ccolamd libccolamd PATHS ${SUITESPARSE_LIB_DIR} NO_DEFAULT_PATH)
+find_library(METIS_LIBRARY NAMES metis libmetis PATHS ${SUITESPARSE_LIB_DIR} NO_DEFAULT_PATH)
+
+if(NOT CHOLMOD_LIBRARY)
+    message(FATAL_ERROR "CHOLMOD library not found in ${SUITESPARSE_LIB_DIR}")
+else()
+    message(STATUS "Found CHOLMOD: ${CHOLMOD_LIBRARY}")
+endif()
+
+# Include directories
+include_directories(
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/deps/libigl/include
+    ${CMAKE_SOURCE_DIR}/deps/spectra/include
+    ${SUITESPARSE_INCLUDE_DIR}
+    ${SUITESPARSE_INCLUDE_DIR}/suitesparse
+)
+
+# Find source files for library
+file(GLOB_RECURSE SRC_FILES "src/*.cpp")
+if(NOT SRC_FILES)
+    message(FATAL_ERROR "No source files found in src/ directory")
+endif()
+
+# Create library
+add_library(bff-lib STATIC ${SRC_FILES})
+
+# Link SuiteSparse libraries
+target_link_libraries(bff-lib
+    ${CHOLMOD_LIBRARY}
+    ${AMD_LIBRARY}
+    ${CAMD_LIBRARY}
+    ${COLAMD_LIBRARY}
+    ${CCOLAMD_LIBRARY}
+    ${METIS_LIBRARY}
+)
+
+# Find and add GUI application
+file(GLOB_RECURSE GUI_FILES "apps/*.cpp")
+if(GUI_FILES)
+    add_executable(bff-gui ${GUI_FILES})
+    target_link_libraries(bff-gui bff-lib)
+    target_include_directories(bff-gui PRIVATE ${CMAKE_SOURCE_DIR}/apps)
+    message(STATUS "Building GUI application")
+else()
+    message(WARNING "No GUI files found in apps/ directory")
+endif()
+'@ | Set-Content -Path "CMakeLists.txt"
+        }
         
-        # Include directories - add SuiteSparse include with subdirectories
-        'include_directories(' | Add-Content -Path "CMakeLists.txt"
-        '    ${CMAKE_SOURCE_DIR}/include' | Add-Content -Path "CMakeLists.txt"
-        '    ${CMAKE_SOURCE_DIR}/deps/libigl/include' | Add-Content -Path "CMakeLists.txt"
-        '    ${CMAKE_SOURCE_DIR}/deps/spectra/include' | Add-Content -Path "CMakeLists.txt"
-        '    ${SUITESPARSE_INCLUDE_DIR}' | Add-Content -Path "CMakeLists.txt"
-        ')' | Add-Content -Path "CMakeLists.txt"
-        '' | Add-Content -Path "CMakeLists.txt"
-        
-        # Also add target include directories for the library
-        'set(CMAKE_INCLUDE_CURRENT_DIR ON)' | Add-Content -Path "CMakeLists.txt"
-        '' | Add-Content -Path "CMakeLists.txt"
-        
-        # Find source files
-        'file(GLOB_RECURSE SRC_FILES "src/*.cpp")' | Add-Content -Path "CMakeLists.txt"
-        'file(GLOB_RECURSE SRC_HEADERS "src/*.h")' | Add-Content -Path "CMakeLists.txt"
-        '' | Add-Content -Path "CMakeLists.txt"
-        
-        'if(SRC_FILES)' | Add-Content -Path "CMakeLists.txt"
-        '    message(STATUS "Found source files")' | Add-Content -Path "CMakeLists.txt"
-        '    add_library(bff-lib STATIC ${SRC_FILES})' | Add-Content -Path "CMakeLists.txt"
-        'else()' | Add-Content -Path "CMakeLists.txt"
-        '    message(FATAL_ERROR "No source files found in src/")' | Add-Content -Path "CMakeLists.txt"
-        'endif()' | Add-Content -Path "CMakeLists.txt"
-        '' | Add-Content -Path "CMakeLists.txt"
-        
-        # Link libraries with better error checking
-        'target_link_libraries(bff-lib' | Add-Content -Path "CMakeLists.txt"
-        '    ${CHOLMOD_LIBRARY}' | Add-Content -Path "CMakeLists.txt"
-        '    ${AMD_LIBRARY}' | Add-Content -Path "CMakeLists.txt"
-        '    ${CAMD_LIBRARY}' | Add-Content -Path "CMakeLists.txt"
-        '    ${COLAMD_LIBRARY}' | Add-Content -Path "CMakeLists.txt"
-        '    ${CCOLAMD_LIBRARY}' | Add-Content -Path "CMakeLists.txt"
-        '    ${METIS_LIBRARY}' | Add-Content -Path "CMakeLists.txt"
-        ')' | Add-Content -Path "CMakeLists.txt"
-        '' | Add-Content -Path "CMakeLists.txt"
-        
-        # GUI application
-        'file(GLOB_RECURSE GUI_FILES "apps/*.cpp")' | Add-Content -Path "CMakeLists.txt"
-        'if(GUI_FILES)' | Add-Content -Path "CMakeLists.txt"
-        '    add_executable(bff-gui ${GUI_FILES})' | Add-Content -Path "CMakeLists.txt"
-        '    target_link_libraries(bff-gui bff-lib)' | Add-Content -Path "CMakeLists.txt"
-        '    target_include_directories(bff-gui PRIVATE ${CMAKE_SOURCE_DIR}/apps)' | Add-Content -Path "CMakeLists.txt"
-        '    message(STATUS "Building GUI application")' | Add-Content -Path "CMakeLists.txt"
-        'else()' | Add-Content -Path "CMakeLists.txt"
-        '    message(WARNING "No GUI files found")' | Add-Content -Path "CMakeLists.txt"
-        'endif()' | Add-Content -Path "CMakeLists.txt"
-        
-        Write-Host "CMakeLists.txt created successfully"
+        Write-Host "CMakeLists.txt created/updated successfully"
     
-    - name: Configure CMake
+    - name: Configure CMake with verbose output
       shell: powershell
       run: |
-        # Create build directory
+        # Clean build directory
+        if (Test-Path "build") {
+            Remove-Item -Path "build" -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        
         New-Item -ItemType Directory -Force -Path "build"
         cd build
         
-        Write-Host "Configuring CMake..."
+        Write-Host "Configuring CMake with verbose output..."
+        Write-Host "Current directory: $(Get-Location)"
+        Write-Host "CMake version:"
+        cmake --version
         
-        # Configure with CMake
+        # First, let's check what libraries are actually in SuiteSparse/lib
+        Write-Host "`nChecking SuiteSparse/lib contents:"
+        if (Test-Path "C:\SuiteSparse\lib") {
+            Get-ChildItem -Path "C:\SuiteSparse\lib" -Filter "*.lib" | ForEach-Object {
+                Write-Host "  Found: $($_.Name)"
+            }
+        } else {
+            Write-Host "  ERROR: C:\SuiteSparse\lib does not exist!"
+        }
+        
+        Write-Host "`nConfiguring CMake..."
+        
+        # Configure with verbose output
+        $env:VERBOSE=1
         cmake -G "Visual Studio 17 2022" -A x64 `
           -DCMAKE_BUILD_TYPE=Release `
+          -DCMAKE_VERBOSE_MAKEFILE:BOOL=ON `
           ..
         
         if ($LASTEXITCODE -ne 0) {
-            Write-Host "CMake configuration failed with exit code: $LASTEXITCODE"
-            Write-Host "Checking what CMake found..."
-            
-            # Try to see what the issue is
+            Write-Host "CMake configuration failed"
+            Write-Host "Checking CMakeCache.txt for clues..."
             if (Test-Path "CMakeCache.txt") {
-                Get-Content "CMakeCache.txt" | Select-String "CHOLMOD|SuiteSparse" | Select-Object -First 10
+                Get-Content "CMakeCache.txt" | Select-String "CHOLMOD|SuiteSparse|METIS" | ForEach-Object {
+                    Write-Host "  $_"
+                }
             }
-        } else {
-            Write-Host "CMake configuration successful!"
+            exit 1
         }
+        
+        Write-Host "CMake configuration successful!"
     
     - name: Build project
       shell: powershell
       run: |
-        if (Test-Path "build\CMakeCache.txt") {
-            Write-Host "Building project..."
-            cd build
-            cmake --build . --config Release --parallel 4
-            
-            # Check for BFF executables
-            $bffExes = Get-ChildItem -Path "." -Filter "*bff*.exe" -Recurse
-            if ($bffExes) {
-                Write-Host "Build successful! Found BFF executables:"
-                $bffExes | ForEach-Object { Write-Host "  $($_.FullName)" }
-            } else {
-                Write-Host "Build completed but no BFF executables found"
-                Write-Host "Looking for any executables..."
-                Get-ChildItem -Path "." -Filter "*.exe" -Recurse | ForEach-Object { Write-Host "  $($_.FullName)" }
+        Write-Host "Building project..."
+        cd build
+        
+        # Build with verbose output
+        cmake --build . --config Release --parallel 4 --verbose
+        
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "Build failed, trying to build debug configuration..."
+            cmake --build . --config Debug --verbose
+        }
+        
+        # Check for executables
+        Write-Host "`nLooking for built executables..."
+        $exes = Get-ChildItem -Path "." -Filter "*.exe" -Recurse | Where-Object {
+            $_.FullName -notmatch "CompilerId"
+        }
+        
+        if ($exes) {
+            Write-Host "Found executables:"
+            $exes | ForEach-Object { 
+                Write-Host "  $($_.FullName)"
+                # Also show dependencies
+                Write-Host "    Size: $([math]::Round($_.Length/1KB,2)) KB"
             }
         } else {
-            Write-Host "Skipping build - CMake configuration failed"
+            Write-Host "No executables found"
         }
     
-    - name: Collect real artifacts
+    - name: Copy required DLLs
       shell: powershell
       run: |
-        # Create artifacts directory
-        New-Item -ItemType Directory -Force -Path "artifacts" -ErrorAction SilentlyContinue
+        Write-Host "Copying required DLLs..."
         
-        # Find BFF executables (not compiler test files)
-        $bffExes = Get-ChildItem -Path "." -Recurse -Filter "*.exe" | Where-Object {
-            $_.FullName -notmatch "CompilerId" -and
-            $_.FullName -match "bff|BFF"
+        # Create artifacts directory
+        New-Item -ItemType Directory -Force -Path "artifacts"
+        
+        # Find all BFF executables
+        $bffExes = Get-ChildItem -Path "." -Recurse -Filter "*bff*.exe" | Where-Object {
+            $_.FullName -notmatch "CompilerId"
+        }
+        
+        if (-not $bffExes) {
+            # Look for any executables that might be BFF
+            $bffExes = Get-ChildItem -Path "." -Recurse -Filter "*.exe" | Where-Object {
+                $_.FullName -notmatch "CompilerId" -and
+                ($_.Directory.Name -match "Release|Debug" -or $_.Name -match "gui|GUI")
+            }
         }
         
         if ($bffExes) {
             Write-Host "Found BFF executables:"
             foreach ($exe in $bffExes) {
                 Write-Host "  $($exe.FullName)"
+                # Copy executable
                 Copy-Item -Path $exe.FullName -Destination "artifacts\" -Force
-            }
-        } else {
-            Write-Host "No BFF executables found"
-            
-            # Look for any executables that aren't compiler tests
-            $otherExes = Get-ChildItem -Path "." -Recurse -Filter "*.exe" | Where-Object {
-                $_.FullName -notmatch "CompilerId"
-            }
-            
-            if ($otherExes) {
-                Write-Host "Found other executables:"
-                foreach ($exe in $otherExes) {
-                    Write-Host "  $($exe.FullName)"
-                    Copy-Item -Path $exe.FullName -Destination "artifacts\" -Force
+                
+                # Check for required DLLs using dumpbin
+                Write-Host "    Checking dependencies for $($exe.Name)..."
+                
+                # Common DLLs that might be needed
+                $commonDlls = @(
+                    "libcholmod.dll", "cholmod.dll",
+                    "libamd.dll", "amd.dll",
+                    "libcamd.dll", "camd.dll", 
+                    "libcolamd.dll", "colamd.dll",
+                    "libccolamd.dll", "ccolamd.dll",
+                    "libmetis.dll", "metis.dll",
+                    "vcruntime140.dll", "msvcp140.dll",
+                    "vcruntime140_1.dll"
+                )
+                
+                # Copy DLLs from SuiteSparse/bin
+                if (Test-Path "C:\SuiteSparse\bin") {
+                    foreach ($dll in $commonDlls) {
+                        $dllPath = "C:\SuiteSparse\bin\$dll"
+                        if (Test-Path $dllPath) {
+                            Copy-Item -Path $dllPath -Destination "artifacts\" -Force
+                            Write-Host "      Copied: $dll"
+                        }
+                    }
+                }
+                
+                # Also check Windows system directories for VC++ redistributables
+                $vcDlls = @(
+                    "C:\Windows\System32\vcruntime140.dll",
+                    "C:\Windows\System32\msvcp140.dll",
+                    "C:\Windows\System32\vcruntime140_1.dll"
+                )
+                
+                foreach ($vcDll in $vcDlls) {
+                    if (Test-Path $vcDll) {
+                        $destName = Split-Path $vcDll -Leaf
+                        Copy-Item -Path $vcDll -Destination "artifacts\$destName" -Force
+                        Write-Host "      Copied VC++ DLL: $destName"
+                    }
                 }
             }
-        }
-        
-        # Copy any DLLs from SuiteSparse
-        if (Test-Path "C:\SuiteSparse\lib") {
-            $dlls = Get-ChildItem -Path "C:\SuiteSparse\lib" -Filter "*.dll"
-            foreach ($dll in $dlls) {
-                Copy-Item -Path $dll.FullName -Destination "artifacts\" -Force
-                Write-Host "  Copied DLL: $($dll.Name)"
+            
+            # Create a simple batch file to run the application
+            @'
+@echo off
+echo BFF (Boundary First Flattening) Application
+echo ============================================
+echo.
+echo Make sure all DLLs are in the same directory as the executable.
+echo.
+echo Available executables:
+'@ | Set-Content -Path "artifacts\RUN_ME.bat" -Encoding ASCII
+            
+            $bffExes | ForEach-Object {
+                "echo   $($_.Name)" | Add-Content -Path "artifacts\RUN_ME.bat" -Encoding ASCII
+            }
+            
+            @'
+echo.
+echo To run an executable, type its name in the command prompt.
+echo Example: bff-gui.exe
+echo.
+pause
+'@ | Add-Content -Path "artifacts\RUN_ME.bat" -Encoding ASCII
+            
+        } else {
+            Write-Host "No executables found to package"
+            # At least copy any libraries we built
+            $libs = Get-ChildItem -Path "." -Recurse -Filter "*.lib" | Where-Object {
+                $_.FullName -match "bff"
+            }
+            foreach ($lib in $libs) {
+                Copy-Item -Path $lib.FullName -Destination "artifacts\" -Force
+                Write-Host "  Copied library: $($lib.Name)"
             }
         }
         
-        Write-Host "Artifacts directory contents:"
-        Get-ChildItem -Path "artifacts" -ErrorAction SilentlyContinue
+        Write-Host "`nArtifacts directory contents:"
+        Get-ChildItem -Path "artifacts" -ErrorAction SilentlyContinue | Format-Table Name, Length
     
     - name: Upload Artifacts
       uses: actions/upload-artifact@v4
