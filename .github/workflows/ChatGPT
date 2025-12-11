@@ -1,0 +1,75 @@
+name: Build BFF (Windows)
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+  tags:
+    - 'v*'   # optional: run on tags like v1.6
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 120
+
+    env:
+      VCPKG_ROOT: ${{ runner.temp }}\vcpkg   # change if you want persistent path
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Git (increase file limits)
+        run: |
+          git config --global core.longpaths true
+        shell: powershell
+
+      - name: Install vcpkg (Microsoft vcpkg)
+        run: |
+          git clone https://github.com/microsoft/vcpkg.git $env:VCPKG_ROOT
+          & $env:VCPKG_ROOT\bootstrap-vcpkg.bat
+        shell: powershell
+
+      - name: Install native dependencies with vcpkg
+        run: |
+          # x64 build: adjust triplet if you want x86
+          $vcpkg = Join-Path $env:VCPKG_ROOT 'vcpkg.exe'
+          & $vcpkg install openblas:x64-windows suitesparse:x64-windows
+          # optional: install metis if your environment needs it explicitly
+          & $vcpkg install metis:x64-windows
+        shell: powershell
+
+      - name: Configure CMake (generate Visual Studio project)
+        run: |
+          md build
+          Push-Location build
+          # Use Release; make sure to pass the vcpkg toolchain so CMake finds OpenBLAS/SuiteSparse
+          cmake .. -A x64 -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake" -DBUILD_VIEWER=ON -DBUILD_COMMAND_LINE=ON
+          Pop-Location
+        shell: powershell
+
+      - name: Build (parallel)
+        run: |
+          cmake --build build --config Release -- /m
+        shell: powershell
+
+      - name: Collect built binaries
+        run: |
+          # common places: adapt if your repo places binaries elsewhere
+          $out = "$env:GITHUB_WORKSPACE\artifacts"
+          md $out
+          # try typical CMake output locations
+          Copy-Item -Path "build\Release\*" -Destination $out -Recurse -ErrorAction SilentlyContinue
+          Copy-Item -Path "build\bin\Release\*" -Destination $out -Recurse -ErrorAction SilentlyContinue
+          Copy-Item -Path "build\bin\*" -Destination $out -Recurse -ErrorAction SilentlyContinue
+          # show what we packaged
+          Get-ChildItem -Recurse $out | Select-Object FullName, Length
+        shell: powershell
+
+      - name: Upload artifact (bff-windows)
+        uses: actions/upload-artifact@v4
+        with:
+          name: bff-windows-${{ matrix.config || 'default' }}-${{ github.ref_name }}
+          path: artifacts
