@@ -108,7 +108,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: suitesparse-windows
-          path: install/
+          path: $env:GITHUB_WORKSPACE/install
           if-no-files-found: error
           retention-days: 1
 
@@ -130,6 +130,12 @@ jobs:
           name: suitesparse-windows
           path: suitesparse-deps
 
+      - name: Debug artifact structure
+        run: |
+          Write-Host "=== Checking artifact structure ==="
+          Get-ChildItem -Path "suitesparse-deps" -Recurse | Select-Object FullName
+          Write-Host "==================================="
+
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v1
 
@@ -145,9 +151,51 @@ jobs:
           vcpkg integrate install
           vcpkg install glew freeglut libpng tiff --triplet x64-windows
 
-      - name: Patch BFF CMakeLists.txt
+      - name: Find and Configure SuiteSparse
         run: |
-          $SUITESPARSE_DIR = (Resolve-Path "suitesparse-deps/install").Path
+          # Find the actual install directory
+          Write-Host "Looking for install directory..."
+          
+          # Check different possible locations
+          $possiblePaths = @(
+            "suitesparse-deps/install",
+            "suitesparse-deps", 
+            "suitesparse-deps/suitesparse-windows/install",
+            "suitesparse-deps/suitesparse-windows"
+          )
+          
+          $SUITESPARSE_DIR = $null
+          foreach ($path in $possiblePaths) {
+            if (Test-Path $path) {
+              Write-Host "Checking: $path"
+              # Look for cholmod.h to confirm this is SuiteSparse
+              $cholmodPath = Join-Path $path "include\cholmod.h"
+              if (Test-Path $cholmodPath) {
+                $SUITESPARSE_DIR = (Resolve-Path $path).Path
+                Write-Host "✓ Found SuiteSparse at: $SUITESPARSE_DIR"
+                break
+              } else {
+                # Check if this is the root containing install/
+                $installPath = Join-Path $path "install"
+                if (Test-Path $installPath) {
+                  $cholmodPath2 = Join-Path $installPath "include\cholmod.h"
+                  if (Test-Path $cholmodPath2) {
+                    $SUITESPARSE_DIR = (Resolve-Path $installPath).Path
+                    Write-Host "✓ Found SuiteSparse at: $SUITESPARSE_DIR"
+                    break
+                  }
+                }
+              }
+            }
+          }
+          
+          if (-not $SUITESPARSE_DIR) {
+            Write-Host "✗ Could not find SuiteSparse install directory"
+            Write-Host "Current directory structure:"
+            Get-ChildItem -Path "." -Recurse -Depth 3 | Select-Object FullName
+            exit 1
+          }
+          
           Write-Host "SuiteSparse directory: $SUITESPARSE_DIR"
           
           # Verify SuiteSparse files exist
@@ -157,7 +205,16 @@ jobs:
           } else {
             Write-Host "✗ Missing cholmod.h"
             Get-ChildItem -Path (Join-Path $SUITESPARSE_DIR "include") | Select-Object Name
+            exit 1
           }
+          
+          # Create environment variable for subsequent steps
+          echo "SUITESPARSE_DIR=$SUITESPARSE_DIR" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Patch BFF CMakeLists.txt
+        run: |
+          $SUITESPARSE_DIR = $env:SUITESPARSE_DIR
+          Write-Host "Using SuiteSparse directory: $SUITESPARSE_DIR"
           
           # Create a custom find script
           $CUSTOM_FIND = 'set(SUITESPARSE_DIR "' + $SUITESPARSE_DIR + '")\n' +
@@ -208,7 +265,7 @@ jobs:
           mkdir build
           cd build
           
-          $SUITESPARSE_DIR = (Resolve-Path "../suitesparse-deps/install").Path
+          $SUITESPARSE_DIR = $env:SUITESPARSE_DIR
           
           # Find OpenBLAS from Chocolatey
           $OPENBLAS_DIR = "C:\tools\openblas"
@@ -244,12 +301,15 @@ jobs:
           Write-Host "Checking built executables..."
           Get-ChildItem "build/Release/*.exe" | Select-Object Name
           
+          # Get SuiteSparse directory from environment
+          $SUITESPARSE_DIR = $env:SUITESPARSE_DIR
+          
           # Copy SuiteSparse DLLs
-          if (Test-Path "suitesparse-deps/install/bin/*.dll") {
-            Copy-Item "suitesparse-deps/install/bin/*.dll" -Destination "bff-package/" -ErrorAction SilentlyContinue
+          if (Test-Path "$SUITESPARSE_DIR/bin/*.dll") {
+            Copy-Item "$SUITESPARSE_DIR/bin/*.dll" -Destination "bff-package/" -ErrorAction SilentlyContinue
           }
-          if (Test-Path "suitesparse-deps/install/lib/*.dll") {
-            Copy-Item "suitesparse-deps/install/lib/*.dll" -Destination "bff-package/" -ErrorAction SilentlyContinue
+          if (Test-Path "$SUITESPARSE_DIR/lib/*.dll") {
+            Copy-Item "$SUITESPARSE_DIR/lib/*.dll" -Destination "bff-package/" -ErrorAction SilentlyContinue
           }
           
           # Copy common runtime DLLs
@@ -259,6 +319,15 @@ jobs:
             $dllPath = Join-Path $latestVersion.FullName "x64\Microsoft.VC*.CRT\vcruntime*.dll"
             if (Test-Path $dllPath) {
               Copy-Item $dllPath -Destination "bff-package/" -ErrorAction SilentlyContinue
+            }
+          }
+          
+          # Also copy from system directories
+          $systemDlls = @("msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll", "concrt140.dll")
+          foreach ($dll in $systemDlls) {
+            $systemPath = Join-Path "C:\Windows\System32" $dll
+            if (Test-Path $systemPath) {
+              Copy-Item $systemPath -Destination "bff-package/" -ErrorAction SilentlyContinue
             }
           }
           
