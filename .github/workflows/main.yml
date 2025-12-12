@@ -20,7 +20,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: jlblancoc/suitesparse-metis-for-windows
-          ref: windows-vs2019
+          # REMOVE this line: ref: windows-vs2019
           path: suitesparse-src
 
       - name: Setup MSBuild
