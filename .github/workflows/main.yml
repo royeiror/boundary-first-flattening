@@ -1,4 +1,4 @@
-    - name: Build & Install SuiteSparse Libraries (FIXED)
+    - name: Build and Install SuiteSparse Libraries
       shell: powershell
       run: |
         cd "$env:GITHUB_WORKSPACE\SuiteSparseBuild\build"
