@@ -36,7 +36,6 @@ jobs:
       shell: powershell
       run: |
         git clone --depth 1 https://github.com/jlblancoc/suitesparse-metis-for-windows.git "$env:GITHUB_WORKSPACE\SuiteSparseBuild"
-
     - name: Configure SuiteSparse CMake Project
       shell: powershell
       run: |
@@ -47,7 +46,7 @@ jobs:
                  -DCMAKE_INSTALL_PREFIX="$env:GITHUB_WORKSPACE\SuiteSparseInstall" `
                  -DWITH_OPENBLAS=OFF `
                  -DCMAKE_BUILD_TYPE=Release
-                 
+
     - name: Build and Install SuiteSparse Libraries
       shell: powershell
       run: |
@@ -91,7 +90,7 @@ jobs:
     # =============================================
     # PHASE 2: BUILD BFF USING THE COMPILED SUITESPARSE
     # =============================================
-       - name: Configure BFF with CMake (Command Line)
+    - name: Configure BFF with CMake (Command Line)
       shell: powershell
       run: |
         $BFF_SOURCE = "$env:GITHUB_WORKSPACE"
@@ -180,6 +179,34 @@ jobs:
 
         if ($LASTEXITCODE -eq 0) {
             Write-Host "BFF CMake configuration SUCCESSFUL!"
+        } else {
+            Write-Host "BFF CMake configuration failed. Check missing variables above."
+        }
+
+    - name: Build BFF Command Line Target
+      shell: powershell
+      run: |
+        cd "$env:GITHUB_WORKSPACE\bff_build"
+        msbuild bff-command-line.vcxproj /p:Configuration=Release /p:Platform=x64 /m /v:minimal
+
+    # =============================================
+    # PHASE 3: COLLECT AND UPLOAD ARTIFACTS
+    # =============================================
+    - name: Prepare Artifacts
+      shell: powershell
+      run: |
+        $ARTIFACT_DIR = "$env:GITHUB_WORKSPACE\artifacts"
+        New-Item -ItemType Directory -Force -Path $ARTIFACT_DIR
+        Copy-Item -Path "$env:GITHUB_WORKSPACE\bff_build\Release\bff-command-line.exe" -Destination $ARTIFACT_DIR -ErrorAction SilentlyContinue
+        Copy-Item -Path "$env:GITHUB_WORKSPACE\SuiteSparseBuild\lapack_windows\x64\*.dll" -Destination $ARTIFACT_DIR
+        Copy-Item -Path "$env:GITHUB_WORKSPACE\deps\openblas-windows\lib\*.dll" -Destination $ARTIFACT_DIR -ErrorAction SilentlyContinue
+
+    - name: Upload Build Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: BFF-Windows-CLI
+        path: ${{ github.workspace }}/artifacts/
+        if-no-files-found: error
         } else {
             Write-Host "BFF CMake configuration failed. Check missing variables above."
         }
