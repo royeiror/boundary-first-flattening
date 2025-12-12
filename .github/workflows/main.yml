@@ -1,162 +1,44 @@
-name: Build BFF for Windows (v1.6)
-
-on:
-  workflow_dispatch: # Allows manual triggering from GitHub UI
-  push:
-    branches: [ main, master ]
-
-jobs:
-  build-bff-windows:
-    runs-on: windows-latest # Windows Server 2022 with VS 2022
-
-    steps:
-    # =============================================
-    # PHASE 0: PREPARATION & CHECKOUT
-    # =============================================
-    - name: Checkout BFF Source (v1.6)
-      uses: actions/checkout@v4
-      with:
-        repository: GeometryCollective/boundary-first-flattening
-        ref: 'v1.6' # Pinning to the exact version
-        submodules: recursive # Crucial for libigl, spectra, openblas
-
-    - name: Setup MSBuild
-      uses: microsoft/setup-msbuild@v2
-
-    - name: Verify Tools
-      shell: pwsh
-      run: |
-          cmake --version
-          msbuild -version
-
-    # =============================================
-    # PHASE 1: BUILD SUITESPARSE & METIS FROM SOURCE
-    # =============================================
-    - name: Clone SuiteSparse-METIS Helper Project
-      shell: powershell
-      run: |
-        # This repo contains the CMake scripts to build SuiteSparse on Windows
-        git clone --depth 1 https://github.com/jlblancoc/suitesparse-metis-for-windows.git "$env:GITHUB_WORKSPACE\SuiteSparseBuild"
-        cd "$env:GITHUB_WORKSPACE\SuiteSparseBuild"
-        # The helper's CMake will download SuiteSparse & METIS source automatically.
-
-    - name: Configure SuiteSparse CMake Project
-      shell: powershell
-      run: |
-        cd "$env:GITHUB_WORKSPACE\SuiteSparseBuild"
-        # Create a clean build directory
-        New-Item -ItemType Directory -Force -Path "build"
-        cd build
-        # Configure using the Visual Studio generator. This mimics the CMake GUI step.
-        # -DWITH_OPENBLAS=OFF : We use the pre-compiled BLAS/LAPACK DLLs included in the helper project.
-        # Setting a local install prefix avoids permission issues.
-        cmake .. -G "Visual Studio 17 2022" -A x64 `
-                 -DCMAKE_INSTALL_PREFIX="$env:GITHUB_WORKSPACE\SuiteSparseInstall" `
-                 -DWITH_OPENBLAS=OFF `
-                 -DCMAKE_BUILD_TYPE=Release
-
-    - name: Build & Install SuiteSparse Libraries
+    - name: Build & Install SuiteSparse Libraries (FIXED)
       shell: powershell
       run: |
         cd "$env:GITHUB_WORKSPACE\SuiteSparseBuild\build"
-        # Build the special 'INSTALL' project in Release mode.
-        # This is the critical step that copies headers and .lib files to the INSTALL_PREFIX.
-        msbuild INSTALL.vcxproj /p:Configuration=Release /p:Platform=x64 /m
+        
+        # CRITICAL FIX: Build the 'INSTALL' project for BOTH Release and Debug.
+        # This ensures all necessary files (like SuiteSparseConfig.cmake) are generated.
+        Write-Host "Building INSTALL project for Release..."
+        msbuild INSTALL.vcxproj /p:Configuration=Release /p:Platform=x64 /m /v:minimal
+        
+        Write-Host "Building INSTALL project for Debug..."
+        msbuild INSTALL.vcxproj /p:Configuration=Debug /p:Platform=x64 /m /v:minimal
 
-        # Verify the core output exists
-        if (-not (Test-Path "$env:GITHUB_WORKSPACE\SuiteSparseInstall\lib\SuiteSparseConfig.cmake")) {
-            Write-Error "FATAL: SuiteSparseConfig.cmake was not generated. Build failed."
-            exit 1
+        # The 'install' directory path might have changed. Let's find it.
+        # The CMake variable CMAKE_INSTALL_PREFIX is set to "$env:GITHUB_WORKSPACE\SuiteSparseInstall"
+        $InstallPath = "$env:GITHUB_WORKSPACE\SuiteSparseInstall"
+        
+        Write-Host "Verifying installation in: $InstallPath"
+        # Look for the critical CMake config file. It may be in a subdirectory.
+        $ConfigFile = Get-ChildItem -Path $InstallPath -Recurse -Filter "SuiteSparseConfig.cmake" -ErrorAction SilentlyContinue | Select-Object -First 1
+        
+        if ($ConfigFile) {
+            Write-Host "SUCCESS: Found SuiteSparseConfig.cmake at $($ConfigFile.FullName)"
+            Write-Host "Full install directory listing:"
+            Get-ChildItem -Path $InstallPath -Recurse | Where-Object { $_.Extension -match '\.(cmake|lib|h)$' } | Select-Object -First 20
+        } else {
+            # If not found in the expected place, the CMake install prefix might be different.
+            # Check the default build/install directory as a fallback.
+            $FallbackPath = "$env:GITHUB_WORKSPACE\SuiteSparseBuild\build\install"
+            Write-Host "Checking fallback path: $FallbackPath"
+            $ConfigFile = Get-ChildItem -Path $FallbackPath -Recurse -Filter "SuiteSparseConfig.cmake" -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($ConfigFile) {
+                Write-Host "SUCCESS: Found SuiteSparseConfig.cmake at $($ConfigFile.FullName)"
+                # Update the environment variable for the next phase
+                $env:SUITESPARSE_INSTALL_DIR = $FallbackPath
+                echo "SUITESPARSE_INSTALL_DIR=$FallbackPath" >> $env:GITHUB_ENV
+            } else {
+                Write-Error "FATAL: SuiteSparseConfig.cmake was not generated in expected or fallback locations. Build failed."
+                # List directories for debugging
+                Write-Host "Contents of build directory:"
+                Get-ChildItem -Path "$env:GITHUB_WORKSPACE\SuiteSparseBuild\build" -Recurse -Directory | Select-Object FullName
+                exit 1
+            }
         }
-        Write-Host "SUCCESS: SuiteSparse installed to $env:GITHUB_WORKSPACE\SuiteSparseInstall"
-
-    # =============================================
-    # PHASE 2: BUILD BFF USING THE COMPILED SUITESPARSE
-    # =============================================
-    - name: Configure BFF with CMake (Command Line)
-      shell: powershell
-      run: |
-        $BFF_SOURCE = "$env:GITHUB_WORKSPACE"
-        $BFF_BUILD = "$env:GITHUB_WORKSPACE\bff_build"
-        $SS_INSTALL = "$env:GITHUB_WORKSPACE\SuiteSparseInstall"
-        $SS_ROOT = "$env:GITHUB_WORKSPACE\SuiteSparseBuild"
-
-        New-Item -ItemType Directory -Force -Path $BFF_BUILD
-        cd $BFF_BUILD
-
-        # This is the most critical part: Setting every CMake variable manually via -D flags.
-        # We are replicating what the GUI does. Paths must use forward slashes for CMake.
-        cmake $BFF_SOURCE -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release `
-            # --- Point to our built SuiteSparse installation ---
-            -DSuiteSparse_DIR="$SS_INSTALL/lib/cmake/suitesparse-5.4.0/" `
-            -DSuiteSparse_CHOLMOD_DIR="$SS_INSTALL/lib" `
-            -DSuiteSparse_CHOLMOD_INCLUDE_DIR="$SS_INSTALL/include/suitesparse" `
-            -DSuiteSparse_CHOLMOD_LIBRARY_DEBUG="$SS_INSTALL/lib/libcholmod.lib" `
-            -DSuiteSparse_CHOLMOD_LIBRARY_RELEASE="$SS_INSTALL/lib/libcholmod.lib" `
-            # --- Repeat for other required SuiteSparse components ---
-            -DSuiteSparse_AMD_LIBRARY_RELEASE="$SS_INSTALL/lib/libamd.lib" `
-            -DSuiteSparse_CAMD_LIBRARY_RELEASE="$SS_INSTALL/lib/libcamd.lib" `
-            -DSuiteSparse_COLAMD_LIBRARY_RELEASE="$SS_INSTALL/lib/libcolamd.lib" `
-            -DSuiteSparse_CCOLAMD_LIBRARY_RELEASE="$SS_INSTALL/lib/libccolamd.lib" `
-            -DSuiteSparse_METIS_LIBRARY_RELEASE="$SS_INSTALL/lib/libmetis.lib" `
-            -DSuiteSparse_SUITESPARSECONFIG_LIBRARY_RELEASE="$SS_INSTALL/lib/libsuitesparseconfig.lib" `
-            # --- BLAS and LAPACK from the helper project ---
-            -DSuiteSparse_BLAS_LIBRARY="$SS_ROOT/lapack_windows/x64/libblas.lib" `
-            -DSuiteSparse_LAPACK_LIBRARY="$SS_ROOT/lapack_windows/x64/liblapack.lib" `
-            # --- OpenBLAS provided by BFF's deps ---
-            -DOPENBLAS_INCLUDE_DIR="$BFF_SOURCE/deps/openblas-windows/include" `
-            -DOPENBLAS_LIB_DIR="$BFF_SOURCE/deps/openblas-windows/lib" `
-            -DOPENBLAS_LIB="$BFF_SOURCE/deps/openblas-windows/lib/libopenblas.lib"
-
-        Write-Host "BFF CMake configuration complete."
-
-    - name: Build BFF Command Line Target
-      shell: powershell
-      run: |
-        cd "$env:GITHUB_WORKSPACE\bff_build"
-        # Build the specific target mentioned in the instructions.
-        msbuild bff-command-line.vcxproj /p:Configuration=Release /p:Platform=x64 /m /v:minimal
-
-    # =============================================
-    # PHASE 3: COLLECT AND UPLOAD ARTIFACTS
-    # =============================================
-    - name: Prepare Artifacts
-      shell: powershell
-      run: |
-        $ARTIFACT_DIR = "$env:GITHUB_WORKSPACE\artifacts"
-        New-Item -ItemType Directory -Force -Path $ARTIFACT_DIR
-
-        # 1. Copy the main executable
-        Copy-Item -Path "$env:GITHUB_WORKSPACE\bff_build\Release\bff-command-line.exe" -Destination $ARTIFACT_DIR -ErrorAction SilentlyContinue
-
-        # 2. Copy all required DLLs for a portable package.
-        #    SuiteSparse's BLAS/LAPACK DLLs
-        Copy-Item -Path "$env:GITHUB_WORKSPACE\SuiteSparseBuild\lapack_windows\x64\*.dll" -Destination $ARTIFACT_DIR
-        #    OpenBLAS DLL (if it exists as a DLL)
-        Copy-Item -Path "$env:GITHUB_WORKSPACE\deps\openblas-windows\lib\*.dll" -Destination $ARTIFACT_DIR -ErrorAction SilentlyContinue
-        #    Potential MSVC Runtime DLLs (may be needed on clean systems)
-        #    (This step might need refinement based on the final linker output).
-
-        # 3. Create a simple README
-        @"
-        BFF (Boundary First Flattening) v1.6 - Windows Command Line Build
-        =================================================================
-        Built via GitHub Actions on $(Get-Date -Format 'yyyy-MM-dd').
-
-        Contents:
-        1. 'bff-command-line.exe' : The main application.
-        2. *.dll : Required runtime libraries (BLAS, LAPACK, OpenBLAS).
-
-        To run, ensure all files are in the same directory and execute:
-            .\bff-command-line.exe --help
-        "@ | Out-File -FilePath "$ARTIFACT_DIR\README.txt" -Encoding UTF8
-
-        Write-Host "Artifacts prepared in $ARTIFACT_DIR"
-        Get-ChildItem -Path $ARTIFACT_DIR
-
-    - name: Upload Build Artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: BFF-Windows-CLI
-        path: ${{ github.workspace }}/artifacts/
-        if-no-files-found: error
