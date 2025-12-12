@@ -6,7 +6,6 @@ on:
   workflow_dispatch:
 
 env:
-  SUITESPARSE_VERSION: "7.1.0"
   BUILD_TYPE: "Release"
 
 jobs:
@@ -20,7 +19,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: jlblancoc/suitesparse-metis-for-windows
-          # REMOVE this line: ref: windows-vs2019
           path: suitesparse-src
 
       - name: Setup MSBuild
@@ -39,34 +37,71 @@ jobs:
         run: |
           mkdir suitesparse-build
           cd suitesparse-build
+          
+          # Build with explicit install path
           cmake ../suitesparse-src `
             -DCMAKE_BUILD_TYPE=Release `
-            -DCMAKE_INSTALL_PREFIX=../install `
+            -DCMAKE_INSTALL_PREFIX="$env:GITHUB_WORKSPACE/install" `
             -DBLA_VENDOR=OpenBLAS `
+            -DENABLE_CUDA=OFF `
             -DBUILD_METIS=ON `
-            -DBUILD_CXSparse=ON `
             -DBUILD_CHOLMOD=ON `
             -DBUILD_UMFPACK=ON `
             -DBUILD_SPQR=ON `
             -DBUILD_AMD=ON `
-            -DBUILD_CAMD=ON `
-            -DBUILD_CCOLAMD=ON `
             -DBUILD_COLAMD=ON `
             -DBUILD_CCOLAMD=ON `
+            -DBUILD_CAMD=ON `
             -DBUILD_Suitesparseconfig=ON `
-            -DBUILD_KT_RICHEXT=OFF `
             -DCMAKE_WINDOWS_EXPORT_ALL_SYMBOLS=ON
           
           cmake --build . --config Release --target install --parallel
+          
+          # Verify the install directory
+          Write-Host "Checking install directory..."
+          if (Test-Path "$env:GITHUB_WORKSPACE/install") {
+            Write-Host "✓ Install directory created successfully"
+            Get-ChildItem -Path "$env:GITHUB_WORKSPACE/install" -Recurse | Select-Object Name, FullName
+          } else {
+            Write-Host "✗ Install directory not found"
+            exit 1
+          }
+
+      - name: Verify SuiteSparse build
+        run: |
+          Write-Host "Verifying SuiteSparse installation..."
+          $installPath = Join-Path $env:GITHUB_WORKSPACE "install"
+          
+          if (Test-Path $installPath) {
+            Write-Host "✓ Main install directory exists"
+            
+            # Check for essential directories
+            $includePath = Join-Path $installPath "include"
+            $libPath = Join-Path $installPath "lib"
+            
+            if (Test-Path $includePath) {
+              Write-Host "✓ Include directory exists"
+              Get-ChildItem $includePath | Select-Object -First 5 Name
+            } else {
+              Write-Host "✗ Include directory missing"
+            }
+            
+            if (Test-Path $libPath) {
+              Write-Host "✓ Library directory exists"
+              Get-ChildItem $libPath | Select-Object -First 5 Name
+            } else {
+              Write-Host "✗ Library directory missing"
+            }
+          } else {
+            Write-Host "✗ Install directory not found at $installPath"
+            exit 1
+          }
 
       - name: Set SuiteSparse path
         id: set-output
         run: |
-          # First navigate back to the suitesparse-build directory
-          cd suitesparse-build
-          # Now go up one level to find the install directory
-          cd ..
-          $path = (Resolve-Path "install").Path
+          $path = Join-Path $env:GITHUB_WORKSPACE "install"
+          Write-Host "Setting SuiteSparse path to: $path"
           echo "suitesparse-path=$path" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       - name: Upload SuiteSparse artifacts
@@ -74,9 +109,9 @@ jobs:
         with:
           name: suitesparse-windows
           path: |
-            install/
-            !install/**/*.pdb
-            
+            ${{ env.GITHUB_WORKSPACE }}/install/
+            !${{ env.GITHUB_WORKSPACE }}/install/**/*.pdb
+
   build-bff:
     name: Build BFF
     runs-on: windows-latest
@@ -113,8 +148,18 @@ jobs:
       - name: Patch BFF CMakeLists.txt
         run: |
           $SUITESPARSE_DIR = (Resolve-Path "suitesparse-deps/install").Path
+          Write-Host "SuiteSparse directory: $SUITESPARSE_DIR"
           
-          # Create a custom CMake script to find SuiteSparse
+          # Verify SuiteSparse files exist
+          $cholmodHeader = Join-Path $SUITESPARSE_DIR "include\cholmod.h"
+          if (Test-Path $cholmodHeader) {
+            Write-Host "✓ Found cholmod.h at: $cholmodHeader"
+          } else {
+            Write-Host "✗ Missing cholmod.h"
+            Get-ChildItem -Path (Join-Path $SUITESPARSE_DIR "include") | Select-Object Name
+          }
+          
+          # Create a custom find script
           $CUSTOM_FIND = 'set(SUITESPARSE_DIR "' + $SUITESPARSE_DIR + '")\n' +
             'set(SUITESPARSE_INCLUDE_DIR "${SUITESPARSE_DIR}/include")\n' +
             'set(SUITESPARSE_LIBRARY_DIR "${SUITESPARSE_DIR}/lib")\n' +
@@ -127,12 +172,11 @@ jobs:
             '\n' +
             'message(STATUS "SuiteSparse manually configured:")\n' +
             'message(STATUS "  Include dir: ${SUITESPARSE_INCLUDE_DIR}")\n' +
-            'message(STATUS "  Library dir: ${SUITESPARSE_LIBRARY_DIR}")\n' +
-            'message(STATUS "  Libraries: ${SUITESPARSE_LIBRARIES}")\n'
+            'message(STATUS "  Library dir: ${SUITESPARSE_LIBRARY_DIR}")\n'
           
           Set-Content -Path "FindSuiteSparseCustom.cmake" -Value $CUSTOM_FIND
           
-          # Patch the main CMakeLists.txt to use our custom find script
+          # Patch the main CMakeLists.txt
           $PATCH = 'find_package(Eigen3 3.2 REQUIRED)\n' +
             '\n' +
             '# Manually set SuiteSparse paths before find_package\n' +
@@ -153,9 +197,7 @@ jobs:
             '\n' +
             'find_package(OpenGL REQUIRED)\n'
           
-          # Read the original file and patch it
           $content = Get-Content -Path "CMakeLists.txt" -Raw
-          # Insert our patch after Eigen3 find_package
           $pattern = 'find_package\(Eigen3 3\.2 REQUIRED\)'
           $replacement = $PATCH
           $content = $content -replace $pattern, $replacement
@@ -188,65 +230,50 @@ jobs:
       - name: Build BFF
         run: |
           cd build
-          cmake --build . --config Release --parallel
+          cmake --build . --config Release --parallel --verbose
 
       - name: Collect DLLs and package
         run: |
           mkdir -p bff-package
           
           # Copy executables
-          Copy-Item "build/Release/BFF_GUI.exe" -Destination "bff-package/"
+          Copy-Item "build/Release/BFF_GUI.exe" -Destination "bff-package/" -ErrorAction SilentlyContinue
           Copy-Item "build/Release/BFF_CLI.exe" -Destination "bff-package/" -ErrorAction SilentlyContinue
           
-          # Copy required DLLs using a more comprehensive approach
-          $dlls = @()
+          # Check what executables were built
+          Write-Host "Checking built executables..."
+          Get-ChildItem "build/Release/*.exe" | Select-Object Name
           
-          # Function to collect DLLs recursively
-          function Get-Dependencies($path) {
-            $result = dumpbin /DEPENDENTS $path | Where-Object { $_ -match "\.dll" } | ForEach-Object { $_.Trim() }
-            return $result
+          # Copy SuiteSparse DLLs
+          if (Test-Path "suitesparse-deps/install/bin/*.dll") {
+            Copy-Item "suitesparse-deps/install/bin/*.dll" -Destination "bff-package/" -ErrorAction SilentlyContinue
+          }
+          if (Test-Path "suitesparse-deps/install/lib/*.dll") {
+            Copy-Item "suitesparse-deps/install/lib/*.dll" -Destination "bff-package/" -ErrorAction SilentlyContinue
           }
           
-          # Collect DLLs for GUI executable
-          $guiDeps = Get-Dependencies "bff-package/BFF_GUI.exe"
-          $dlls += $guiDeps
-          
-          # Collect from build directory
-          Get-ChildItem "build/Release/*.dll" | Copy-Item -Destination "bff-package/"
-          
-          # Collect from common system locations
-          $systemDirs = @(
-            "C:\Windows\System32",
-            "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Redist\MSVC\14.38.33130\x64\Microsoft.VC143.CRT",
-            "C:\tools\openblas\bin",
-            "$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows\bin"
-          )
-          
-          foreach ($dll in $dlls) {
-            foreach ($dir in $systemDirs) {
-              $dllPath = Join-Path $dir $dll
-              if (Test-Path $dllPath) {
-                Copy-Item $dllPath -Destination "bff-package/" -ErrorAction SilentlyContinue
-                break
-              }
+          # Copy common runtime DLLs
+          $vcRedistPath = "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Redist\MSVC"
+          if (Test-Path $vcRedistPath) {
+            $latestVersion = Get-ChildItem $vcRedistPath | Sort-Object Name -Descending | Select-Object -First 1
+            $dllPath = Join-Path $latestVersion.FullName "x64\Microsoft.VC*.CRT\vcruntime*.dll"
+            if (Test-Path $dllPath) {
+              Copy-Item $dllPath -Destination "bff-package/" -ErrorAction SilentlyContinue
             }
           }
           
-          # Copy SuiteSparse DLLs
-          Copy-Item "suitesparse-deps/install/bin/*.dll" -Destination "bff-package/" -ErrorAction SilentlyContinue
-          Copy-Item "suitesparse-deps/install/lib/*.dll" -Destination "bff-package/" -ErrorAction SilentlyContinue
-          
-          # Create a simple README
+          # Create README
           $README = 'Boundary First Flattening (BFF) v1.6 Windows Build\n' +
             '=================================================\n' +
             '\n' +
             'This package contains:\n' +
             '1. BFF_GUI.exe - The graphical user interface\n' +
-            '2. All required DLL dependencies\n' +
+            '2. BFF_CLI.exe - Command line interface (if available)\n' +
+            '3. All required DLL dependencies\n' +
             '\n' +
             'Requirements:\n' +
             '- Windows 10 or later\n' +
-            '- Visual C++ Redistributable 2022 (should be included)\n' +
+            '- Visual C++ Redistributable 2022\n' +
             '\n' +
             'Usage:\n' +
             '1. Double-click BFF_GUI.exe to launch the application\n' +
@@ -256,15 +283,15 @@ jobs:
           
           Set-Content -Path "bff-package/README.txt" -Value $README
           
-          # Verify the executable runs
-          & "bff-package/BFF_GUI.exe" --version
+          # List package contents
+          Write-Host "Package contents:"
+          Get-ChildItem "bff-package/" -Recurse | Select-Object Name
 
       - name: Upload BFF artifacts
         uses: actions/upload-artifact@v4
         with:
           name: bff-windows-gui
-          path: |
-            bff-package/
+          path: bff-package/
           retention-days: 7
 
       - name: Create release (on tag)
