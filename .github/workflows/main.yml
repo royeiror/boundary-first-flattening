@@ -108,9 +108,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: suitesparse-windows
-          path: |
-            ${{ env.GITHUB_WORKSPACE }}/install/
-            !${{ env.GITHUB_WORKSPACE }}/install/**/*.pdb
+          path: install/
+          if-no-files-found: error
+          retention-days: 1
 
   build-bff:
     name: Build BFF
@@ -292,6 +292,7 @@ jobs:
         with:
           name: bff-windows-gui
           path: bff-package/
+          if-no-files-found: error
           retention-days: 7
 
       - name: Create release (on tag)
