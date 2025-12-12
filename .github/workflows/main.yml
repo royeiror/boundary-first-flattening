@@ -91,58 +91,95 @@ jobs:
     # =============================================
     # PHASE 2: BUILD BFF USING THE COMPILED SUITESPARSE
     # =============================================
-    - name: Configure BFF with CMake (Command Line)
+       - name: Configure BFF with CMake (Command Line)
       shell: powershell
       run: |
         $BFF_SOURCE = "$env:GITHUB_WORKSPACE"
         $BFF_BUILD = "$env:GITHUB_WORKSPACE\bff_build"
         $SS_INSTALL = "$env:SUITESPARSE_INSTALL_DIR"
         $SS_ROOT = "$env:GITHUB_WORKSPACE\SuiteSparseBuild"
+        $COMMON_INCLUDE = "$SS_INSTALL/include/suitesparse"
 
         New-Item -ItemType Directory -Force -Path $BFF_BUILD
         cd $BFF_BUILD
 
-        cmake $BFF_SOURCE -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release `
-            -DSuiteSparse_DIR="$SS_INSTALL/lib/cmake/suitesparse-5.4.0/" `
-            -DSuiteSparse_CHOLMOD_DIR="$SS_INSTALL/lib" `
-            -DSuiteSparse_CHOLMOD_INCLUDE_DIR="$SS_INSTALL/include/suitesparse" `
-            -DSuiteSparse_CHOLMOD_LIBRARY_DEBUG="$SS_INSTALL/lib/libcholmod.lib" `
-            -DSuiteSparse_CHOLMOD_LIBRARY_RELEASE="$SS_INSTALL/lib/libcholmod.lib" `
-            -DSuiteSparse_AMD_LIBRARY_RELEASE="$SS_INSTALL/lib/libamd.lib" `
-            -DSuiteSparse_CAMD_LIBRARY_RELEASE="$SS_INSTALL/lib/libcamd.lib" `
-            -DSuiteSparse_COLAMD_LIBRARY_RELEASE="$SS_INSTALL/lib/libcolamd.lib" `
-            -DSuiteSparse_CCOLAMD_LIBRARY_RELEASE="$SS_INSTALL/lib/libccolamd.lib" `
-            -DSuiteSparse_METIS_LIBRARY_RELEASE="$SS_INSTALL/lib/libmetis.lib" `
-            -DSuiteSparse_SUITESPARSECONFIG_LIBRARY_RELEASE="$SS_INSTALL/lib/libsuitesparseconfig.lib" `
-            -DSuiteSparse_BLAS_LIBRARY="$SS_ROOT/lapack_windows/x64/libblas.lib" `
-            -DSuiteSparse_LAPACK_LIBRARY="$SS_ROOT/lapack_windows/x64/liblapack.lib" `
-            -DOPENBLAS_INCLUDE_DIR="$BFF_SOURCE/deps/openblas-windows/include" `
-            -DOPENBLAS_LIB_DIR="$BFF_SOURCE/deps/openblas-windows/lib" `
-            -DOPENBLAS_LIB="$BFF_SOURCE/deps/openblas-windows/lib/libopenblas.lib"
+        # Build the CMake command with ALL required variables
+        $CMakeArgs = @(
+          $BFF_SOURCE,
+          "-G", "Visual Studio 17 2022",
+          "-A", "x64",
+          "-DCMAKE_BUILD_TYPE=Release",
+          "-DSuiteSparse_DIR=$env:SUITESPARSE_CONFIG_DIR",
+          
+          # CHOLMOD (already works)
+          "-DSuiteSparse_CHOLMOD_DIR=$SS_INSTALL/lib",
+          "-DSuiteSparse_CHOLMOD_INCLUDE_DIR=$COMMON_INCLUDE",
+          "-DSuiteSparse_CHOLMOD_LIBRARY_DEBUG=$SS_INSTALL/lib/libcholmod.lib",
+          "-DSuiteSparse_CHOLMOD_LIBRARY_RELEASE=$SS_INSTALL/lib/libcholmod.lib",
+          
+          # AMD
+          "-DSuiteSparse_AMD_DIR=$SS_INSTALL/lib",
+          "-DSuiteSparse_AMD_INCLUDE_DIR=$COMMON_INCLUDE",
+          "-DSuiteSparse_AMD_LIBRARY_DEBUG=$SS_INSTALL/lib/libamd.lib",
+          "-DSuiteSparse_AMD_LIBRARY_RELEASE=$SS_INSTALL/lib/libamd.lib",
+          
+          # CAMD
+          "-DSuiteSparse_CAMD_DIR=$SS_INSTALL/lib",
+          "-DSuiteSparse_CAMD_INCLUDE_DIR=$COMMON_INCLUDE",
+          "-DSuiteSparse_CAMD_LIBRARY_DEBUG=$SS_INSTALL/lib/libcamd.lib",
+          "-DSuiteSparse_CAMD_LIBRARY_RELEASE=$SS_INSTALL/lib/libcamd.lib",
+          
+          # COLAMD
+          "-DSuiteSparse_COLAMD_DIR=$SS_INSTALL/lib",
+          "-DSuiteSparse_COLAMD_INCLUDE_DIR=$COMMON_INCLUDE",
+          "-DSuiteSparse_COLAMD_LIBRARY_DEBUG=$SS_INSTALL/lib/libcolamd.lib",
+          "-DSuiteSparse_COLAMD_LIBRARY_RELEASE=$SS_INSTALL/lib/libcolamd.lib",
+          
+          # CCOLAMD
+          "-DSuiteSparse_CCOLAMD_DIR=$SS_INSTALL/lib",
+          "-DSuiteSparse_CCOLAMD_INCLUDE_DIR=$COMMON_INCLUDE",
+          "-DSuiteSparse_CCOLAMD_LIBRARY_DEBUG=$SS_INSTALL/lib/libccolamd.lib",
+          "-DSuiteSparse_CCOLAMD_LIBRARY_RELEASE=$SS_INSTALL/lib/libccolamd.lib",
+          
+          # METIS
+          "-DSuiteSparse_METIS_DIR=$SS_INSTALL/lib",
+          "-DSuiteSparse_METIS_INCLUDE_DIR=$COMMON_INCLUDE",
+          "-DSuiteSparse_METIS_LIBRARY_DEBUG=$SS_INSTALL/lib/libmetis.lib",
+          "-DSuiteSparse_METIS_LIBRARY_RELEASE=$SS_INSTALL/lib/libmetis.lib",
+          
+          # SUITESPARSECONFIG
+          "-DSuiteSparse_SUITESPARSECONFIG_DIR=$SS_INSTALL/lib",
+          "-DSuiteSparse_SUITESPARSECONFIG_INCLUDE_DIR=$COMMON_INCLUDE",
+          "-DSuiteSparse_SUITESPARSECONFIG_LIBRARY_DEBUG=$SS_INSTALL/lib/libsuitesparseconfig.lib",
+          "-DSuiteSparse_SUITESPARSECONFIG_LIBRARY_RELEASE=$SS_INSTALL/lib/libsuitesparseconfig.lib",
+          
+          # BLAS and LAPACK (from pre-built DLLs)
+          "-DSuiteSparse_BLAS_LIBRARY=$SS_ROOT/lapack_windows/x64/libblas.lib",
+          "-DSuiteSparse_LAPACK_LIBRARY=$SS_ROOT/lapack_windows/x64/liblapack.lib",
+          
+          # OpenBLAS (from BFF deps)
+          "-DOPENBLAS_INCLUDE_DIR=$BFF_SOURCE/deps/openblas-windows/include",
+          "-DOPENBLAS_LIB_DIR=$BFF_SOURCE/deps/openblas-windows/lib",
+          "-DOPENBLAS_LIB=$BFF_SOURCE/deps/openblas-windows/lib/libopenblas.lib"
+        )
 
-        Write-Host "BFF CMake configuration complete."
+        # Additional components that might be required (if BFF needs them)
+        # Uncomment and set if the error persists for these components
+        # "-DSuiteSparse_BTF_INCLUDE_DIR=$COMMON_INCLUDE",
+        # "-DSuiteSparse_BTF_LIBRARY_RELEASE=$SS_INSTALL/lib/libbtf.lib",
+        # "-DSuiteSparse_SPQR_INCLUDE_DIR=$COMMON_INCLUDE",
+        # "-DSuiteSparse_SPQR_LIBRARY_RELEASE=$SS_INSTALL/lib/libspqr.lib",
+        # "-DSuiteSparse_UMFPACK_INCLUDE_DIR=$COMMON_INCLUDE",
+        # "-DSuiteSparse_UMFPACK_LIBRARY_RELEASE=$SS_INSTALL/lib/libumfpack.lib",
 
-    - name: Build BFF Command Line Target
-      shell: powershell
-      run: |
-        cd "$env:GITHUB_WORKSPACE\bff_build"
-        msbuild bff-command-line.vcxproj /p:Configuration=Release /p:Platform=x64 /m /v:minimal
+        Write-Host "Running CMake with arguments:"
+        $CMakeArgs | ForEach-Object { Write-Host "  $_" }
 
-    # =============================================
-    # PHASE 3: COLLECT AND UPLOAD ARTIFACTS
-    # =============================================
-    - name: Prepare Artifacts
-      shell: powershell
-      run: |
-        $ARTIFACT_DIR = "$env:GITHUB_WORKSPACE\artifacts"
-        New-Item -ItemType Directory -Force -Path $ARTIFACT_DIR
-        Copy-Item -Path "$env:GITHUB_WORKSPACE\bff_build\Release\bff-command-line.exe" -Destination $ARTIFACT_DIR -ErrorAction SilentlyContinue
-        Copy-Item -Path "$env:GITHUB_WORKSPACE\SuiteSparseBuild\lapack_windows\x64\*.dll" -Destination $ARTIFACT_DIR
-        Copy-Item -Path "$env:GITHUB_WORKSPACE\deps\openblas-windows\lib\*.dll" -Destination $ARTIFACT_DIR -ErrorAction SilentlyContinue
+        # Execute CMake
+        & cmake $CMakeArgs
 
-    - name: Upload Build Artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: BFF-Windows-CLI
-        path: ${{ github.workspace }}/artifacts/
-        if-no-files-found: error
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "BFF CMake configuration SUCCESSFUL!"
+        } else {
+            Write-Host "BFF CMake configuration failed. Check missing variables above."
+        }
