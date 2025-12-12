@@ -36,6 +36,7 @@ jobs:
       shell: powershell
       run: |
         git clone --depth 1 https://github.com/jlblancoc/suitesparse-metis-for-windows.git "$env:GITHUB_WORKSPACE\SuiteSparseBuild"
+
     - name: Configure SuiteSparse CMake Project
       shell: powershell
       run: |
@@ -198,7 +199,7 @@ jobs:
         $ARTIFACT_DIR = "$env:GITHUB_WORKSPACE\artifacts"
         New-Item -ItemType Directory -Force -Path $ARTIFACT_DIR
         Copy-Item -Path "$env:GITHUB_WORKSPACE\bff_build\Release\bff-command-line.exe" -Destination $ARTIFACT_DIR -ErrorAction SilentlyContinue
-        Copy-Item -Path "$env:GITHUB_WORKSPACE\SuiteSparseBuild\lapack_windows\x64\*.dll" -Destination $ARTIFACT_DIR
+        Copy-Item -Path "$env:GITHUB_Workspace\SuiteSparseBuild\lapack_windows\x64\*.dll" -Destination $ARTIFACT_DIR
         Copy-Item -Path "$env:GITHUB_WORKSPACE\deps\openblas-windows\lib\*.dll" -Destination $ARTIFACT_DIR -ErrorAction SilentlyContinue
 
     - name: Upload Build Artifacts
@@ -207,6 +208,3 @@ jobs:
         name: BFF-Windows-CLI
         path: ${{ github.workspace }}/artifacts/
         if-no-files-found: error
-        } else {
-            Write-Host "BFF CMake configuration failed. Check missing variables above."
-        }
