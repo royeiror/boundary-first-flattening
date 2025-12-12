@@ -20,13 +20,14 @@ jobs:
         ref: 'v1.6' # Pinning to the exact version
         submodules: recursive # Crucial for libigl, spectra, openblas
 
-    - name: Install Build Tools
-      shell: powershell
+    - name: Setup MSBuild
+      uses: microsoft/setup-msbuild@v2
+
+    - name: Verify Tools
+      shell: pwsh
       run: |
-        # Ensure CMake is available (it is on windows-latest)
-        cmake --version
-        # Ensure MSBuild is available
-        msbuild -version
+          cmake --version
+          msbuild -version
 
     # =============================================
     # PHASE 1: BUILD SUITESPARSE & METIS FROM SOURCE
