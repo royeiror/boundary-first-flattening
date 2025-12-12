@@ -1,347 +1,272 @@
-name: Build BFF v1.6 Windows with GUI
+name: Build BFF Windows with GUI
 
 on:
   push:
-    branches: [ main, master ]
-  pull_request:
-    branches: [ main, master ]
+    tags: ["v*"]
   workflow_dispatch:
 
+env:
+  SUITESPARSE_VERSION: "7.1.0"
+  BUILD_TYPE: "Release"
+
 jobs:
-  build-windows:
+  build-suite-sparse:
+    name: Build SuiteSparse
     runs-on: windows-latest
-    
+    outputs:
+      suitesparse-path: ${{ steps.set-output.outputs.suitesparse-path }}
     steps:
-    - name: Checkout BFF repository with submodules
-      uses: actions/checkout@v4
-      with:
-        repository: GeometryCollective/boundary-first-flattening
-        submodules: recursive
-        ref: v1.6
+      - name: Checkout SuiteSparse
+        uses: actions/checkout@v4
+        with:
+          repository: jlblancoc/suitesparse-metis-for-windows
+          ref: windows-vs2019
+          path: suitesparse-src
 
-    - name: Setup MSVC environment
-      uses: ilammy/msvc-dev-cmd@v1
-      
-    - name: Install CMake
-      uses: jwlawson/actions-setup-cmake@v1
-      with:
-        cmake-version: "3.25.x"
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v1
 
-    - name: Install build tools
-      shell: pwsh
-      run: |
-        choco install -y git
-        choco install -y ninja
+      - name: Setup CMake
+        uses: jwlawson/actions-setup-cmake@v1
+        with:
+          cmake-version: "3.25.x"
 
-    - name: Build SuiteSparse for Windows
-      shell: pwsh
-      run: |
-        $SuiteSparseRepo = "https://github.com/jlblancoc/suitesparse-metis-for-windows"
-        $SuiteSparseDir = "suitesparse-build"
-        
-        Write-Host "Cloning SuiteSparse for Windows..."
-        git clone --depth 1 $SuiteSparseRepo $SuiteSparseDir
-        cd $SuiteSparseDir
-        
-        Write-Host "Configuring SuiteSparse with CMake..."
-        $BuildDir = "build"
-        $InstallDir = "$pwd\install"
-        
-        # Create install directory
-        New-Item -ItemType Directory -Force -Path $InstallDir
-        
-        # Configure with specific options for Windows
-        cmake -B $BuildDir -S . `
-          -DCMAKE_INSTALL_PREFIX="$InstallDir" `
-          -DCMAKE_BUILD_TYPE=Release `
-          -DBUILD_METIS=ON `
-          -DCMAKE_POSITION_INDEPENDENT_CODE=ON `
-          -G "Visual Studio 17 2022" `
-          -A x64
-        
-        Write-Host "Building SuiteSparse..."
-        cmake --build $BuildDir --config Release --target INSTALL --parallel
-        
-        Write-Host "SuiteSparse built successfully!"
-        Write-Host "Install directory: $InstallDir"
-        
-        # Verify the installation
-        Write-Host "Checking SuiteSparse installation..."
-        if (Test-Path "$InstallDir\include") {
-            Write-Host "Include directory exists"
-            Get-ChildItem -Path "$InstallDir\include" -Filter "*.h" | Select-Object -First 10
-        }
-        
-        # Check specifically for SuiteSparse headers
-        Write-Host "Looking for SuiteSparse headers..."
-        $headers = Get-ChildItem -Path "$InstallDir\include" -Filter "*.h" -Recurse | Where-Object { $_.Name -match "cholmod|amd|camd" }
-        Write-Host "Found $($headers.Count) SuiteSparse headers"
+      - name: Install required tools
+        run: |
+          choco install nasm -y
 
-    - name: Patch BFF CMakeLists.txt to use our SuiteSparse
-      shell: pwsh
-      run: |
-        Write-Host "Patching BFF CMakeLists.txt to use our SuiteSparse installation..."
-        cd "${{ github.workspace }}"
-        
-        $SuiteSparseDir = "$pwd\suitesparse-build\install"
-        
-        # Read the original CMakeLists.txt
-        $content = Get-Content "CMakeLists.txt" -Raw
-        
-        # Replace the entire SuiteSparse section with our manual setup
-        $newSuiteSparseSection = "# ===== MODIFIED FOR WINDOWS BUILD =====`n" +
-                                "# Manually set SuiteSparse paths for Windows build`n" +
-                                "set(SuiteSparse_FOUND ON)`n" +
-                                "set(SuiteSparse_INCLUDE_DIRS " + '"' + $SuiteSparseDir + '/include;' + $SuiteSparseDir + '/include/suitesparse"' + ")`n" +
-                                "set(SuiteSparse_LIBRARY_DIRS " + '"' + $SuiteSparseDir + '/lib"' + ")`n" +
-                                "`n" +
-                                "# Find all SuiteSparse libraries`n" +
-                                'file(GLOB SuiteSparse_LIBS "${SuiteSparse_LIBRARY_DIRS}/*.lib")' + "`n" +
-                                "set(SuiteSparse_LIBRARIES " + '${SuiteSparse_LIBS}' + ")`n" +
-                                "`n" +
-                                "# Set individual component variables`n" +
-                                "set(SuiteSparse_AMD_FOUND ON)`n" +
-                                "set(SuiteSparse_CAMD_FOUND ON)`n" +
-                                "set(SuiteSparse_COLAMD_FOUND ON)`n" +
-                                "set(SuiteSparse_CCOLAMD_FOUND ON)`n" +
-                                "set(SuiteSparse_CHOLMOD_FOUND ON)`n" +
-                                "set(SuiteSparse_SUITESPARSECONFIG_FOUND ON)`n" +
-                                "set(SuiteSparse_LDL_FOUND ON)`n" +
-                                "`n" +
-                                "# Also set BLAS and LAPACK for Windows`n" +
-                                "set(SuiteSparse_BLAS_FOUND ON)`n" +
-                                "set(SuiteSparse_LAPACK_FOUND ON)`n" +
-                                'set(SuiteSparse_BLAS_LIBRARY "' + $SuiteSparseDir + '/lib/lapack_blas_windows/libblas.dll.a")' + "`n" +
-                                'set(SuiteSparse_LAPACK_LIBRARY "' + $SuiteSparseDir + '/lib/lapack_blas_windows/liblapack.dll.a")' + "`n" +
-                                "`n" +
-                                'message(STATUS "Using manually configured SuiteSparse for Windows build")' + "`n" +
-                                'message(STATUS "SuiteSparse include dirs: ${SuiteSparse_INCLUDE_DIRS}")' + "`n" +
-                                'message(STATUS "SuiteSparse library dirs: ${SuiteSparse_LIBRARY_DIRS}")' + "`n" +
-                                "# ===== END MODIFICATION ====="
-        
-        # Replace from "suitesparse" comment to after find_package
-        $pattern = '# suitesparse[\s\S]*?find_package\(SuiteSparse'
-        $replacement = '# suitesparse`n# ------------------------------------------------------------------`n# Manually configured SuiteSparse for Windows build`n# ------------------------------------------------------------------`n' + $newSuiteSparseSection + "`n`n" + 'find_package(SuiteSparse'
-        
-        $content = $content -replace $pattern, $replacement
-        
-        # Also need to handle the second find_package call
-        $content = $content -replace 'if\(NOT SuiteSparse_FOUND\)[\s\S]*?find_package\(SuiteSparse REQUIRED\)', 'if(NOT SuiteSparse_FOUND)`n    # Already configured above`n    message(STATUS "SuiteSparse already configured")`nendif()'
-        
-        Set-Content -Path "CMakeLists.txt" -Value $content -Encoding UTF8
-        Write-Host "CMakeLists.txt patched successfully"
+      - name: Build SuiteSparse
+        run: |
+          mkdir suitesparse-build
+          cd suitesparse-build
+          cmake ../suitesparse-src `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_INSTALL_PREFIX=../install `
+            -DBLA_VENDOR=OpenBLAS `
+            -DBUILD_METIS=ON `
+            -DBUILD_CXSparse=ON `
+            -DBUILD_CHOLMOD=ON `
+            -DBUILD_UMFPACK=ON `
+            -DBUILD_SPQR=ON `
+            -DBUILD_AMD=ON `
+            -DBUILD_CAMD=ON `
+            -DBUILD_CCOLAMD=ON `
+            -DBUILD_COLAMD=ON `
+            -DBUILD_CCOLAMD=ON `
+            -DBUILD_Suitesparseconfig=ON `
+            -DBUILD_KT_RICHEXT=OFF `
+            -DCMAKE_WINDOWS_EXPORT_ALL_SYMBOLS=ON
+          
+          cmake --build . --config Release --target install --parallel
 
-    - name: Build BFF with patched CMakeLists
-      shell: pwsh
-      run: |
-        $SuiteSparseDir = "$pwd\suitesparse-build\install"
-        $BFFBuildDir = "bff-build"
-        
-        Write-Host "Building BFF with patched CMakeLists..."
-        cd "${{ github.workspace }}"
-        
-        # Build with explicit paths to ensure everything is found
-        Write-Host "Configuring BFF..."
-        cmake -B $BFFBuildDir -S . `
-          -DCMAKE_BUILD_TYPE=Release `
-          -DBFF_BUILD_GUI=ON `
-          -DBFF_BUILD_CLI=ON `
-          -DSUITESPARSE_INCLUDE_DIR="$SuiteSparseDir\include" `
-          -DSUITESPARSE_LIBRARY_DIR="$SuiteSparseDir\lib" `
-          -DLAPACK_DIR="$SuiteSparseDir\lib\lapack_blas_windows" `
-          -G "Visual Studio 17 2022" `
-          -A x64
-        
-        Write-Host "Building BFF..."
-        cmake --build $BFFBuildDir --config Release --parallel
-        
-        Write-Host "BFF build completed!"
+      - name: Set SuiteSparse path
+        id: set-output
+        run: |
+          $path = (Resolve-Path "install").Path
+          echo "suitesparse-path=$path" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
-    - name: Check build results
-      shell: pwsh
-      run: |
-        $BFFBuildDir = "bff-build"
-        Write-Host "Checking build results in $BFFBuildDir..."
-        
-        # List all executables
-        $exes = Get-ChildItem -Path $BFFBuildDir -Filter "*.exe" -Recurse
-        if ($exes.Count -gt 0) {
-            Write-Host "Found $($exes.Count) executables:"
-            foreach ($exe in $exes) {
-                Write-Host "  - $($exe.FullName)"
+      - name: Upload SuiteSparse artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: suitesparse-windows
+          path: |
+            install/
+            !install/**/*.pdb
+
+  build-bff:
+    name: Build BFF
+    runs-on: windows-latest
+    needs: build-suite-sparse
+    steps:
+      - name: Checkout BFF
+        uses: actions/checkout@v4
+        with:
+          repository: GeometryCollective/boundary-first-flattening
+          ref: v1.6
+          submodules: recursive
+
+      - name: Download SuiteSparse artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: suitesparse-windows
+          path: suitesparse-deps
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v1
+
+      - name: Setup CMake
+        uses: jwlawson/actions-setup-cmake@v1
+        with:
+          cmake-version: "3.25.x"
+
+      - name: Install dependencies
+        run: |
+          choco install eigen openblas -y
+          choco install vcpkg -y
+          vcpkg integrate install
+          vcpkg install glew freeglut libpng tiff --triplet x64-windows
+
+      - name: Patch BFF CMakeLists.txt
+        run: |
+          $SUITESPARSE_DIR = (Resolve-Path "suitesparse-deps/install").Path
+          
+          # Create a custom CMake script to find SuiteSparse
+          $CUSTOM_FIND = 'set(SUITESPARSE_DIR "' + $SUITESPARSE_DIR + '")\n' +
+            'set(SUITESPARSE_INCLUDE_DIR "${SUITESPARSE_DIR}/include")\n' +
+            'set(SUITESPARSE_LIBRARY_DIR "${SUITESPARSE_DIR}/lib")\n' +
+            '\n' +
+            'file(GLOB SUITESPARSE_LIBRARIES "${SUITESPARSE_LIBRARY_DIR}/*.lib")\n' +
+            '\n' +
+            'set(SUITESPARSE_INCLUDE_DIRS "${SUITESPARSE_INCLUDE_DIR}")\n' +
+            'set(SUITESPARSE_LIBRARIES "${SUITESPARSE_LIBRARIES}")\n' +
+            'set(SUITESPARSE_FOUND TRUE)\n' +
+            '\n' +
+            'message(STATUS "SuiteSparse manually configured:")\n' +
+            'message(STATUS "  Include dir: ${SUITESPARSE_INCLUDE_DIR}")\n' +
+            'message(STATUS "  Library dir: ${SUITESPARSE_LIBRARY_DIR}")\n' +
+            'message(STATUS "  Libraries: ${SUITESPARSE_LIBRARIES}")\n'
+          
+          Set-Content -Path "FindSuiteSparseCustom.cmake" -Value $CUSTOM_FIND
+          
+          # Patch the main CMakeLists.txt to use our custom find script
+          $PATCH = 'find_package(Eigen3 3.2 REQUIRED)\n' +
+            '\n' +
+            '# Manually set SuiteSparse paths before find_package\n' +
+            'set(SUITESPARSE_DIR "' + $SUITESPARSE_DIR + '")\n' +
+            'set(SUITESPARSE_INCLUDE_DIR "${SUITESPARSE_DIR}/include")\n' +
+            'set(SUITESPARSE_LIBRARY_DIR "${SUITESPARSE_DIR}/lib")\n' +
+            '\n' +
+            '# Override the find module\n' +
+            'set(SuiteSparse_FOUND TRUE)\n' +
+            'set(SuiteSparse_INCLUDE_DIRS "${SUITESPARSE_INCLUDE_DIR}")\n' +
+            'set(SuiteSparse_LIBRARY_DIRS "${SUITESPARSE_LIBRARY_DIR}")\n' +
+            '\n' +
+            'file(GLOB SuiteSparse_LIBRARIES "${SUITESPARSE_LIBRARY_DIR}/*.lib")\n' +
+            '\n' +
+            'message(STATUS "SuiteSparse manually configured:")\n' +
+            'message(STATUS "  Include dir: ${SUITESPARSE_INCLUDE_DIR}")\n' +
+            'message(STATUS "  Library dir: ${SUITESPARSE_LIBRARY_DIR}")\n' +
+            '\n' +
+            'find_package(OpenGL REQUIRED)\n'
+          
+          # Read the original file and patch it
+          $content = Get-Content -Path "CMakeLists.txt" -Raw
+          # Insert our patch after Eigen3 find_package
+          $pattern = 'find_package\(Eigen3 3\.2 REQUIRED\)'
+          $replacement = $PATCH
+          $content = $content -replace $pattern, $replacement
+          Set-Content -Path "CMakeLists.txt" -Value $content
+
+      - name: Configure BFF
+        run: |
+          mkdir build
+          cd build
+          
+          $SUITESPARSE_DIR = (Resolve-Path "../suitesparse-deps/install").Path
+          
+          # Find OpenBLAS from Chocolatey
+          $OPENBLAS_DIR = "C:\tools\openblas"
+          
+          cmake .. `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_PREFIX_PATH="$SUITESPARSE_DIR" `
+            -DCMAKE_INCLUDE_PATH="$SUITESPARSE_DIR/include" `
+            -DCMAKE_LIBRARY_PATH="$SUITESPARSE_DIR/lib" `
+            -DEigen3_DIR="C:\tools\eigen\share\eigen3\cmake" `
+            -DOpenBLAS_DIR="$OPENBLAS_DIR" `
+            -DBUILD_GUI=ON `
+            -DBUILD_CLI=ON `
+            -DBUILD_WITH_OPENMP=ON `
+            -DCMAKE_WINDOWS_EXPORT_ALL_SYMBOLS=ON `
+            -G "Visual Studio 17 2022" `
+            -A x64
+
+      - name: Build BFF
+        run: |
+          cd build
+          cmake --build . --config Release --parallel
+
+      - name: Collect DLLs and package
+        run: |
+          mkdir -p bff-package
+          
+          # Copy executables
+          Copy-Item "build/Release/BFF_GUI.exe" -Destination "bff-package/"
+          Copy-Item "build/Release/BFF_CLI.exe" -Destination "bff-package/" -ErrorAction SilentlyContinue
+          
+          # Copy required DLLs using a more comprehensive approach
+          $dlls = @()
+          
+          # Function to collect DLLs recursively
+          function Get-Dependencies($path) {
+            $result = dumpbin /DEPENDENTS $path | Where-Object { $_ -match "\.dll" } | ForEach-Object { $_.Trim() }
+            return $result
+          }
+          
+          # Collect DLLs for GUI executable
+          $guiDeps = Get-Dependencies "bff-package/BFF_GUI.exe"
+          $dlls += $guiDeps
+          
+          # Collect from build directory
+          Get-ChildItem "build/Release/*.dll" | Copy-Item -Destination "bff-package/"
+          
+          # Collect from common system locations
+          $systemDirs = @(
+            "C:\Windows\System32",
+            "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Redist\MSVC\14.38.33130\x64\Microsoft.VC143.CRT",
+            "C:\tools\openblas\bin",
+            "$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows\bin"
+          )
+          
+          foreach ($dll in $dlls) {
+            foreach ($dir in $systemDirs) {
+              $dllPath = Join-Path $dir $dll
+              if (Test-Path $dllPath) {
+                Copy-Item $dllPath -Destination "bff-package/" -ErrorAction SilentlyContinue
+                break
+              }
             }
-        } else {
-            Write-Host "No executables found"
-            
-            # Check what was built
-            Write-Host "Checking for built libraries..."
-            $libs = Get-ChildItem -Path $BFFBuildDir -Filter "*.lib" -Recurse
-            Write-Host "Found $($libs.Count) libraries"
-            
-            Write-Host "Build directory structure:"
-            Get-ChildItem -Path $BFFBuildDir -Directory | ForEach-Object {
-                Write-Host "  $($_.Name)/"
-                Get-ChildItem -Path "$BFFBuildDir\$($_.Name)" -Filter "*" | ForEach-Object {
-                    Write-Host "    $($_.Name)"
-                }
-            }
-        }
+          }
+          
+          # Copy SuiteSparse DLLs
+          Copy-Item "suitesparse-deps/install/bin/*.dll" -Destination "bff-package/" -ErrorAction SilentlyContinue
+          Copy-Item "suitesparse-deps/install/lib/*.dll" -Destination "bff-package/" -ErrorAction SilentlyContinue
+          
+          # Create a simple README
+          $README = 'Boundary First Flattening (BFF) v1.6 Windows Build\n' +
+            '=================================================\n' +
+            '\n' +
+            'This package contains:\n' +
+            '1. BFF_GUI.exe - The graphical user interface\n' +
+            '2. All required DLL dependencies\n' +
+            '\n' +
+            'Requirements:\n' +
+            '- Windows 10 or later\n' +
+            '- Visual C++ Redistributable 2022 (should be included)\n' +
+            '\n' +
+            'Usage:\n' +
+            '1. Double-click BFF_GUI.exe to launch the application\n' +
+            '2. Use File menu to open OBJ files\n' +
+            '\n' +
+            'Note: This is an automated build from GitHub Actions.\n'
+          
+          Set-Content -Path "bff-package/README.txt" -Value $README
+          
+          # Verify the executable runs
+          & "bff-package/BFF_GUI.exe" --version
 
-    - name: Try building executables directly if needed
-      shell: pwsh
-      if: failure()
-      run: |
-        Write-Host "Trying to build executables directly..."
-        cd "${{ github.workspace }}"
-        
-        $BFFBuildDir = "bff-build"
-        
-        # Try to build specific targets
-        if (Test-Path $BFFBuildDir) {
-            # First check what targets are available
-            Write-Host "Available CMake targets:"
-            cmake --build $BFFBuildDir --config Release --target help
-            
-            # Try to build BFF executable if it exists as a target
-            Write-Host "Attempting to build BFF target..."
-            cmake --build $BFFBuildDir --config Release --target BFF --verbose
-            
-            # Also try bff-command
-            Write-Host "Attempting to build bff-command target..."
-            cmake --build $BFFBuildDir --config Release --target bff-command --verbose
-        }
+      - name: Upload BFF artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bff-windows-gui
+          path: |
+            bff-package/
+          retention-days: 7
 
-    - name: Collect artifacts
-      shell: pwsh
-      run: |
-        $DistDir = "bff-dist"
-        New-Item -ItemType Directory -Force -Path $DistDir
-        
-        Write-Host "Collecting artifacts from bff-build..."
-        
-        # Look for executables in various locations
-        $searchPaths = @(
-            "bff-build\Release\*.exe",
-            "bff-build\Debug\*.exe", 
-            "bff-build\*.exe",
-            "bff-build\src\gui\Release\*.exe",
-            "bff-build\src\gui\Debug\*.exe",
-            "bff-build\src\command\Release\*.exe",
-            "bff-build\src\command\Debug\*.exe"
-        )
-        
-        foreach ($pattern in $searchPaths) {
-            $files = Get-ChildItem -Path $pattern -ErrorAction SilentlyContinue
-            foreach ($file in $files) {
-                Write-Host "Found: $($file.FullName)"
-                Copy-Item $file.FullName -Destination $DistDir
-            }
-        }
-        
-        # Copy SuiteSparse DLLs
-        $SuiteSparseDir = "$pwd\suitesparse-build\install"
-        Write-Host "Copying SuiteSparse DLLs..."
-        
-        # Look for DLLs in various locations
-        $dllSources = @(
-            "$SuiteSparseDir\lib\*.dll",
-            "$SuiteSparseDir\lib\lapack_blas_windows\*.dll",
-            "$SuiteSparseDir\bin\*.dll"
-        )
-        
-        foreach ($source in $dllSources) {
-            if (Test-Path $source) {
-                Write-Host "Copying from: $source"
-                Copy-Item $source -Destination $DistDir -ErrorAction SilentlyContinue
-            }
-        }
-        
-        # Copy any DLLs from the build directory
-        $buildDlls = Get-ChildItem -Path "bff-build" -Filter "*.dll" -Recurse
-        foreach ($dll in $buildDlls) {
-            Write-Host "Found build DLL: $($dll.FullName)"
-            Copy-Item $dll.FullName -Destination $DistDir
-        }
-        
-        # Copy system DLLs
-        $systemDir = "$env:SystemRoot\System32"
-        $runtimeDlls = @("vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll", "concrt140.dll")
-        
-        foreach ($dllName in $runtimeDlls) {
-            $dllPath = "$systemDir\$dllName"
-            if (Test-Path $dllPath) {
-                Copy-Item $dllPath -Destination $DistDir
-            }
-        }
-        
-        # Create README
-        $exeCount = (Get-ChildItem -Path $DistDir -Filter "*.exe").Count
-        $dllCount = (Get-ChildItem -Path $DistDir -Filter "*.dll").Count
-        
-        $ReadmeContent = "Boundary First Flattening (BFF) v1.6 Windows Build" + "`n" + 
-                         "=============================================" + "`n" + 
-                         "Built: $(Get-Date -Format 'yyyy-MM-dd HH:mm')" + "`n" + 
-                         "Executables: $exeCount" + "`n" + 
-                         "DLLs: $dllCount" + "`n" + 
-                         "" + "`n"
-        
-        # List executables
-        $exes = Get-ChildItem -Path $DistDir -Filter "*.exe"
-        if ($exes.Count -gt 0) {
-            $ReadmeContent += "EXECUTABLES:" + "`n"
-            foreach ($exe in $exes) {
-                $ReadmeContent += "- $($exe.Name)" + "`n"
-            }
-            $ReadmeContent += "`n"
-        }
-        
-        $ReadmeContent += "INSTRUCTIONS:" + "`n" + 
-                         "1. Place all files in the same directory" + "`n" + 
-                         "2. Run BFF.exe for GUI interface" + "`n" + 
-                         "3. Run bff-command.exe for command line" + "`n" + 
-                         "" + "`n" + 
-                         "REQUIRED DLLs included:" + "`n" + 
-                         "- SuiteSparse libraries" + "`n" + 
-                         "- LAPACK/BLAS runtime" + "`n" + 
-                         "- Visual C++ Runtime" + "`n" + 
-                         "" + "`n" + 
-                         "If you get DLL errors, install Visual C++ Redistributable:" + "`n" + 
-                         "https://aka.ms/vs/17/release/vc_redist.x64.exe"
-        
-        Set-Content -Path "$DistDir\README.txt" -Value $ReadmeContent -Encoding UTF8
-        
-        # Create ZIP if there are files
-        if ((Get-ChildItem -Path $DistDir).Count -gt 0) {
-            Compress-Archive -Path "$DistDir\*" -DestinationPath "BFF-Windows-v1.6.zip" -Force
-            Write-Host "ZIP archive created: BFF-Windows-v1.6.zip"
-        } else {
-            Write-Host "Warning: No files to package"
-        }
-
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: BFF-Windows-Build
-        path: |
-          bff-dist/
-          BFF-Windows-v1.6.zip
-        retention-days: 7
-
-    - name: Final status
-      shell: pwsh
-      run: |
-        Write-Host "=== BUILD SUMMARY ==="
-        Write-Host "SuiteSparse built successfully: $(Test-Path 'suitesparse-build/install')"
-        Write-Host "BFF build directory exists: $(Test-Path 'bff-build')"
-        if (Test-Path 'bff-dist') {
-            $fileCount = (Get-ChildItem 'bff-dist').Count
-            Write-Host "Artifacts collected: $fileCount files"
-            if ($fileCount -gt 0) {
-                Get-ChildItem 'bff-dist' | ForEach-Object {
-                    Write-Host "  - $($_.Name)"
-                }
-            }
-        } else {
-            Write-Host "No artifacts collected"
-        }
-        Write-Host "==================="
+      - name: Create release (on tag)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v1
+        with:
+          files: bff-package/*
+          draft: true
+          prerelease: false
