@@ -104,11 +104,23 @@ jobs:
           Write-Host "Setting SuiteSparse path to: $path"
           echo "suitesparse-path=$path" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
+      - name: Change to workspace root and upload
+        run: |
+          cd $env:GITHUB_WORKSPACE
+          Write-Host "Current directory: $(Get-Location)"
+          Write-Host "Contents of install directory:"
+          if (Test-Path "install") {
+            Get-ChildItem "install" -Recurse | Select-Object Name
+          } else {
+            Write-Host "install directory not found!"
+            exit 1
+          }
+
       - name: Upload SuiteSparse artifacts
         uses: actions/upload-artifact@v4
         with:
           name: suitesparse-windows
-          path: $env:GITHUB_WORKSPACE/install
+          path: install/
           if-no-files-found: error
           retention-days: 1
 
