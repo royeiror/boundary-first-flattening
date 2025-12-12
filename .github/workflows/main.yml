@@ -1,529 +1,161 @@
-name: Build BFF for Windows
+name: Build BFF for Windows (v1.6)
 
 on:
+  workflow_dispatch: # Allows manual triggering from GitHub UI
   push:
-    branches: [main, master]
-  pull_request:
-    branches: [main, master]
-  workflow_dispatch:
+    branches: [ main, master ]
 
 jobs:
-  build:
-    runs-on: windows-latest
-    
+  build-bff-windows:
+    runs-on: windows-latest # Windows Server 2022 with VS 2022
+
     steps:
-    - name: Checkout BFF Repository
+    # =============================================
+    # PHASE 0: PREPARATION & CHECKOUT
+    # =============================================
+    - name: Checkout BFF Source (v1.6)
       uses: actions/checkout@v4
       with:
-        submodules: recursive
         repository: GeometryCollective/boundary-first-flattening
-        ref: v1.6
-    
-    - name: Install CMake
+        ref: 'v1.6' # Pinning to the exact version
+        submodules: recursive # Crucial for libigl, spectra, openblas
+
+    - name: Install Build Tools
       shell: powershell
       run: |
-        winget install -e --id Kitware.CMake --silent --accept-package-agreements --accept-source-agreements
+        # Ensure CMake is available (it is on windows-latest)
         cmake --version
-    
-    - name: Analyze BFF Build System
+        # Ensure MSBuild is available
+        msbuild -version
+
+    # =============================================
+    # PHASE 1: BUILD SUITESPARSE & METIS FROM SOURCE
+    # =============================================
+    - name: Clone SuiteSparse-METIS Helper Project
       shell: powershell
       run: |
-        Write-Host "Analyzing BFF build system..."
-        
-        # Check for any existing build configuration
-        Write-Host "Looking for build configuration files..."
-        
-        # Check for Makefiles, configure scripts, etc.
-        Get-ChildItem -Path . -Filter "*Makefile*" -Recurse | ForEach-Object {
-            Write-Host "Found: $($_.FullName)"
-        }
-        
-        Get-ChildItem -Path . -Filter "*.mk" -Recurse | ForEach-Object {
-            Write-Host "Found: $($_.FullName)"
-        }
-        
-        # Check the actual BFF source to understand its dependencies
-        Write-Host "`nExamining BFF source dependencies..."
-        
-        # Check Common.cpp to see what it actually uses
-        if (Test-Path "src\linear-algebra\Common.cpp") {
-            Write-Host "Common.cpp includes and cholmod usage:"
-            Get-Content "src\linear-algebra\Common.cpp" | Select-String -Pattern "cholmod|CHOLMOD" | Select-Object -First 10
-        }
-        
-        # Check for any alternative implementations or defines
-        Write-Host "`nLooking for configuration defines..."
-        $configFiles = Get-ChildItem -Path . -Filter "*.h" -Recurse | Where-Object {
-            $_.Name -match "config|option|define"
-        }
-        foreach ($file in $configFiles) {
-            Write-Host "Checking $($file.Name)..."
-            Get-Content $file.FullName | Select-String -Pattern "#define|#ifdef|#ifndef|BFF_|USE_" | Select-Object -First 5
-        }
-        
-        # Look for Rect.h in a different way
-        Write-Host "`nSearching for Rect.h alternatives..."
-        Get-ChildItem -Path . -Filter "*.h" -Recurse | Where-Object {
-            $_.Name -match "Rect|rect"
-        } | ForEach-Object {
-            Write-Host "  Found: $($_.FullName)"
-        }
-        
-        # Check for cblas.h requirement
-        Write-Host "`nChecking for BLAS dependencies..."
-        if (Test-Path "include\bff\linear-algebra\DenseMatrix.inl") {
-            Write-Host "DenseMatrix.inl first few lines:"
-            Get-Content "include\bff\linear-algebra\DenseMatrix.inl" -TotalCount 10
-        }
-    
-    - name: Try to Build with MSBuild Directly
+        # This repo contains the CMake scripts to build SuiteSparse on Windows
+        git clone --depth 1 https://github.com/jlblancoc/suitesparse-metis-for-windows.git "$env:GITHUB_WORKSPACE\SuiteSparseBuild"
+        cd "$env:GITHUB_WORKSPACE\SuiteSparseBuild"
+        # The helper's CMake will download SuiteSparse & METIS source automatically.
+
+    - name: Configure SuiteSparse CMake Project
       shell: powershell
       run: |
-        Write-Host "Attempting to build BFF using its existing build system..."
-        
-        # First, check if there's a Visual Studio solution
-        $slnFiles = Get-ChildItem -Path . -Filter "*.sln" -Recurse
-        $vcxprojFiles = Get-ChildItem -Path . -Filter "*.vcxproj" -Recurse
-        
-        if ($slnFiles) {
-            Write-Host "Found Visual Studio solution files:"
-            foreach ($sln in $slnFiles) {
-                Write-Host "  $($sln.FullName)"
-                
-                # Try to build with MSBuild
-                Write-Host "Attempting to build $($sln.Name)..."
-                msbuild $sln.FullName /p:Configuration=Release /p:Platform="x64" /m
-            }
-        } elseif ($vcxprojFiles) {
-            Write-Host "Found Visual Studio project files:"
-            foreach ($proj in $vcxprojFiles) {
-                Write-Host "  $($proj.FullName)"
-                
-                # Check if it's a BFF project
-                if ($proj.Name -match "bff|BFF") {
-                    Write-Host "Attempting to build $($proj.Name)..."
-                    msbuild $proj.FullName /p:Configuration=Release /p:Platform="x64" /m
-                }
-            }
-        } else {
-            Write-Host "No Visual Studio project files found"
-        }
-        
-        # Check for any build scripts
-        Write-Host "`nChecking for build scripts..."
-        Get-ChildItem -Path . -Filter "build*.bat" -Recurse | ForEach-Object {
-            Write-Host "Found build script: $($_.FullName)"
-            Write-Host "Contents:"
-            Get-Content $_.FullName -TotalCount 10
-        }
-    
-    - name: Create Simplified Build
-      shell: powershell
-      run: |
-        Write-Host "Creating a simplified build to understand the structure..."
-        
-        # Create a minimal test to see what actually compiles
-        New-Item -ItemType Directory -Force -Path "test_build"
-        cd test_build
-        
-        # Create a simple test.cpp that includes BFF headers
-        $testCode = '#include "../include/bff/mesh/Mesh.h"' + "`n" +
-                   '#include <iostream>' + "`n" +
-                   '' + "`n" +
-                   'int main() {' + "`n" +
-                   '    std::cout << "Testing BFF headers..." << std::endl;' + "`n" +
-                   '    return 0;' + "`n" +
-                   '}'
-        
-        Set-Content -Path "test_bff.cpp" -Value $testCode
-        
-        # Try to compile it
-        Write-Host "Testing compilation..."
-        cl /EHsc /std:c++17 /I"../include" /I"../deps/libigl/include" test_bff.cpp
-        
-        if ($LASTEXITCODE -eq 0) {
-            Write-Host "Basic compilation successful!"
-        } else {
-            Write-Host "Compilation failed"
-        }
-    
-    - name: Check for Pre-built Dependencies
-      shell: powershell
-      run: |
-        Write-Host "Checking for pre-built dependencies in the repository..."
-        
-        # Look for any pre-built libraries or binaries
-        Write-Host "Searching for .lib files..."
-        $libFiles = Get-ChildItem -Path . -Filter "*.lib" -Recurse | Where-Object {
-            $_.Name -match "cholmod|amd|blas|lapack|suitesparse"
-        }
-        
-        if ($libFiles) {
-            Write-Host "Found potential dependency libraries:"
-            foreach ($lib in $libFiles) {
-                Write-Host "  $($lib.FullName)"
-                # Copy to a central location
-                $destDir = "C:\Dependencies\lib"
-                New-Item -ItemType Directory -Force -Path $destDir | Out-Null
-                Copy-Item -Path $lib.FullName -Destination $destDir -Force
-            }
-        }
-        
-        # Look for DLLs
-        Write-Host "`nSearching for .dll files..."
-        $dllFiles = Get-ChildItem -Path . -Filter "*.dll" -Recurse | Where-Object {
-            $_.Name -match "cholmod|amd|blas|lapack"
-        }
-        
-        if ($dllFiles) {
-            Write-Host "Found DLLs:"
-            foreach ($dll in $dllFiles) {
-                Write-Host "  $($dll.FullName)"
-            }
-        }
-        
-        # Check the release notes or documentation for dependency info
-        Write-Host "`nChecking documentation..."
-        $docFiles = @("README.md", "INSTALL", "BUILD", "CHANGELOG", "RELEASE_NOTES")
-        foreach ($doc in $docFiles) {
-            if (Test-Path $doc) {
-                Write-Host "`n$doc :"
-                Get-Content $doc | Select-String -Pattern "SuiteSparse|cholmod|dependency|Windows|install" -CaseSensitive:$false | Select-Object -First 10
-            }
-        }
-    
-    - name: Create Complete Stub Implementation
-      shell: powershell
-      run: |
-        Write-Host "Creating complete stub implementation for missing dependencies..."
-        
-        # Create a comprehensive stub environment
-        $stubDir = "C:\StubDependencies"
-        New-Item -ItemType Directory -Force -Path "$stubDir\include" | Out-Null
-        New-Item -ItemType Directory -Force -Path "$stubDir\lib" | Out-Null
-        
-        # Create a complete cholmod.h based on what BFF actually uses
-        Write-Host "Creating comprehensive cholmod.h..."
-        
-        $cholmodHeader = '#ifndef CHOLMOD_H' + "`n" +
-                        '#define CHOLMOD_H' + "`n" +
-                        '' + "`n" +
-                        '#include <stdio.h>' + "`n" +
-                        '#include <stddef.h>' + "`n" +
-                        '' + "`n" +
-                        '#ifdef __cplusplus' + "`n" +
-                        'extern "C" {' + "`n" +
-                        '#endif' + "`n" +
-                        '' + "`n" +
-                        '#define CHOLMOD_MAIN_VERSION 3' + "`n" +
-                        '#define CHOLMOD_SUB_VERSION 0' + "`n" +
-                        '#define CHOLMOD_SUBSUB_VERSION 14' + "`n" +
-                        '' + "`n" +
-                        '#define CHOLMOD_NOT_INSTALLED (-1)' + "`n" +
-                        '#define CHOLMOD_OUT_OF_MEMORY (-2)' + "`n" +
-                        '#define CHOLMOD_TOO_LARGE (-3)' + "`n" +
-                        '#define CHOLMOD_INVALID (-4)' + "`n" +
-                        '#define CHOLMOD_GPU_PROBLEM (-5)' + "`n" +
-                        '#define CHOLMOD_NOT_POSDEF (-6)' + "`n" +
-                        '#define CHOLMOD_DSMALL (-7)' + "`n" +
-                        '' + "`n" +
-                        '#define CHOLMOD_AUTO 0' + "`n" +
-                        '#define CHOLMOD_SIMPLICIAL 1' + "`n" +
-                        '#define CHOLMOD_SUPERNODAL 2' + "`n" +
-                        '' + "`n" +
-                        'typedef struct cholmod_common_struct {' + "`n" +
-                        '    double dbound;' + "`n" +
-                        '    double grow0;' + "`n" +
-                        '    double grow1;' + "`n" +
-                        '    double grow2;' + "`n" +
-                        '    size_t maxrank;' + "`n" +
-                        '    double supernodal_switch;' + "`n" +
-                        '    int final_asis;' + "`n" +
-                        '    int final_super;' + "`n" +
-                        '    int final_ll;' + "`n" +
-                        '    int final_pack;' + "`n" +
-                        '    int final_monotonic;' + "`n" +
-                        '    int final_resymbol;' + "`n" +
-                        '    int prefer_zomplex;' + "`n" +
-                        '    int prefer_upper;' + "`n" +
-                        '    int quick_return_if_not_posdef;' + "`n" +
-                        '    int nmethods;' + "`n" +
-                        '    int postorder;' + "`n" +
-                        '    int default_nesdis;' + "`n" +
-                        '    int supernodal;' + "`n" +
-                        '    int status;' + "`n" +
-                        '    int (*print_function)(const char* fmt, ...);' + "`n" +
-                        '} cholmod_common;' + "`n" +
-                        '' + "`n" +
-                        'typedef struct cholmod_sparse_struct {' + "`n" +
-                        '    size_t nrow, ncol, nzmax;' + "`n" +
-                        '    void* p, *i, *x, *z;' + "`n" +
-                        '    int stype, itype, xtype, dtype, sorted, packed;' + "`n" +
-                        '} cholmod_sparse;' + "`n" +
-                        '' + "`n" +
-                        'typedef struct cholmod_factor_struct {' + "`n" +
-                        '    size_t n;' + "`n" +
-                        '    int minor;' + "`n" +
-                        '    void* p, *i, *x, *z;' + "`n" +
-                        '    int nzmax, nz, next, prev;' + "`n" +
-                        '    int ordering, is_ll, is_super, is_monotonic;' + "`n" +
-                        '} cholmod_factor;' + "`n" +
-                        '' + "`n" +
-                        'typedef struct cholmod_dense_struct {' + "`n" +
-                        '    size_t nrow, ncol, nzmax, d;' + "`n" +
-                        '    void* x, *z;' + "`n" +
-                        '    int xtype, dtype;' + "`n" +
-                        '} cholmod_dense;' + "`n" +
-                        '' + "`n" +
-                        '/* Function stubs */' + "`n" +
-                        'int cholmod_l_start(cholmod_common* Common);' + "`n" +
-                        'int cholmod_l_finish(cholmod_common* Common);' + "`n" +
-                        'int cholmod_l_defaults(cholmod_common* Common);' + "`n" +
-                        'cholmod_sparse* cholmod_l_read_sparse(FILE* f, cholmod_common* Common);' + "`n" +
-                        'int cholmod_l_write_sparse(FILE* f, cholmod_sparse* A, cholmod_common* Common);' + "`n" +
-                        'cholmod_factor* cholmod_l_analyze(cholmod_sparse* A, cholmod_common* Common);' + "`n" +
-                        'int cholmod_l_factorize(cholmod_sparse* A, cholmod_factor* L, cholmod_common* Common);' + "`n" +
-                        'cholmod_dense* cholmod_l_solve(int sys, cholmod_factor* L, cholmod_dense* B, cholmod_common* Common);' + "`n" +
-                        'void cholmod_l_free_factor(cholmod_factor** L, cholmod_common* Common);' + "`n" +
-                        'void cholmod_l_free_sparse(cholmod_sparse** A, cholmod_common* Common);' + "`n" +
-                        '' + "`n" +
-                        '#ifdef __cplusplus' + "`n" +
-                        '}' + "`n" +
-                        '#endif' + "`n" +
-                        '' + "`n" +
-                        '#endif /* CHOLMOD_H */'
-        
-        Set-Content -Path "$stubDir\include\cholmod.h" -Value $cholmodHeader
-        
-        # Create cblas.h
-        Write-Host "Creating cblas.h..."
-        
-        $cblasHeader = '#ifndef CBLAS_H' + "`n" +
-                      '#define CBLAS_H' + "`n" +
-                      '' + "`n" +
-                      '#define CBLAS_INDEX size_t' + "`n" +
-                      '' + "`n" +
-                      'enum CBLAS_ORDER {CblasRowMajor=101, CblasColMajor=102};' + "`n" +
-                      'enum CBLAS_TRANSPOSE {CblasNoTrans=111, CblasTrans=112, CblasConjTrans=113};' + "`n" +
-                      'enum CBLAS_UPLO {CblasUpper=121, CblasLower=122};' + "`n" +
-                      'enum CBLAS_DIAG {CblasNonUnit=131, CblasUnit=132};' + "`n" +
-                      'enum CBLAS_SIDE {CblasLeft=141, CblasRight=142};' + "`n" +
-                      '' + "`n" +
-                      'void cblas_dgemm(const enum CBLAS_ORDER Order, const enum CBLAS_TRANSPOSE TransA,' + "`n" +
-                      '                 const enum CBLAS_TRANSPOSE TransB, const int M, const int N,' + "`n" +
-                      '                 const int K, const double alpha, const double* A,' + "`n" +
-                      '                 const int lda, const double* B, const int ldb,' + "`n" +
-                      '                 const double beta, double* C, const int ldc);' + "`n" +
-                      '' + "`n" +
-                      'void cblas_dgemv(const enum CBLAS_ORDER Order, const enum CBLAS_TRANSPOSE TransA,' + "`n" +
-                      '                 const int M, const int N, const double alpha, const double* A,' + "`n" +
-                      '                 const int lda, const double* X, const int incX,' + "`n" +
-                      '                 const double beta, double* Y, const int incY);' + "`n" +
-                      '' + "`n" +
-                      '#endif /* CBLAS_H */'
-        
-        Set-Content -Path "$stubDir\include\cblas.h" -Value $cblasHeader
-        
-        # Create Rect.h in the correct location
-        Write-Host "Creating Rect.h..."
-        
-        $rectContent = '#ifndef RECT_H' + "`n" +
-                      '#define RECT_H' + "`n" +
-                      '' + "`n" +
-                      'class Rect {' + "`n" +
-                      'public:' + "`n" +
-                      '    double x, y, width, height;' + "`n" +
-                      '    Rect() : x(0), y(0), width(0), height(0) {}' + "`n" +
-                      '    Rect(double x, double y, double w, double h) : x(x), y(y), width(w), height(h) {}' + "`n" +
-                      '    double area() const { return width * height; }' + "`n" +
-                      '    bool intersects(const Rect& other) const {' + "`n" +
-                      '        return !(x + width <= other.x ||' + "`n" +
-                      '                 other.x + other.width <= x ||' + "`n" +
-                      '                 y + height <= other.y ||' + "`n" +
-                      '                 other.y + other.height <= y);' + "`n" +
-                      '    }' + "`n" +
-                      '};' + "`n" +
-                      '' + "`n" +
-                      '#endif'
-        
-        # Put Rect.h in both stub directory and BFF include directory
-        Set-Content -Path "$stubDir\include\Rect.h" -Value $rectContent
-        
-        # Also put it in BFF's include directory if it doesn't exist
-        $bffRectPath = "include\bff\Rect.h"
-        if (-not (Test-Path $bffRectPath)) {
-            New-Item -ItemType Directory -Force -Path "include\bff" | Out-Null
-            Set-Content -Path $bffRectPath -Value $rectContent
-        }
-        
-        Write-Host "Stub headers created at $stubDir\include"
-    
-    - name: Patch BFF Source Files
-      shell: powershell
-      run: |
-        Write-Host "Patching BFF source files to work with stubs..."
-        
-        # Patch Common.cpp to use stubs
-        $commonCppPath = "src\linear-algebra\Common.cpp"
-        if (Test-Path $commonCppPath) {
-            Write-Host "Patching $commonCppPath..."
-            
-            # Read the file
-            $content = Get-Content $commonCppPath -Raw
-            
-            # Replace function calls with stub implementations
-            $newContent = $content -replace 'cholmod_l_start\(&Common\);', '/* cholmod_l_start stub */ Common.status = 0;'
-            $newContent = $newContent -replace 'cholmod_l_finish\(&Common\);', '/* cholmod_l_finish stub */'
-            $newContent = $newContent -replace 'Common\.supernodal = CHOLMOD_SUPERNODAL;', 'Common.supernodal = 2; /* CHOLMOD_SUPERNODAL */'
-            
-            # Remove or comment out problematic lines
-            $newContent = $newContent -replace 'throw Error\(CHOLMOD_NOT_INSTALLED', 'throw Error(-1 /* CHOLMOD_NOT_INSTALLED */'
-            $newContent = $newContent -replace 'throw Error\(CHOLMOD_OUT_OF_MEMORY', 'throw Error(-2 /* CHOLMOD_OUT_OF_MEMORY */'
-            $newContent = $newContent -replace 'throw Error\(CHOLMOD_TOO_LARGE', 'throw Error(-3 /* CHOLMOD_TOO_LARGE */'
-            $newContent = $newContent -replace 'throw Error\(CHOLMOD_INVALID', 'throw Error(-4 /* CHOLMOD_INVALID */'
-            $newContent = $newContent -replace 'throw Error\(CHOLMOD_GPU_PROBLEM', 'throw Error(-5 /* CHOLMOD_GPU_PROBLEM */'
-            $newContent = $newContent -replace 'throw Error\(CHOLMOD_NOT_POSDEF', 'throw Error(-6 /* CHOLMOD_NOT_POSDEF */'
-            $newContent = $newContent -replace 'throw Error\(CHOLMOD_DSMALL', 'throw Error(-7 /* CHOLMOD_DSMALL */'
-            
-            Set-Content -Path $commonCppPath -Value $newContent
-            Write-Host "Patched Common.cpp"
-        }
-        
-        # Patch DenseMatrix.inl to not require cblas.h
-        $denseMatrixPath = "include\bff\linear-algebra\DenseMatrix.inl"
-        if (Test-Path $denseMatrixPath) {
-            Write-Host "Patching $denseMatrixPath..."
-            
-            $content = Get-Content $denseMatrixPath -Raw
-            $newContent = $content -replace '#include "cblas\.h"', '// #include "cblas.h"  // Removed for stub build'
-            
-            # Also comment out or stub BLAS function calls
-            $newContent = $newContent -replace 'cblas_dgemm\(', '/* cblas_dgemm stub */ // cblas_dgemm('
-            $newContent = $newContent -replace 'cblas_dgemv\(', '/* cblas_dgemv stub */ // cblas_dgemv('
-            
-            Set-Content -Path $denseMatrixPath -Value $newContent
-            Write-Host "Patched DenseMatrix.inl"
-        }
-    
-    - name: Build with Stubs
-      shell: powershell
-      run: |
-        Write-Host "Building with stub implementations..."
-        
-        # Clean build directory
-        if (Test-Path "build") {
-            Remove-Item -Path "build" -Recurse -Force -ErrorAction SilentlyContinue
-        }
-        
+        cd "$env:GITHUB_WORKSPACE\SuiteSparseBuild"
+        # Create a clean build directory
         New-Item -ItemType Directory -Force -Path "build"
         cd build
-        
-        # Create a simple CMakeLists.txt that uses our stubs
-        $cmakeContent = 'cmake_minimum_required(VERSION 3.12)' + "`n" +
-                       'project(bff_test)' + "`n" +
-                       '' + "`n" +
-                       'set(CMAKE_CXX_STANDARD 17)' + "`n" +
-                       '' + "`n" +
-                       '# Add all include directories' + "`n" +
-                       'include_directories(' + "`n" +
-                       '    ${CMAKE_SOURCE_DIR}/include' + "`n" +
-                       '    ${CMAKE_SOURCE_DIR}/deps/libigl/include' + "`n" +
-                       '    ${CMAKE_SOURCE_DIR}/deps/spectra/include' + "`n" +
-                       '    C:/StubDependencies/include' + "`n" +
-                       ')' + "`n" +
-                       '' + "`n" +
-                       '# Try to build a simple test first' + "`n" +
-                       'file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/simple_test.cpp' + "`n" +
-                       '    "#include <iostream>\\n"' + "`n" +
-                       '    "int main() { std::cout << \\"BFF test\\" << std::endl; return 0; }")' + "`n" +
-                       '' + "`n" +
-                       'add_executable(simple_test simple_test.cpp)' + "`n" +
-                       '' + "`n" +
-                       '# Now try to build BFF core without SuiteSparse linkage' + "`n" +
-                       'set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DBFF_NO_SUITESPARSE")' + "`n" +
-                       '' + "`n" +
-                       'file(GLOB_RECURSE BFF_SRC ${CMAKE_SOURCE_DIR}/src/*.cpp)' + "`n" +
-                       '' + "`n" +
-                       'if(BFF_SRC)' + "`n" +
-                       '    add_library(bff_core OBJECT ${BFF_SRC})' + "`n" +
-                       '    target_compile_definitions(bff_core PRIVATE BFF_NO_SUITESPARSE)' + "`n" +
-                       'endif()' + "`n" +
-                       '' + "`n" +
-                       '# Try to build GUI if it exists' + "`n" +
-                       'file(GLOB_RECURSE GUI_SRC ${CMAKE_SOURCE_DIR}/apps/*.cpp)' + "`n" +
-                       'if(GUI_SRC AND TARGET bff_core)' + "`n" +
-                       '    add_executable(bff_gui ${GUI_SRC})' + "`n" +
-                       '    target_link_libraries(bff_gui bff_core)' + "`n" +
-                       'endif()'
-        
-        Set-Content -Path "CMakeLists.txt" -Value $cmakeContent
-        
-        Write-Host "Configuring..."
-        cmake .. -G "Visual Studio 17 2022" -A x64
-        
-        if ($LASTEXITCODE -eq 0) {
-            Write-Host "Building..."
-            cmake --build . --config Release --parallel 4
-            
-            # Check for output
-            Write-Host "`nBuild output:"
-            Get-ChildItem -Path . -Recurse -Filter "*.exe" -ErrorAction SilentlyContinue | Where-Object {
-                $_.FullName -notmatch "CompilerId"
-            } | ForEach-Object {
-                Write-Host "  $($_.Name)"
-            }
-        }
-    
-    - name: Package Results
+        # Configure using the Visual Studio generator. This mimics the CMake GUI step.
+        # -DWITH_OPENBLAS=OFF : We use the pre-compiled BLAS/LAPACK DLLs included in the helper project.
+        # Setting a local install prefix avoids permission issues.
+        cmake .. -G "Visual Studio 17 2022" -A x64 `
+                 -DCMAKE_INSTALL_PREFIX="$env:GITHUB_WORKSPACE\SuiteSparseInstall" `
+                 -DWITH_OPENBLAS=OFF `
+                 -DCMAKE_BUILD_TYPE=Release
+
+    - name: Build & Install SuiteSparse Libraries
       shell: powershell
       run: |
-        Write-Host "Packaging results..."
-        
-        New-Item -ItemType Directory -Force -Path "artifacts"
-        
-        # Collect any executables
-        if (Test-Path "build") {
-            $exes = Get-ChildItem -Path "build" -Recurse -Filter "*.exe" -ErrorAction SilentlyContinue | Where-Object {
-                $_.FullName -notmatch "CompilerId"
-            }
-            
-            if ($exes) {
-                foreach ($exe in $exes) {
-                    Copy-Item -Path $exe.FullName -Destination "artifacts\" -Force
-                    Write-Host "Packaged: $($exe.Name)"
-                }
-            }
+        cd "$env:GITHUB_WORKSPACE\SuiteSparseBuild\build"
+        # Build the special 'INSTALL' project in Release mode.
+        # This is the critical step that copies headers and .lib files to the INSTALL_PREFIX.
+        msbuild INSTALL.vcxproj /p:Configuration=Release /p:Platform=x64 /m
+
+        # Verify the core output exists
+        if (-not (Test-Path "$env:GITHUB_WORKSPACE\SuiteSparseInstall\lib\SuiteSparseConfig.cmake")) {
+            Write-Error "FATAL: SuiteSparseConfig.cmake was not generated. Build failed."
+            exit 1
         }
-        
-        # Create a summary
-        $summary = 'BFF Build Attempt Summary' + "`n" +
-                  '========================' + "`n" +
-                  '' + "`n" +
-                  'This build attempted to use stub implementations for:' + "`n" +
-                  '1. SuiteSparse (cholmod.h with stub functions)' + "`n" +
-                  '2. BLAS (cblas.h stub)' + "`n" +
-                  '3. Rect.h (minimal implementation)' + "`n" +
-                  '' + "`n" +
-                  'The BFF source was patched to:' + "`n" +
-                  '- Use stub cholmod functions' + "`n" +
-                  '- Comment out BLAS function calls' + "`n" +
-                  '- Define BFF_NO_SUITESPARSE if needed' + "`n" +
-                  '' + "`n" +
-                  'For a fully functional build, you need:' + "`n" +
-                  '1. Real SuiteSparse libraries for Windows' + "`n" +
-                  '2. BLAS/LAPACK library (like OpenBLAS)' + "`n" +
-                  '3. Proper Rect.h implementation' + "`n" +
-                  '' + "`n" +
-                  'Check the build logs for specific errors.'
-        
-        Set-Content -Path "artifacts\BUILD_SUMMARY.txt" -Value $summary
-        
-        Write-Host "`nArtifacts:"
-        Get-ChildItem -Path "artifacts" -ErrorAction SilentlyContinue
-    
-    - name: Upload Artifacts
+        Write-Host "SUCCESS: SuiteSparse installed to $env:GITHUB_WORKSPACE\SuiteSparseInstall"
+
+    # =============================================
+    # PHASE 2: BUILD BFF USING THE COMPILED SUITESPARSE
+    # =============================================
+    - name: Configure BFF with CMake (Command Line)
+      shell: powershell
+      run: |
+        $BFF_SOURCE = "$env:GITHUB_WORKSPACE"
+        $BFF_BUILD = "$env:GITHUB_WORKSPACE\bff_build"
+        $SS_INSTALL = "$env:GITHUB_WORKSPACE\SuiteSparseInstall"
+        $SS_ROOT = "$env:GITHUB_WORKSPACE\SuiteSparseBuild"
+
+        New-Item -ItemType Directory -Force -Path $BFF_BUILD
+        cd $BFF_BUILD
+
+        # This is the most critical part: Setting every CMake variable manually via -D flags.
+        # We are replicating what the GUI does. Paths must use forward slashes for CMake.
+        cmake $BFF_SOURCE -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release `
+            # --- Point to our built SuiteSparse installation ---
+            -DSuiteSparse_DIR="$SS_INSTALL/lib/cmake/suitesparse-5.4.0/" `
+            -DSuiteSparse_CHOLMOD_DIR="$SS_INSTALL/lib" `
+            -DSuiteSparse_CHOLMOD_INCLUDE_DIR="$SS_INSTALL/include/suitesparse" `
+            -DSuiteSparse_CHOLMOD_LIBRARY_DEBUG="$SS_INSTALL/lib/libcholmod.lib" `
+            -DSuiteSparse_CHOLMOD_LIBRARY_RELEASE="$SS_INSTALL/lib/libcholmod.lib" `
+            # --- Repeat for other required SuiteSparse components ---
+            -DSuiteSparse_AMD_LIBRARY_RELEASE="$SS_INSTALL/lib/libamd.lib" `
+            -DSuiteSparse_CAMD_LIBRARY_RELEASE="$SS_INSTALL/lib/libcamd.lib" `
+            -DSuiteSparse_COLAMD_LIBRARY_RELEASE="$SS_INSTALL/lib/libcolamd.lib" `
+            -DSuiteSparse_CCOLAMD_LIBRARY_RELEASE="$SS_INSTALL/lib/libccolamd.lib" `
+            -DSuiteSparse_METIS_LIBRARY_RELEASE="$SS_INSTALL/lib/libmetis.lib" `
+            -DSuiteSparse_SUITESPARSECONFIG_LIBRARY_RELEASE="$SS_INSTALL/lib/libsuitesparseconfig.lib" `
+            # --- BLAS and LAPACK from the helper project ---
+            -DSuiteSparse_BLAS_LIBRARY="$SS_ROOT/lapack_windows/x64/libblas.lib" `
+            -DSuiteSparse_LAPACK_LIBRARY="$SS_ROOT/lapack_windows/x64/liblapack.lib" `
+            # --- OpenBLAS provided by BFF's deps ---
+            -DOPENBLAS_INCLUDE_DIR="$BFF_SOURCE/deps/openblas-windows/include" `
+            -DOPENBLAS_LIB_DIR="$BFF_SOURCE/deps/openblas-windows/lib" `
+            -DOPENBLAS_LIB="$BFF_SOURCE/deps/openblas-windows/lib/libopenblas.lib"
+
+        Write-Host "BFF CMake configuration complete."
+
+    - name: Build BFF Command Line Target
+      shell: powershell
+      run: |
+        cd "$env:GITHUB_WORKSPACE\bff_build"
+        # Build the specific target mentioned in the instructions.
+        msbuild bff-command-line.vcxproj /p:Configuration=Release /p:Platform=x64 /m /v:minimal
+
+    # =============================================
+    # PHASE 3: COLLECT AND UPLOAD ARTIFACTS
+    # =============================================
+    - name: Prepare Artifacts
+      shell: powershell
+      run: |
+        $ARTIFACT_DIR = "$env:GITHUB_WORKSPACE\artifacts"
+        New-Item -ItemType Directory -Force -Path $ARTIFACT_DIR
+
+        # 1. Copy the main executable
+        Copy-Item -Path "$env:GITHUB_WORKSPACE\bff_build\Release\bff-command-line.exe" -Destination $ARTIFACT_DIR -ErrorAction SilentlyContinue
+
+        # 2. Copy all required DLLs for a portable package.
+        #    SuiteSparse's BLAS/LAPACK DLLs
+        Copy-Item -Path "$env:GITHUB_WORKSPACE\SuiteSparseBuild\lapack_windows\x64\*.dll" -Destination $ARTIFACT_DIR
+        #    OpenBLAS DLL (if it exists as a DLL)
+        Copy-Item -Path "$env:GITHUB_WORKSPACE\deps\openblas-windows\lib\*.dll" -Destination $ARTIFACT_DIR -ErrorAction SilentlyContinue
+        #    Potential MSVC Runtime DLLs (may be needed on clean systems)
+        #    (This step might need refinement based on the final linker output).
+
+        # 3. Create a simple README
+        @"
+        BFF (Boundary First Flattening) v1.6 - Windows Command Line Build
+        =================================================================
+        Built via GitHub Actions on $(Get-Date -Format 'yyyy-MM-dd').
+
+        Contents:
+        1. 'bff-command-line.exe' : The main application.
+        2. *.dll : Required runtime libraries (BLAS, LAPACK, OpenBLAS).
+
+        To run, ensure all files are in the same directory and execute:
+            .\bff-command-line.exe --help
+        "@ | Out-File -FilePath "$ARTIFACT_DIR\README.txt" -Encoding UTF8
+
+        Write-Host "Artifacts prepared in $ARTIFACT_DIR"
+        Get-ChildItem -Path $ARTIFACT_DIR
+
+    - name: Upload Build Artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: BFF-Windows-Build
-        path: artifacts/
-        if-no-files-found: warn
+        name: BFF-Windows-CLI
+        path: ${{ github.workspace }}/artifacts/
+        if-no-files-found: error
