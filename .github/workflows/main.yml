@@ -59,7 +59,7 @@ jobs:
           
           cmake --build . --config Release --target install --parallel
 
-       - name: Set SuiteSparse path
+      - name: Set SuiteSparse path
         id: set-output
         run: |
           # Navigate back to the root of the workflow workspace
@@ -67,7 +67,7 @@ jobs:
           # The 'install' directory is now one level up from suitesparse-build
           $path = (Resolve-Path "install").Path
           echo "suitesparse-path=$path" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          
+
       - name: Upload SuiteSparse artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -75,7 +75,7 @@ jobs:
           path: |
             install/
             !install/**/*.pdb
-
+            
   build-bff:
     name: Build BFF
     runs-on: windows-latest
