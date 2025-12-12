@@ -82,19 +82,6 @@ jobs:
         Write-Host "Config directory contents:"
         Get-ChildItem -Path $ConfigDir
         
-        # First, let's patch BFF's CMakeLists.txt to use the config file properly
-        # We'll create a modified version or set the right CMake variables
-        Write-Host "Creating modified CMakeLists.txt approach..."
-        
-        # Create a build script that sets the right variables
-        $BuildScript = @"
-# Set SuiteSparse_DIR to point to the config directory
-set(SuiteSparse_DIR "$ConfigDir")
-message(STATUS "Setting SuiteSparse_DIR to: $\{SuiteSparse_DIR\}")
-
-# Now run the original CMakeLists.txt
-"@
-        
         # Build BFF with the config file approach
         Write-Host "Configuring BFF with CMake..."
         cmake -B $BFFBuildDir -S . `
@@ -120,42 +107,38 @@ message(STATUS "Setting SuiteSparse_DIR to: $\{SuiteSparse_DIR\}")
         # Backup the original file
         Copy-Item "cmake/FindSuiteSparse.cmake" "cmake/FindSuiteSparse.cmake.backup"
         
+        # Create the patch content using string concatenation
+        $patch = "# === PATCH FOR WINDOWS BUILD ===" + "`n" +
+                 "# Manually set paths for Windows build" + "`n" +
+                 "if(WIN32)" + "`n" +
+                 "    set(SuiteSparse_FOUND ON)" + "`n" +
+                 "    set(SuiteSparse_INCLUDE_DIRS " + '"' + "$pwd\suitesparse-build\install\include" + '"' + ")" + "`n" +
+                 "    set(SuiteSparse_LIBRARY_DIRS " + '"' + "$pwd\suitesparse-build\install\lib" + '"' + ")" + "`n" +
+                 "    " + "`n" +
+                 "    # Find all libraries in the lib directory" + "`n" +
+                 '    file(GLOB SuiteSparse_LIBS "' + "$pwd\suitesparse-build\install\lib/*.lib" + '")' + "`n" +
+                 "    set(SuiteSparse_LIBRARIES " + '${SuiteSparse_LIBS})' + "`n" +
+                 "    " + "`n" +
+                 "    # Set individual component variables" + "`n" +
+                 "    set(SuiteSparse_AMD_FOUND ON)" + "`n" +
+                 "    set(SuiteSparse_CAMD_FOUND ON)" + "`n" +
+                 "    set(SuiteSparse_COLAMD_FOUND ON)" + "`n" +
+                 "    set(SuiteSparse_CCOLAMD_FOUND ON)" + "`n" +
+                 "    set(SuiteSparse_CHOLMOD_FOUND ON)" + "`n" +
+                 "    set(SuiteSparse_SUITESPARSECONFIG_FOUND ON)" + "`n" +
+                 "    " + "`n" +
+                 "    message(STATUS " + '"Using patched SuiteSparse paths for Windows"' + ")" + "`n" +
+                 "    message(STATUS " + '"Include dirs: ${SuiteSparse_INCLUDE_DIRS}"' + ")" + "`n" +
+                 "    message(STATUS " + '"Library dirs: ${SuiteSparse_LIBRARY_DIRS}"' + ")" + "`n" +
+                 "endif()" + "`n" +
+                 "# === END PATCH ==="
+        
         # Read the file content
         $content = Get-Content "cmake/FindSuiteSparse.cmake" -Raw
         
-        # Add a patch to help find our SuiteSparse installation
-        $patch = @"
-
-# === PATCH FOR WINDOWS BUILD ===
-# Manually set paths for Windows build
-if(WIN32)
-    set(SuiteSparse_FOUND ON)
-    set(SuiteSparse_INCLUDE_DIRS "$pwd\suitesparse-build\install\include")
-    set(SuiteSparse_LIBRARY_DIRS "$pwd\suitesparse-build\install\lib")
-    
-    # Find all libraries in the lib directory
-    file(GLOB SuiteSparse_LIBS "$pwd\suitesparse-build\install\lib/*.lib")
-    set(SuiteSparse_LIBRARIES $\{SuiteSparse_LIBS\})
-    
-    # Set individual component variables
-    set(SuiteSparse_AMD_FOUND ON)
-    set(SuiteSparse_CAMD_FOUND ON)
-    set(SuiteSparse_COLAMD_FOUND ON)
-    set(SuiteSparse_CCOLAMD_FOUND ON)
-    set(SuiteSparse_CHOLMOD_FOUND ON)
-    set(SuiteSparse_SUITESPARSECONFIG_FOUND ON)
-    
-    message(STATUS "Using patched SuiteSparse paths for Windows")
-    message(STATUS "Include dirs: $\{SuiteSparse_INCLUDE_DIRS\}")
-    message(STATUS "Library dirs: $\{SuiteSparse_LIBRARY_DIRS\}")
-endif()
-# === END PATCH ===
-
-"@
-        
         # Insert the patch after the initial comments
         $newContent = $content -replace "(# Detect SuiteSparse libraries:)", "$1`n`n$patch"
-        Set-Content -Path "cmake/FindSuiteSparse.cmake" -Value $newContent
+        Set-Content -Path "cmake/FindSuiteSparse.cmake" -Value $newContent -Encoding UTF8
         
         Write-Host "FindSuiteSparse.cmake patched successfully"
 
@@ -177,74 +160,6 @@ endif()
         Write-Host "Building BFF..."
         cmake --build $BFFBuildDir --config Release --parallel
 
-    - name: Alternative: Direct compilation approach
-      shell: pwsh
-      if: failure()
-      run: |
-        Write-Host "Trying direct compilation approach..."
-        cd "${{ github.workspace }}"
-        
-        $SuiteSparseDir = "$pwd\suitesparse-build\install"
-        $BuildDir = "bff-direct-build"
-        
-        # Create a simple CMakeLists.txt that directly links to SuiteSparse
-        $SimpleCMake = @"
-cmake_minimum_required(VERSION 3.1.0)
-project(bff)
-
-option(BFF_BUILD_CLI "Build BFF command line" ON)
-option(BFF_BUILD_GUI "Build BFF GUI" ON)
-
-set(CMAKE_CXX_STANDARD 11)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-
-# Set SuiteSparse paths directly
-set(SUITESPARSE_INCLUDE_DIR "$SuiteSparseDir/include")
-set(SUITESPARSE_LIB_DIR "$SuiteSparseDir/lib")
-
-# Find all SuiteSparse libraries
-file(GLOB SUITESPARSE_LIBS "$\{SUITESPARSE_LIB_DIR\}/*.lib")
-
-message(STATUS "SuiteSparse include dir: $\{SUITESPARSE_INCLUDE_DIR\}")
-message(STATUS "SuiteSparse lib dir: $\{SUITESPARSE_LIB_DIR\}")
-message(STATUS "Found $\{SUITESPARSE_LIBS\} libraries")
-
-# bff lib
-include_directories($\{SUITESPARSE_INCLUDE_DIR\})
-include_directories("deps/rectangle-bin-pack")
-include_directories("include")
-
-file(GLOB BFF_SOURCES "deps/rectangle-bin-pack/GuillotineBinPack.cpp"
-                      "deps/rectangle-bin-pack/SkylineBinPack.cpp"
-                      "deps/rectangle-bin-pack/Rect.cpp"
-                      "src/linear-algebra/*.cpp"
-                      "src/mesh/*.cpp"
-                      "src/project/*.cpp")
-
-# create bff static library
-add_library(bff $\{BFF_SOURCES\})
-target_link_libraries(bff $\{SUITESPARSE_LIBS\})
-
-# Add executable targets if needed
-if(BFF_BUILD_GUI)
-    # GUI specific source files would go here
-    message(STATUS "GUI build enabled")
-endif()
-"@
-        
-        # Create a temporary CMakeLists.txt
-        Set-Content -Path "CMakeLists-simple.txt" -Value $SimpleCMake
-        
-        # Build with the simple CMakeLists
-        cmake -B $BuildDir -S . `
-          -DCMAKE_BUILD_TYPE=Release `
-          -DBFF_BUILD_GUI=ON `
-          -G "Visual Studio 17 2022" `
-          -A x64 `
-          -DCMAKE_MODULE_PATH="$pwd/cmake"
-        
-        cmake --build $BuildDir --config Release --parallel
-
     - name: Collect and package artifacts
       shell: pwsh
       run: |
@@ -256,8 +171,7 @@ endif()
         # Check multiple possible build directories
         $BuildDirs = @(
             "bff-build",
-            "bff-build-patched", 
-            "bff-direct-build"
+            "bff-build-patched"
         )
         
         foreach ($buildDir in $BuildDirs) {
@@ -299,7 +213,26 @@ endif()
             }
         }
         
-        # Create README
+        # Also copy any OpenGL or other runtime DLLs that might be needed
+        # Copy common runtime DLLs that might be needed
+        $runtimeDlls = @(
+            "vcruntime140.dll",
+            "vcruntime140_1.dll",
+            "msvcp140.dll",
+            "concrt140.dll"
+        )
+        
+        # These are typically in the system directory
+        $systemDir = "$env:SystemRoot\System32"
+        foreach ($dllName in $runtimeDlls) {
+            $dllPath = "$systemDir\$dllName"
+            if (Test-Path $dllPath) {
+                Copy-Item $dllPath -Destination $DistDir
+                Write-Host "Copied runtime DLL: $dllName"
+            }
+        }
+        
+        # Create README using string concatenation
         $ReadmeContent = "Boundary First Flattening (BFF) v1.6 Windows Build" + "`n" + 
                          "=============================================" + "`n" + 
                          "Built: $(Get-Date -Format 'yyyy-MM-dd HH:mm')" + "`n" + 
@@ -312,16 +245,18 @@ endif()
                          "REQUIRED DLLs included:" + "`n" + 
                          "- SuiteSparse libraries" + "`n" + 
                          "- LAPACK/BLAS runtime" + "`n" + 
+                         "- Visual C++ Runtime" + "`n" + 
                          "" + "`n" + 
                          "If you get DLL errors, install Visual C++ Redistributable:" + "`n" + 
                          "https://aka.ms/vs/17/release/vc_redist.x64.exe"
         
-        Set-Content -Path "$DistDir\README.txt" -Value $ReadmeContent
+        Set-Content -Path "$DistDir\README.txt" -Value $ReadmeContent -Encoding UTF8
         
         # Create ZIP archive
-        Compress-Archive -Path "$DistDir\*" -DestinationPath "BFF-Windows-v1.6.zip"
+        Compress-Archive -Path "$DistDir\*" -DestinationPath "BFF-Windows-v1.6.zip" -Force
         
         Write-Host "Artifacts prepared in $DistDir"
+        Write-Host "ZIP archive created: BFF-Windows-v1.6.zip"
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
