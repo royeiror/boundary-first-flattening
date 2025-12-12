@@ -62,22 +62,30 @@ jobs:
         $InstallPath = "$env:GITHUB_WORKSPACE\SuiteSparseInstall"
         Write-Host "Verifying installation in: $InstallPath"
         
-        $ConfigFile = Get-ChildItem -Path $InstallPath -Recurse -Filter "SuiteSparseConfig.cmake" -ErrorAction SilentlyContinue | Select-Object -First 1
+        # FIXED: Look for EITHER SuiteSparseConfig.cmake OR suitesparse-config.cmake
+        $ConfigFile = Get-ChildItem -Path $InstallPath -Recurse -Filter "*config*.cmake" -ErrorAction SilentlyContinue | Select-Object -First 1
         
         if ($ConfigFile) {
-            Write-Host "SUCCESS: Found SuiteSparseConfig.cmake at $($ConfigFile.FullName)"
+            Write-Host "SUCCESS: Found CMake config file at $($ConfigFile.FullName)"
+            
+            # Extract the directory containing the config file
+            $ConfigDir = $ConfigFile.DirectoryName
+            Write-Host "Config directory: $ConfigDir"
+            
+            # Set the correct path for Phase 2
             echo "SUITESPARSE_INSTALL_DIR=$InstallPath" >> $env:GITHUB_ENV
+            echo "SUITESPARSE_CONFIG_DIR=$ConfigDir" >> $env:GITHUB_ENV
+            
+            # Show some key files for verification
+            Write-Host "Key installed files:"
+            Get-ChildItem -Path "$InstallPath/lib" -Filter "*.lib" | Select-Object -First 10
+            Get-ChildItem -Path "$InstallPath/include/suitesparse" -Filter "*.h" | Select-Object -First 10
+            
         } else {
-            $FallbackPath = "$env:GITHUB_WORKSPACE\SuiteSparseBuild\build\install"
-            Write-Host "Checking fallback path: $FallbackPath"
-            $ConfigFile = Get-ChildItem -Path $FallbackPath -Recurse -Filter "SuiteSparseConfig.cmake" -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($ConfigFile) {
-                Write-Host "SUCCESS: Found SuiteSparseConfig.cmake at $($ConfigFile.FullName)"
-                echo "SUITESPARSE_INSTALL_DIR=$FallbackPath" >> $env:GITHUB_ENV
-            } else {
-                Write-Error "FATAL: SuiteSparseConfig.cmake was not generated."
-                exit 1
-            }
+            Write-Error "FATAL: No CMake config file (*config*.cmake) was found in $InstallPath"
+            Write-Host "Directory contents:"
+            Get-ChildItem -Path $InstallPath -Recurse | Where-Object { $_.Name -match "cmake|lib" } | Select-Object FullName
+            exit 1
         }
 
     # =============================================
