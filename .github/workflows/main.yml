@@ -47,7 +47,7 @@ jobs:
                  -DCMAKE_INSTALL_PREFIX="$env:GITHUB_WORKSPACE\SuiteSparseInstall" `
                  -DWITH_OPENBLAS=OFF `
                  -DCMAKE_BUILD_TYPE=Release
-
+                 
     - name: Build and Install SuiteSparse Libraries
       shell: powershell
       run: |
