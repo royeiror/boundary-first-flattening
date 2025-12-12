@@ -142,12 +142,6 @@ jobs:
           name: suitesparse-windows
           path: suitesparse-deps
 
-      - name: Debug artifact structure
-        run: |
-          Write-Host "=== Checking artifact structure ==="
-          Get-ChildItem -Path "suitesparse-deps" -Recurse | Select-Object FullName
-          Write-Host "==================================="
-
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v1
 
@@ -156,12 +150,14 @@ jobs:
         with:
           cmake-version: "3.25.x"
 
-      - name: Install dependencies
+      - name: Install dependencies with BLAS headers
         run: |
-          choco install eigen openblas -y
+          choco install eigen -y
+          # Install OpenBLAS with development headers
+          choco install openblas -y --installargs "ADDLOCAL=headers"
           choco install vcpkg -y
           vcpkg integrate install
-          vcpkg install glew freeglut libpng tiff --triplet x64-windows
+          vcpkg install glew freeglut libpng tiff cblas lapack --triplet x64-windows
 
       - name: Find and Configure SuiteSparse
         run: |
@@ -242,47 +238,93 @@ jobs:
           $content = $content -replace $pattern, $replacement
           Set-Content -Path "CMakeLists.txt" -Value $content
 
-      - name: Configure BFF
+      - name: Configure BFF with BLAS support
         run: |
           mkdir build
           cd build
           
           $SUITESPARSE_DIR = $env:SUITESPARSE_DIR
           
-          # Find OpenBLAS from Chocolatey
+          # BLAS/LAPACK paths
           $OPENBLAS_DIR = "C:\tools\openblas"
+          $VCPKG_DIR = "C:\vcpkg\installed\x64-windows"
           
-          # Important: Tell CMake to look for cholmod.h in suitesparse-deps/include/suitesparse/
+          # Check for cblas.h
+          Write-Host "Checking for cblas.h..."
+          $cblasPath1 = Join-Path $OPENBLAS_DIR "include\cblas.h"
+          $cblasPath2 = Join-Path $VCPKG_DIR "include\cblas.h"
+          
+          if (Test-Path $cblasPath1) {
+            Write-Host "✓ Found cblas.h at: $cblasPath1"
+          } elseif (Test-Path $cblasPath2) {
+            Write-Host "✓ Found cblas.h at: $cblasPath2"
+          } else {
+            Write-Host "✗ cblas.h not found"
+            Write-Host "Searching for cblas.h..."
+            Get-ChildItem -Path "C:\" -Filter "cblas.h" -Recurse -ErrorAction SilentlyContinue | Select-Object FullName
+          }
+          
           cmake .. `
             -DCMAKE_BUILD_TYPE=Release `
-            -DCMAKE_PREFIX_PATH="$SUITESPARSE_DIR" `
-            -DCMAKE_INCLUDE_PATH="$SUITESPARSE_DIR/include;$SUITESPARSE_DIR/include/suitesparse" `
-            -DCMAKE_LIBRARY_PATH="$SUITESPARSE_DIR/lib" `
+            -DCMAKE_PREFIX_PATH="$SUITESPARSE_DIR;$VCPKG_DIR;$OPENBLAS_DIR" `
+            -DCMAKE_INCLUDE_PATH="$SUITESPARSE_DIR/include;$SUITESPARSE_DIR/include/suitesparse;$OPENBLAS_DIR/include;$VCPKG_DIR/include" `
+            -DCMAKE_LIBRARY_PATH="$SUITESPARSE_DIR/lib;$OPENBLAS_DIR/lib;$VCPKG_DIR/lib" `
             -DEigen3_DIR="C:\tools\eigen\share\eigen3\cmake" `
             -DOpenBLAS_DIR="$OPENBLAS_DIR" `
             -DBUILD_GUI=ON `
             -DBUILD_CLI=ON `
             -DBUILD_WITH_OPENMP=ON `
             -DCMAKE_WINDOWS_EXPORT_ALL_SYMBOLS=ON `
+            -DBLA_VENDOR=OpenBLAS `
+            -DLAPACK_NAMES="lapack" `
+            -DBLAS_NAMES="openblas" `
             -G "Visual Studio 17 2022" `
             -A x64
 
-      - name: Build BFF
+      - name: Build BFF without GUI first
         run: |
           cd build
-          cmake --build . --config Release --parallel --verbose
+          # First build the core library without GUI to isolate issues
+          cmake --build . --config Release --target bff --parallel --verbose
+          
+          # Check if bff.lib was created
+          Write-Host "Checking if bff.lib was built..."
+          if (Test-Path "Release\bff.lib") {
+            Write-Host "✓ bff.lib built successfully"
+          } else {
+            Write-Host "✗ bff.lib not found"
+            exit 1
+          }
+
+      - name: Build GUI components
+        run: |
+          cd build
+          # Now build the GUI components
+          cmake --build . --config Release --target bff-viewer --parallel --verbose
+
+      - name: Build CLI components
+        run: |
+          cd build
+          # Build CLI if needed
+          cmake --build . --config Release --target bff-command-line --parallel --verbose
 
       - name: Collect DLLs and package
         run: |
           mkdir -p bff-package
           
-          # Copy executables
-          Copy-Item "build/Release/BFF_GUI.exe" -Destination "bff-package/" -ErrorAction SilentlyContinue
-          Copy-Item "build/Release/BFF_CLI.exe" -Destination "bff-package/" -ErrorAction SilentlyContinue
+          # Copy executables (check different possible names)
+          $exeNames = @("bff-viewer.exe", "BFF_GUI.exe", "bff-command-line.exe", "BFF_CLI.exe")
+          foreach ($exe in $exeNames) {
+            $exePath = Join-Path "build\Release" $exe
+            if (Test-Path $exePath) {
+              Write-Host "✓ Found executable: $exe"
+              Copy-Item $exePath -Destination "bff-package/" -ErrorAction SilentlyContinue
+            }
+          }
           
           # Check what executables were built
           Write-Host "Checking built executables..."
-          Get-ChildItem "build/Release/*.exe" | Select-Object Name
+          Get-ChildItem "build\Release\*.exe" | Select-Object Name
           
           # Get SuiteSparse directory from environment
           $SUITESPARSE_DIR = $env:SUITESPARSE_DIR
@@ -290,6 +332,12 @@ jobs:
           # Copy SuiteSparse DLLs
           if (Test-Path "$SUITESPARSE_DIR/bin/*.dll") {
             Copy-Item "$SUITESPARSE_DIR/bin/*.dll" -Destination "bff-package/" -ErrorAction SilentlyContinue
+          }
+          
+          # Copy OpenBLAS DLLs
+          $openblasDll = "C:\tools\openblas\bin\libopenblas.dll"
+          if (Test-Path $openblasDll) {
+            Copy-Item $openblasDll -Destination "bff-package/" -ErrorAction SilentlyContinue
           }
           
           # Copy common runtime DLLs
@@ -301,10 +349,17 @@ jobs:
             }
           }
           
-          # Also copy OpenBLAS DLLs
-          $openblasPath = "C:\tools\openblas\bin\libopenblas.dll"
-          if (Test-Path $openblasPath) {
-            Copy-Item $openblasPath -Destination "bff-package/" -ErrorAction SilentlyContinue
+          # Copy vcpkg DLLs
+          $vcpkgBin = "C:\vcpkg\installed\x64-windows\bin"
+          if (Test-Path $vcpkgBin) {
+            # Copy common graphics DLLs
+            $graphicsDlls = @("glew32.dll", "freeglut.dll", "libpng16.dll", "tiff.dll", "zlib1.dll")
+            foreach ($dll in $graphicsDlls) {
+              $dllPath = Join-Path $vcpkgBin $dll
+              if (Test-Path $dllPath) {
+                Copy-Item $dllPath -Destination "bff-package/" -ErrorAction SilentlyContinue
+              }
+            }
           }
           
           # Create README
@@ -312,8 +367,8 @@ jobs:
             '=================================================\n' +
             '\n' +
             'This package contains:\n' +
-            '1. BFF_GUI.exe - The graphical user interface\n' +
-            '2. BFF_CLI.exe - Command line interface (if available)\n' +
+            '1. bff-viewer.exe - The graphical user interface\n' +
+            '2. bff-command-line.exe - Command line interface\n' +
             '3. All required DLL dependencies\n' +
             '\n' +
             'Requirements:\n' +
@@ -321,7 +376,7 @@ jobs:
             '- Visual C++ Redistributable 2022\n' +
             '\n' +
             'Usage:\n' +
-            '1. Double-click BFF_GUI.exe to launch the application\n' +
+            '1. Double-click bff-viewer.exe to launch the application\n' +
             '2. Use File menu to open OBJ files\n' +
             '\n' +
             'Note: This is an automated build from GitHub Actions.\n'
