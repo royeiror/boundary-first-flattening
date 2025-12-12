@@ -62,9 +62,10 @@ jobs:
       - name: Set SuiteSparse path
         id: set-output
         run: |
-          # Navigate back to the root of the workflow workspace
-          cd $env:GITHUB_WORKSPACE
-          # The 'install' directory is now one level up from suitesparse-build
+          # First navigate back to the suitesparse-build directory
+          cd suitesparse-build
+          # Now go up one level to find the install directory
+          cd ..
           $path = (Resolve-Path "install").Path
           echo "suitesparse-path=$path" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
