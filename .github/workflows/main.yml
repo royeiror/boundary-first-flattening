@@ -244,40 +244,26 @@ jobs:
           cd build
           
           $SUITESPARSE_DIR = $env:SUITESPARSE_DIR
-          
-          # BLAS/LAPACK paths
           $OPENBLAS_DIR = "C:\tools\openblas"
           $VCPKG_DIR = "C:\vcpkg\installed\x64-windows"
           
-          # Check for cblas.h
-          Write-Host "Checking for cblas.h..."
-          $cblasPath1 = Join-Path $OPENBLAS_DIR "include\cblas.h"
-          $cblasPath2 = Join-Path $VCPKG_DIR "include\cblas.h"
+          # CRITICAL: Add the path to the OpenBLAS headers included with BFF
+          $BFF_OPENBLAS_INCLUDE = "$env:GITHUB_WORKSPACE\deps\openblas-windows\include"
           
-          if (Test-Path $cblasPath1) {
-            Write-Host "✓ Found cblas.h at: $cblasPath1"
-          } elseif (Test-Path $cblasPath2) {
-            Write-Host "✓ Found cblas.h at: $cblasPath2"
-          } else {
-            Write-Host "✗ cblas.h not found"
-            Write-Host "Searching for cblas.h..."
-            Get-ChildItem -Path "C:\" -Filter "cblas.h" -Recurse -ErrorAction SilentlyContinue | Select-Object FullName
-          }
+          Write-Host "Configuring with BFF's OpenBLAS includes at: $BFF_OPENBLAS_INCLUDE"
           
           cmake .. `
             -DCMAKE_BUILD_TYPE=Release `
             -DCMAKE_PREFIX_PATH="$SUITESPARSE_DIR;$VCPKG_DIR;$OPENBLAS_DIR" `
-            -DCMAKE_INCLUDE_PATH="$SUITESPARSE_DIR/include;$SUITESPARSE_DIR/include/suitesparse;$OPENBLAS_DIR/include;$VCPKG_DIR/include" `
+            -DCMAKE_INCLUDE_PATH="$SUITESPARSE_DIR/include;$SUITESPARSE_DIR/include/suitesparse;$BFF_OPENBLAS_INCLUDE;$OPENBLAS_DIR/include;$VCPKG_DIR/include" `
             -DCMAKE_LIBRARY_PATH="$SUITESPARSE_DIR/lib;$OPENBLAS_DIR/lib;$VCPKG_DIR/lib" `
             -DEigen3_DIR="C:\tools\eigen\share\eigen3\cmake" `
+            -DOpenBLAS_INCLUDE_DIR="$BFF_OPENBLAS_INCLUDE" `
             -DOpenBLAS_DIR="$OPENBLAS_DIR" `
             -DBUILD_GUI=ON `
             -DBUILD_CLI=ON `
             -DBUILD_WITH_OPENMP=ON `
             -DCMAKE_WINDOWS_EXPORT_ALL_SYMBOLS=ON `
-            -DBLA_VENDOR=OpenBLAS `
-            -DLAPACK_NAMES="lapack" `
-            -DBLAS_NAMES="openblas" `
             -G "Visual Studio 17 2022" `
             -A x64
 
