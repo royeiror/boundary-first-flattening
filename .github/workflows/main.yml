@@ -246,26 +246,53 @@ jobs:
           $SUITESPARSE_DIR = $env:SUITESPARSE_DIR
           $OPENBLAS_DIR = "C:\tools\openblas"
           $VCPKG_DIR = "C:\vcpkg\installed\x64-windows"
-          
-          # CRITICAL: Add the path to the OpenBLAS headers included with BFF
           $BFF_OPENBLAS_INCLUDE = "$env:GITHUB_WORKSPACE\deps\openblas-windows\include"
+          $BFF_OPENBLAS_LIB = "$env:GITHUB_WORKSPACE\deps\openblas-windows\lib"
           
-          Write-Host "Configuring with BFF's OpenBLAS includes at: $BFF_OPENBLAS_INCLUDE"
+          # Verify the cblas.h file exists
+          Write-Host "Checking for cblas.h..."
+          $cblasPath = Join-Path $BFF_OPENBLAS_INCLUDE "cblas.h"
+          if (Test-Path $cblasPath) {
+            Write-Host "✓ Found cblas.h at: $cblasPath"
+          } else {
+            Write-Host "✗ cblas.h not found at expected location"
+            Write-Host "Searching for cblas.h in BFF deps..."
+            Get-ChildItem -Path "$env:GITHUB_WORKSPACE\deps" -Filter "cblas.h" -Recurse | Select-Object FullName
+            exit 1
+          }
           
+          # Verify OpenBLAS library exists
+          Write-Host "Checking for OpenBLAS library..."
+          $openblasLib = Join-Path $BFF_OPENBLAS_LIB "libopenblas.lib"
+          if (Test-Path $openblasLib) {
+            Write-Host "✓ Found OpenBLAS library at: $openblasLib"
+          } else {
+            Write-Host "✗ OpenBLAS library not found"
+            Get-ChildItem -Path $BFF_OPENBLAS_LIB -Filter "*.lib" | Select-Object Name
+          }
+          
+          # Configure with explicit paths for everything
           cmake .. `
             -DCMAKE_BUILD_TYPE=Release `
             -DCMAKE_PREFIX_PATH="$SUITESPARSE_DIR;$VCPKG_DIR;$OPENBLAS_DIR" `
             -DCMAKE_INCLUDE_PATH="$SUITESPARSE_DIR/include;$SUITESPARSE_DIR/include/suitesparse;$BFF_OPENBLAS_INCLUDE;$OPENBLAS_DIR/include;$VCPKG_DIR/include" `
-            -DCMAKE_LIBRARY_PATH="$SUITESPARSE_DIR/lib;$OPENBLAS_DIR/lib;$VCPKG_DIR/lib" `
+            -DCMAKE_LIBRARY_PATH="$SUITESPARSE_DIR/lib;$BFF_OPENBLAS_LIB;$OPENBLAS_DIR/lib;$VCPKG_DIR/lib" `
             -DEigen3_DIR="C:\tools\eigen\share\eigen3\cmake" `
             -DOpenBLAS_INCLUDE_DIR="$BFF_OPENBLAS_INCLUDE" `
-            -DOpenBLAS_DIR="$OPENBLAS_DIR" `
+            -DOpenBLAS_LIBRARY="$openblasLib" `
+            -DBLAS_INCLUDE_DIR="$BFF_OPENBLAS_INCLUDE" `
+            -DBLAS_LIBRARIES="$openblasLib" `
+            -DBLA_VENDOR=OpenBLAS `
             -DBUILD_GUI=ON `
             -DBUILD_CLI=ON `
             -DBUILD_WITH_OPENMP=ON `
             -DCMAKE_WINDOWS_EXPORT_ALL_SYMBOLS=ON `
             -G "Visual Studio 17 2022" `
             -A x64
+          
+          # Debug: Show what include paths CMake actually set
+          Write-Host "=== CMake Cache Variables ==="
+          Get-Content CMakeCache.txt | Select-String -Pattern "BLAS|OpenBLAS|INCLUDE" | Select-Object -First 20
 
       - name: Build BFF without GUI first
         run: |
