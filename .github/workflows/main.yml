@@ -356,7 +356,8 @@ jobs:
             Write-Host "✓ Found OpenBLAS library at: $openblasLib"
           } else {
             Write-Host "✗ OpenBLAS library not found at $openblasLib"
-            Write-Host "Available libraries in $BFF_OPENBLAS_LIB:"
+            # FIXED: Use ${} syntax for variable with colon
+            Write-Host "Available libraries in ${BFF_OPENBLAS_LIB}:"
             Get-ChildItem -Path $BFF_OPENBLAS_LIB -Filter "*.lib" | Select-Object Name
             # Try the OpenBLAS from chocolatey
             $chocoOpenBLAS = Join-Path $OPENBLAS_DIR "lib\libopenblas.lib"
@@ -390,6 +391,27 @@ jobs:
           # Debug: Show what BLAS libraries CMake actually found
           Write-Host "=== CMake BLAS Configuration ==="
           Get-Content CMakeCache.txt | Select-String -Pattern "BLAS|OpenBLAS" | Select-Object
+
+      - name: Copy OpenBLAS as blas.lib
+        run: |
+          # Copy libopenblas.lib to blas.lib in vcpkg directory
+          $sourceLib = "C:\tools\openblas\lib\libopenblas.lib"
+          $destLib = "C:\vcpkg\installed\x64-windows\lib\blas.lib"
+          
+          if (Test-Path $sourceLib) {
+            Copy-Item $sourceLib -Destination $destLib -Force
+            Write-Host "✓ Copied $sourceLib to $destLib"
+          } else {
+            # Try BFF's bundled OpenBLAS
+            $bffSource = "$env:GITHUB_WORKSPACE\deps\openblas-windows\lib\libopenblas.lib"
+            if (Test-Path $bffSource) {
+              Copy-Item $bffSource -Destination $destLib -Force
+              Write-Host "✓ Copied BFF's $bffSource to $destLib"
+            } else {
+              Write-Host "✗ Could not find OpenBLAS library"
+              Get-ChildItem -Path "C:\" -Filter "libopenblas.lib" -Recurse -ErrorAction SilentlyContinue | Select-Object FullName
+            }
+          }
           
       - name: Fix NanoGUI Pre-Link Error
         run: |
