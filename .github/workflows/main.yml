@@ -246,38 +246,53 @@ jobs:
           Write-Host "Patching: $DENSE_MATRIX_INL"
           
           if (Test-Path $DENSE_MATRIX_INL) {
+            # Get the absolute path to cblas.h
+            $CBLAS_PATH = Join-Path $env:GITHUB_WORKSPACE "deps\openblas-windows\include\cblas.h"
+            
+            # Convert to Windows path with backslashes and quotes
+            $CBLAS_INCLUDE = '"' + $CBLAS_PATH + '"'
+            
+            Write-Host "cblas.h location: $CBLAS_PATH"
+            
+            if (Test-Path $CBLAS_PATH) {
+              Write-Host "✓ cblas.h exists at expected location"
+            } else {
+              Write-Host "✗ cblas.h not found at expected location"
+              # List what's in the deps directory
+              Write-Host "Contents of deps directory:"
+              Get-ChildItem -Path (Join-Path $env:GITHUB_WORKSPACE "deps") -Recurse | Select-Object FullName
+              exit 1
+            }
+            
             # Read the file
             $content = Get-Content -Path $DENSE_MATRIX_INL -Raw
             
-            # Check current line 4
-            $lines = $content -split "`n"
-            Write-Host "Line 4 currently: $($lines[3])"
+            # Replace with Windows absolute path
+            $newContent = $content -replace '#include <cblas\.h>', "#include $CBLAS_INCLUDE"
+            $newContent = $newContent -replace '#include "cblas\.h"', "#include $CBLAS_INCLUDE"
             
-            # Replace the include directive
-            $newContent = $content -replace '#include <cblas\.h>', '#include "deps/openblas-windows/include/cblas.h"'
+            # Also try to fix the broken path from previous attempt
+            $newContent = $newContent -replace '#include "deps/openblas-windows/include/cblas\.h"', "#include $CBLAS_INCLUDE"
+            $newContent = $newContent -replace '#include <deps/openblas-windows/include/cblas\.h>', "#include $CBLAS_INCLUDE"
             
             if ($newContent -ne $content) {
-              Write-Host "✓ Patched cblas.h include"
+              Write-Host "✓ Patched cblas.h include with absolute path"
               Set-Content -Path $DENSE_MATRIX_INL -Value $newContent
               
               # Verify the change
               $updatedContent = Get-Content -Path $DENSE_MATRIX_INL -Raw
+              Write-Host "First 5 lines after patch:"
               $updatedLines = $updatedContent -split "`n"
-              Write-Host "Line 4 after patch: $($updatedLines[3])"
+              for ($i = 0; $i -lt 5 -and $i -lt $updatedLines.Count; $i++) {
+                Write-Host "Line $($i+1): $($updatedLines[$i])"
+              }
             } else {
               Write-Host "✗ Could not find cblas.h include to patch"
-              # Try alternative pattern
-              $newContent2 = $content -replace '#include "cblas\.h"', '#include "deps/openblas-windows/include/cblas.h"'
-              if ($newContent2 -ne $content) {
-                Write-Host "✓ Patched cblas.h include (alternative pattern)"
-                Set-Content -Path $DENSE_MATRIX_INL -Value $newContent2
-              } else {
-                Write-Host "✗ No matching include found"
-                # Show the first 10 lines to see what's there
-                Write-Host "First 10 lines of file:"
-                for ($i = 0; $i -lt 10 -and $i -lt $lines.Count; $i++) {
-                  Write-Host "Line $($i+1): $($lines[$i])"
-                }
+              # Show the first 10 lines to see what's there
+              Write-Host "First 10 lines of file:"
+              $lines = $content -split "`n"
+              for ($i = 0; $i -lt 10 -and $i -lt $lines.Count; $i++) {
+                Write-Host "Line $($i+1): $($lines[$i])"
               }
             }
           } else {
@@ -285,17 +300,30 @@ jobs:
             exit 1
           }
           
-          # Also check if we need to patch other files
+          # Also patch Cholesky.inl if it exists
           $CHOLESKY_INL = Join-Path $env:GITHUB_WORKSPACE "include\bff\linear-algebra\Cholesky.inl"
           if (Test-Path $CHOLESKY_INL) {
             $content = Get-Content -Path $CHOLESKY_INL -Raw
-            if ($content -match 'cblas\.h') {
-              Write-Host "Patching Cholesky.inl as well..."
-              $newContent = $content -replace '#include <cblas\.h>', '#include "deps/openblas-windows/include/cblas.h"'
-              $newContent = $newContent -replace '#include "cblas\.h"', '#include "deps/openblas-windows/include/cblas.h"'
+            $CBLAS_INCLUDE = '"' + (Join-Path $env:GITHUB_WORKSPACE "deps\openblas-windows\include\cblas.h") + '"'
+            
+            $newContent = $content -replace '#include <cblas\.h>', "#include $CBLAS_INCLUDE"
+            $newContent = $newContent -replace '#include "cblas\.h"', "#include $CBLAS_INCLUDE"
+            $newContent = $newContent -replace '#include "deps/openblas-windows/include/cblas\.h"', "#include $CBLAS_INCLUDE"
+            $newContent = $newContent -replace '#include <deps/openblas-windows/include/cblas\.h>', "#include $CBLAS_INCLUDE"
+            
+            if ($newContent -ne $content) {
               Set-Content -Path $CHOLESKY_INL -Value $newContent
               Write-Host "✓ Patched Cholesky.inl"
             }
+          }
+          
+          # Also copy cblas.h to a more accessible location as backup
+          $CBLAS_SRC = Join-Path $env:GITHUB_WORKSPACE "deps\openblas-windows\include\cblas.h"
+          $CBLAS_DEST = Join-Path $env:GITHUB_WORKSPACE "include\cblas.h"
+          
+          if (Test-Path $CBLAS_SRC) {
+            Copy-Item $CBLAS_SRC -Destination $CBLAS_DEST -Force
+            Write-Host "✓ Copied cblas.h to include directory as backup"
           }
 
       - name: Configure BFF with BLAS support
