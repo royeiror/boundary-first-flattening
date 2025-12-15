@@ -325,6 +325,77 @@ jobs:
             Copy-Item $CBLAS_SRC -Destination $CBLAS_DEST -Force
             Write-Host "✓ Copied cblas.h to include directory as backup"
           }
+
+      - name: Fix BFF DLL Export Symbols
+        run: |
+          # Check for Common.h file which likely contains the 'common' symbol
+          $COMMON_H = Join-Path $env:GITHUB_WORKSPACE "include\bff\linear-algebra\Common.h"
+          $COMMON_CPP = Join-Path $env:GITHUB_WORKSPACE "src\linear-algebra\Common.cpp"
+          
+          Write-Host "Checking for Common.h at: $COMMON_H"
+          
+          if (Test-Path $COMMON_H) {
+            $content = Get-Content -Path $COMMON_H -Raw
+            
+            # Look for the 'common' symbol declaration
+            if ($content -match 'extern.*common') {
+              Write-Host "Found 'common' symbol declaration in Common.h"
+              
+              # Add DLL export/import macros if not present
+              if ($content -notmatch 'BFF_API' -and $content -notmatch '__declspec') {
+                Write-Host "Adding DLL export macros to Common.h"
+                
+                # Add BFF_API definition at the beginning
+                $newContent = '#ifdef _WIN32' + "`n" +
+                  '#ifdef BFF_EXPORTS' + "`n" +
+                  '#define BFF_API __declspec(dllexport)' + "`n" +
+                  '#else' + "`n" +
+                  '#define BFF_API __declspec(dllimport)' + "`n" +
+                  '#endif' + "`n" +
+                  '#else' + "`n" +
+                  '#define BFF_API' + "`n" +
+                  '#endif' + "`n" +
+                  "`n" + $content
+                
+                # Add BFF_API to the common declaration
+                $newContent = $newContent -replace '(extern.*common)', 'BFF_API $1'
+                
+                Set-Content -Path $COMMON_H -Value $newContent
+                Write-Host "✓ Patched Common.h with DLL export macros"
+              }
+            }
+          }
+          
+          # Also check Common.cpp for the definition
+          if (Test-Path $COMMON_CPP) {
+            $content = Get-Content -Path $COMMON_CPP -Raw
+            
+            # Add BFF_EXPORTS define at the top to enable exports
+            if ($content -notmatch 'BFF_EXPORTS') {
+              $newContent = '#define BFF_EXPORTS' + "`n" + $content
+              Set-Content -Path $COMMON_CPP -Value $newContent
+              Write-Host "✓ Added BFF_EXPORTS definition to Common.cpp"
+            }
+          }
+          
+          # Check if we need to add BFF_EXPORTS to CMake
+          $CMAKE_LISTS = "CMakeLists.txt"
+          if (Test-Path $CMAKE_LISTS) {
+            $content = Get-Content -Path $CMAKE_LISTS -Raw
+            
+            # Add BFF_EXPORTS definition for Windows DLL builds
+            if ($content -notmatch 'BFF_EXPORTS') {
+              # Add after project() or similar
+              $patchedContent = $content -replace '(project\([^)]+\))', '$1' + "`n" + 
+                '# Windows DLL export definition' + "`n" +
+                'if(WIN32)' + "`n" +
+                '  add_definitions(-DBFF_EXPORTS)' + "`n" +
+                'endif()'
+              
+              Set-Content -Path $CMAKE_LISTS -Value $patchedContent
+              Write-Host "✓ Added BFF_EXPORTS definition to CMakeLists.txt"
+            }
+          }
           
       - name: Configure BFF with BLAS support
         run: |
