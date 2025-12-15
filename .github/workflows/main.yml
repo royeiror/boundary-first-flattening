@@ -238,6 +238,66 @@ jobs:
           $content = $content -replace $pattern, $replacement
           Set-Content -Path "CMakeLists.txt" -Value $content
 
+      - name: Patch BFF headers for cblas.h
+        run: |
+          # The problematic file that includes cblas.h
+          $DENSE_MATRIX_INL = Join-Path $env:GITHUB_WORKSPACE "include\bff\linear-algebra\DenseMatrix.inl"
+          
+          Write-Host "Patching: $DENSE_MATRIX_INL"
+          
+          if (Test-Path $DENSE_MATRIX_INL) {
+            # Read the file
+            $content = Get-Content -Path $DENSE_MATRIX_INL -Raw
+            
+            # Check current line 4
+            $lines = $content -split "`n"
+            Write-Host "Line 4 currently: $($lines[3])"
+            
+            # Replace the include directive
+            $newContent = $content -replace '#include <cblas\.h>', '#include "deps/openblas-windows/include/cblas.h"'
+            
+            if ($newContent -ne $content) {
+              Write-Host "✓ Patched cblas.h include"
+              Set-Content -Path $DENSE_MATRIX_INL -Value $newContent
+              
+              # Verify the change
+              $updatedContent = Get-Content -Path $DENSE_MATRIX_INL -Raw
+              $updatedLines = $updatedContent -split "`n"
+              Write-Host "Line 4 after patch: $($updatedLines[3])"
+            } else {
+              Write-Host "✗ Could not find cblas.h include to patch"
+              # Try alternative pattern
+              $newContent2 = $content -replace '#include "cblas\.h"', '#include "deps/openblas-windows/include/cblas.h"'
+              if ($newContent2 -ne $content) {
+                Write-Host "✓ Patched cblas.h include (alternative pattern)"
+                Set-Content -Path $DENSE_MATRIX_INL -Value $newContent2
+              } else {
+                Write-Host "✗ No matching include found"
+                # Show the first 10 lines to see what's there
+                Write-Host "First 10 lines of file:"
+                for ($i = 0; $i -lt 10 -and $i -lt $lines.Count; $i++) {
+                  Write-Host "Line $($i+1): $($lines[$i])"
+                }
+              }
+            }
+          } else {
+            Write-Host "✗ File not found: $DENSE_MATRIX_INL"
+            exit 1
+          }
+          
+          # Also check if we need to patch other files
+          $CHOLESKY_INL = Join-Path $env:GITHUB_WORKSPACE "include\bff\linear-algebra\Cholesky.inl"
+          if (Test-Path $CHOLESKY_INL) {
+            $content = Get-Content -Path $CHOLESKY_INL -Raw
+            if ($content -match 'cblas\.h') {
+              Write-Host "Patching Cholesky.inl as well..."
+              $newContent = $content -replace '#include <cblas\.h>', '#include "deps/openblas-windows/include/cblas.h"'
+              $newContent = $newContent -replace '#include "cblas\.h"', '#include "deps/openblas-windows/include/cblas.h"'
+              Set-Content -Path $CHOLESKY_INL -Value $newContent
+              Write-Host "✓ Patched Cholesky.inl"
+            }
+          }
+
       - name: Configure BFF with BLAS support
         run: |
           mkdir build
