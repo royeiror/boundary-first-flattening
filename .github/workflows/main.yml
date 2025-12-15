@@ -389,7 +389,7 @@ jobs:
           # Create a patch file to disable WINDOWS_EXPORT_ALL_SYMBOLS
           $PATCH_CONTENT = @'
           # Disable automatic DLL export generation to avoid PreLinkEvent crash
-set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS OFF)
+          set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS OFF)
 '@
           
           # Apply the patch to NanoGUI's CMakeLists.txt
