@@ -378,24 +378,8 @@ jobs:
             }
           }
           
-          # Check if we need to add BFF_EXPORTS to CMake
-          $CMAKE_LISTS = "CMakeLists.txt"
-          if (Test-Path $CMAKE_LISTS) {
-            $content = Get-Content -Path $CMAKE_LISTS -Raw
-            
-            # Add BFF_EXPORTS definition for Windows DLL builds
-            if ($content -notmatch 'BFF_EXPORTS') {
-              # Add after project() or similar
-              $patchedContent = $content -replace '(project\([^)]+\))', '$1' + "`n" + 
-                '# Windows DLL export definition' + "`n" +
-                'if(WIN32)' + "`n" +
-                '  add_definitions(-DBFF_EXPORTS)' + "`n" +
-                'endif()'
-              
-              Set-Content -Path $CMAKE_LISTS -Value $patchedContent
-              Write-Host "✓ Added BFF_EXPORTS definition to CMakeLists.txt"
-            }
-          }
+          # SIMPLER APPROACH: Just add BFF_EXPORTS via CMake flag instead of patching CMakeLists.txt
+          Write-Host "Note: Will add BFF_EXPORTS via CMake command line instead of patching CMakeLists.txt"
           
       - name: Configure BFF with BLAS support
         run: |
