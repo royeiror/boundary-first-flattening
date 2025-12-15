@@ -382,6 +382,39 @@ jobs:
           Write-Host "=== CMake Cache Variables ==="
           Get-Content CMakeCache.txt | Select-String -Pattern "BLAS|OpenBLAS|INCLUDE" | Select-Object -First 20
 
+        - name: Fix NanoGUI Pre-Link Error
+        run: |
+          # Navigate to the NanoGUI source directory
+          cd deps/nanogui
+          
+          # Create a patch file to disable WINDOWS_EXPORT_ALL_SYMBOLS
+          $PATCH_CONTENT = @'
+# Disable automatic DLL export generation to avoid PreLinkEvent crash
+set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS OFF)
+'@
+          
+          # Apply the patch to NanoGUI's CMakeLists.txt
+          # We'll add it near the beginning of the file
+          $CMAKELISTS_PATH = "CMakeLists.txt"
+          $content = Get-Content $CMAKELISTS_PATH -Raw
+          
+          # Insert our patch after the project() call
+          $pattern = 'project\(nanogui[^)]*\)'
+          if ($content -match $pattern) {
+              $patchedContent = $content -replace $pattern, "$&`n$PATCH_CONTENT"
+              Set-Content -Path $CMAKELISTS_PATH -Value $patchedContent -NoNewline
+              Write-Host "✓ Patched NanoGUI CMakeLists.txt to disable CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS"
+          } else {
+              Write-Host "⚠ Could not find project() declaration, trying alternative location..."
+              # Try adding at a different location
+              $patchedContent = "cmake_minimum_required(VERSION 3.1)`n$PATCH_CONTENT`n" + $content
+              Set-Content -Path $CMAKELISTS_PATH -Value $patchedContent -NoNewline
+              Write-Host "✓ Added patch at beginning of CMakeLists.txt"
+          }
+          
+          # Go back to the workspace root
+          cd ../..
+
       - name: Build BFF without GUI first
         run: |
           cd build
