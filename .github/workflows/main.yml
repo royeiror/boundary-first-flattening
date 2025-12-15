@@ -259,17 +259,41 @@ jobs:
             -A x64
 
       - name: Patch NanoGUI for Static Build
+        shell: pwsh
         run: |
           $NanoGUICMake = "$env:GITHUB_WORKSPACE\deps\nanogui\CMakeLists.txt"
           
           if (Test-Path $NanoGUICMake) {
             $content = Get-Content $NanoGUICMake -Raw
-            # Ensure static build is forced for NanoGUI too
-            $patched = $content -replace '(project\(nanogui[^)]*\))', '$1' + "`n" +
-              "set(BUILD_SHARED_LIBS OFF CACHE BOOL `"Build static libraries`" FORCE)" + "`n" +
-              "set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS OFF CACHE BOOL `"Disable auto-export`" FORCE)"
-            Set-Content $NanoGUICMake -Value $patched -NoNewline
-            Write-Host "✓ Patched NanoGUI CMakeLists.txt for static build"
+            
+            # First, check if the patch is already there to avoid duplicate entries
+            if ($content -notmatch "BUILD_SHARED_LIBS OFF") {
+              # Find the project() declaration and insert our patch after it
+              if ($content -match '(project\(nanogui[^)]*\))') {
+                $projectMatch = $matches[0]
+                $patchText = "`n" + 
+                  "set(BUILD_SHARED_LIBS OFF CACHE BOOL `"Build static libraries`" FORCE)" + "`n" +
+                  "set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS OFF CACHE BOOL `"Disable auto-export`" FORCE)" + "`n"
+                
+                $patched = $content -replace [regex]::Escape($projectMatch), "$projectMatch$patchText"
+                Set-Content $NanoGUICMake -Value $patched -NoNewline
+                Write-Host "✓ Patched NanoGUI CMakeLists.txt for static build"
+              } else {
+                # If we can't find project(), add at beginning
+                $patchText = "set(BUILD_SHARED_LIBS OFF CACHE BOOL `"Build static libraries`" FORCE)" + "`n" +
+                  "set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS OFF CACHE BOOL `"Disable auto-export`" FORCE)" + "`n" + "`n"
+                
+                $patched = $patchText + $content
+                Set-Content $NanoGUICMake -Value $patched -NoNewline
+                Write-Host "✓ Added static build patch at beginning of NanoGUI CMakeLists.txt"
+              }
+            } else {
+              Write-Host "✓ NanoGUI already patched for static build"
+            }
+          } else {
+            Write-Host "⚠ NanoGUI CMakeLists.txt not found, skipping patch"
+            Write-Host "NanoGUI directory contents:"
+            Get-ChildItem "$env:GITHUB_WORKSPACE\deps\nanogui\" -ErrorAction SilentlyContinue
           }
 
       - name: Build BFF Viewer
