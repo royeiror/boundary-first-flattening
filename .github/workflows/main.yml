@@ -34,9 +34,10 @@ jobs:
           mkdir suitesparse-build
           cd suitesparse-build
           
+          # Build with proper install prefix that includes suitesparse subdirectory
           cmake ../suitesparse-src `
             -DCMAKE_BUILD_TYPE=Release `
-            -DCMAKE_INSTALL_PREFIX="$env:GITHUB_WORKSPACE/install" `
+            -DCMAKE_INSTALL_PREFIX="$env:GITHUB_WORKSPACE/install/suitesparse" `
             -DBLA_VENDOR=OpenBLAS `
             -DENABLE_CUDA=OFF `
             -DBUILD_METIS=ON `
@@ -100,7 +101,7 @@ jobs:
           $blasSymlink = "$env:GITHUB_WORKSPACE\deps\openblas-windows\lib\blas.lib"
           
           if (Test-Path $openblasLib) {
-            New-Item -ItemType SymbolicLink -Path $blasSymlink -Target $openblasLib
+            New-Item -ItemType SymbolicLink -Path $blasSymlink -Target $openblasLib -Force
             Write-Host "✓ Created blas.lib symlink to libopenblas.lib"
           } else {
             Write-Host "✗ libopenblas.lib not found at: $openblasLib"
@@ -120,12 +121,11 @@ jobs:
           if (Test-Path $cblasPath) {
             Write-Host "✓ Found cblas.h"
             
-            # Files that need patching (from your previous workflow)
+            # Files that need patching
             $filesToPatch = @(
               "$env:GITHUB_WORKSPACE\include\bff\linear-algebra\Common.h",
               "$env:GITHUB_WORKSPACE\include\bff\linear-algebra\DenseMatrix.inl",
-              "$env:GITHUB_WORKSPACE\include\bff\linear-algebra\Cholesky.inl",
-              "$env:GITHUB_WORKSPACE\src\Common.h"  # Also check src directory
+              "$env:GITHUB_WORKSPACE\include\bff\linear-algebra\Cholesky.inl"
             )
             
             foreach ($file in $filesToPatch) {
@@ -145,7 +145,7 @@ jobs:
               }
             }
             
-            # Also copy cblas.h to include directory as backup (from previous workflow)
+            # Also copy cblas.h to include directory as backup
             $cblasDest = "$env:GITHUB_WORKSPACE\include\cblas.h"
             Copy-Item $cblasPath -Destination $cblasDest -Force -ErrorAction SilentlyContinue
             Write-Host "✓ Copied cblas.h to include directory as backup"
@@ -157,30 +157,47 @@ jobs:
             exit 1
           }
 
+      - name: Patch Common.h for SuiteSparse headers
+        shell: pwsh
+        run: |
+          # Find Common.h
+          $CommonHeader = "$env:GITHUB_WORKSPACE\include\bff\linear-algebra\Common.h"
+          
+          if (Test-Path $CommonHeader) {
+            # Check current content
+            $content = Get-Content $CommonHeader -Raw
+            
+            # Patch cholmod.h include to use suitesparse/ subdirectory
+            # The SuiteSparse headers are in suitesparse-deps/include/suitesparse/
+            # So we need to include them as <suitesparse/cholmod.h>
+            $newContent = $content -replace '#include <cholmod\.h>', '#include <suitesparse/cholmod.h>'
+            
+            if ($newContent -ne $content) {
+              Set-Content $CommonHeader -Value $newContent -NoNewline
+              Write-Host "✓ Patched Common.h to include suitesparse/cholmod.h"
+            } else {
+              # Check if it's already patched or uses different format
+              if ($content -match 'suitesparse/cholmod') {
+                Write-Host "✓ Common.h already has correct suitesparse/cholmod.h include"
+              } else {
+                # Check what the actual include looks like
+                Write-Host "Current includes in Common.h:"
+                $content -split "`n" | Where-Object { $_ -match '#include' } | ForEach-Object { Write-Host "  $_" }
+              }
+            }
+          } else {
+            Write-Host "⚠ Common.h not found at: $CommonHeader"
+          }
+
       - name: Add BFF_API Export Macros
         shell: pwsh
         run: |
-          # Check both possible locations for Common.h
-          $commonHeaderPaths = @(
-            "$env:GITHUB_WORKSPACE\include\bff\linear-algebra\Common.h",
-            "$env:GITHUB_WORKSPACE\src\Common.h"
-          )
+          # Find Common.h
+          $commonHeader = "$env:GITHUB_WORKSPACE\include\bff\linear-algebra\Common.h"
           
-          $commonHeader = $null
-          foreach ($path in $commonHeaderPaths) {
-            if (Test-Path $path) {
-              $commonHeader = $path
-              Write-Host "Found Common.h at: $commonHeader"
-              break
-            }
-          }
-          
-          if (-not $commonHeader) {
-            Write-Host "⚠ Common.h not found in expected locations"
-            Write-Host "Searching for Common.h..."
-            Get-ChildItem "$env:GITHUB_WORKSPACE" -Filter "Common.h" -Recurse -ErrorAction SilentlyContinue | Select-Object FullName
-            # Continue anyway, as maybe it doesn't need patching
-          } else {
+          if (Test-Path $commonHeader) {
+            Write-Host "Found Common.h at: $commonHeader"
+            
             # Add BFF_API definition to Common.h
             $content = Get-Content $commonHeader -Raw
             $apiMacro = "#ifdef _WIN32" + "`n" +
@@ -202,24 +219,15 @@ jobs:
             } else {
               Write-Host "✓ BFF_API macros already present in Common.h"
             }
+          } else {
+            Write-Host "⚠ Common.h not found"
           }
           
           # Find and patch Common.cpp
-          $commonSourcePaths = @(
-            "$env:GITHUB_WORKSPACE\src\linear-algebra\Common.cpp",
-            "$env:GITHUB_WORKSPACE\src\Common.cpp"
-          )
+          $commonSource = "$env:GITHUB_WORKSPACE\src\linear-algebra\Common.cpp"
           
-          $commonSource = $null
-          foreach ($path in $commonSourcePaths) {
-            if (Test-Path $path) {
-              $commonSource = $path
-              Write-Host "Found Common.cpp at: $commonSource"
-              break
-            }
-          }
-          
-          if ($commonSource) {
+          if (Test-Path $commonSource) {
+            Write-Host "Found Common.cpp at: $commonSource"
             $sourceContent = Get-Content $commonSource -Raw
             # Add BFF_EXPORTS define if not present
             if ($sourceContent -notmatch 'BFF_EXPORTS') {
@@ -242,10 +250,15 @@ jobs:
           Write-Host "OpenBLAS include: $BFF_OPENBLAS_INCLUDE"
           Write-Host "OpenBLAS lib: $BFF_OPENBLAS_LIB"
           
+          # List SuiteSparse include directory contents
+          Write-Host "SuiteSparse include directory contents:"
+          Get-ChildItem "$SUITESPARSE_DIR/include" -Recurse -File | Select-Object -First 20 Name
+          
+          # Configure with proper include paths for SuiteSparse
           cmake .. `
             -DCMAKE_BUILD_TYPE=Release `
             -DCMAKE_PREFIX_PATH="$SUITESPARSE_DIR" `
-            -DCMAKE_INCLUDE_PATH="$SUITESPARSE_DIR/include;$BFF_OPENBLAS_INCLUDE" `
+            -DCMAKE_INCLUDE_PATH="$SUITESPARSE_DIR/include;$SUITESPARSE_DIR/include/suitesparse;$BFF_OPENBLAS_INCLUDE" `
             -DCMAKE_LIBRARY_PATH="$SUITESPARSE_DIR/lib;$BFF_OPENBLAS_LIB" `
             -DBLAS_INCLUDE_DIR="$BFF_OPENBLAS_INCLUDE" `
             -DBLAS_LIBRARIES="$BFF_OPENBLAS_LIB/blas.lib" `
@@ -258,42 +271,59 @@ jobs:
             -G "Visual Studio 17 2022" `
             -A x64
 
-      - name: Patch NanoGUI for Static Build
-        shell: pwsh
+      - name: Clean build directory (remove old CMake cache)
+        run: |
+          if (Test-Path "build") {
+            Remove-Item -Recurse -Force "build" -ErrorAction SilentlyContinue
+          }
+          mkdir build
+
+      - name: Configure BFF with CMake (Alternative approach)
+        run: |
+          cd build
+          
+          $SUITESPARSE_DIR = (Resolve-Path "../suitesparse-deps").Path
+          $BFF_OPENBLAS_INCLUDE = "$env:GITHUB_WORKSPACE\deps\openblas-windows\include"
+          $BFF_OPENBLAS_LIB = "$env:GITHUB_WORKSPACE\deps\openblas-windows\lib"
+          
+          # Try with direct SuiteSparse variables like in your original workflow
+          cmake .. `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DSUITESPARSE_INCLUDE_DIR="$SUITESPARSE_DIR/include" `
+            -DSUITESPARSE_LIBRARY_DIR="$SUITESPARSE_DIR/lib" `
+            -DBLAS_INCLUDE_DIR="$BFF_OPENBLAS_INCLUDE" `
+            -DBLAS_LIBRARIES="$BFF_OPENBLAS_LIB/blas.lib" `
+            -DBLA_VENDOR=OpenBLAS `
+            -DBUILD_GUI=ON `
+            -DBUILD_CLI=ON `
+            -DBUILD_SHARED_LIBS=OFF `
+            -DBFF_EXPORTS=ON `
+            -DCMAKE_WINDOWS_EXPORT_ALL_SYMBOLS=OFF `
+            -G "Visual Studio 17 2022" `
+            -A x64
+
+      - name: Patch NanoGUI for Static Build (Simple approach)
         run: |
           $NanoGUICMake = "$env:GITHUB_WORKSPACE\deps\nanogui\CMakeLists.txt"
           
           if (Test-Path $NanoGUICMake) {
+            # Simple approach: just append to end of file
             $content = Get-Content $NanoGUICMake -Raw
             
-            # First, check if the patch is already there to avoid duplicate entries
+            # Check if patch already exists
             if ($content -notmatch "BUILD_SHARED_LIBS OFF") {
-              # Find the project() declaration and insert our patch after it
-              if ($content -match '(project\(nanogui[^)]*\))') {
-                $projectMatch = $matches[0]
-                $patchText = "`n" + 
-                  "set(BUILD_SHARED_LIBS OFF CACHE BOOL `"Build static libraries`" FORCE)" + "`n" +
-                  "set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS OFF CACHE BOOL `"Disable auto-export`" FORCE)" + "`n"
-                
-                $patched = $content -replace [regex]::Escape($projectMatch), "$projectMatch$patchText"
-                Set-Content $NanoGUICMake -Value $patched -NoNewline
-                Write-Host "✓ Patched NanoGUI CMakeLists.txt for static build"
-              } else {
-                # If we can't find project(), add at beginning
-                $patchText = "set(BUILD_SHARED_LIBS OFF CACHE BOOL `"Build static libraries`" FORCE)" + "`n" +
-                  "set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS OFF CACHE BOOL `"Disable auto-export`" FORCE)" + "`n" + "`n"
-                
-                $patched = $patchText + $content
-                Set-Content $NanoGUICMake -Value $patched -NoNewline
-                Write-Host "✓ Added static build patch at beginning of NanoGUI CMakeLists.txt"
-              }
+              $patchText = "`n`n" + 
+                "# Force static build for Windows compatibility" + "`n" +
+                "set(BUILD_SHARED_LIBS OFF CACHE BOOL `"Build static libraries`" FORCE)" + "`n" +
+                "set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS OFF CACHE BOOL `"Disable auto-export`" FORCE)"
+              
+              Set-Content $NanoGUICMake -Value ($content + $patchText) -NoNewline
+              Write-Host "✓ Added static build configuration to NanoGUI CMakeLists.txt"
             } else {
-              Write-Host "✓ NanoGUI already patched for static build"
+              Write-Host "✓ NanoGUI already configured for static build"
             }
           } else {
-            Write-Host "⚠ NanoGUI CMakeLists.txt not found, skipping patch"
-            Write-Host "NanoGUI directory contents:"
-            Get-ChildItem "$env:GITHUB_WORKSPACE\deps\nanogui\" -ErrorAction SilentlyContinue
+            Write-Host "⚠ NanoGUI CMakeLists.txt not found"
           }
 
       - name: Build BFF Viewer
@@ -308,42 +338,46 @@ jobs:
           
           if (-not (Test-Path $exePath)) {
             Write-Host "✗ bff-viewer.exe not found at: $exePath"
-            Get-ChildItem "$env:GITHUB_WORKSPACE\build\Release\" -ErrorAction SilentlyContinue
+            # Try to build just the bff library first
+            Write-Host "Trying to build bff library first..."
+            cd build
+            cmake --build . --config Release --target bff --parallel
+            Write-Host "Now trying bff-viewer again..."
+            cmake --build . --config Release --target bff-viewer --parallel
+          }
+          
+          if (Test-Path $exePath) {
+            Write-Host "✓ Found bff-viewer.exe"
+            
+            # Create distribution directory
+            New-Item -ItemType Directory -Force -Path "dist"
+            Copy-Item $exePath -Destination "dist\"
+            
+            # Copy required DLLs
+            $dllSources = @(
+              "$env:GITHUB_WORKSPACE\deps\openblas-windows\lib\*.dll",
+              "C:\Windows\System32\vcruntime140.dll",
+              "C:\Windows\System32\msvcp140.dll",
+              "C:\Windows\System32\vcruntime140_1.dll"
+            )
+            
+            foreach ($source in $dllSources) {
+              if (Test-Path $source -ErrorAction SilentlyContinue) {
+                Copy-Item $source -Destination "dist\" -ErrorAction SilentlyContinue
+                Write-Host "✓ Copied DLLs from: $source"
+              }
+            }
+            
+            # Also copy NanoGUI DLL if it exists (it shouldn't since we're building static)
+            $nanoguiDll = "$env:GITHUB_WORKSPACE\build\deps\nanogui\Release\nanogui.dll"
+            if (Test-Path $nanoguiDll) {
+              Copy-Item $nanoguiDll -Destination "dist\"
+              Write-Host "✓ Copied NanoGUI DLL"
+            }
+          } else {
+            Write-Host "✗ bff-viewer.exe still not found after rebuild attempt"
             exit 1
           }
-          
-          Write-Host "✓ Found bff-viewer.exe"
-          
-          # Create distribution directory
-          New-Item -ItemType Directory -Force -Path "dist"
-          Copy-Item $exePath -Destination "dist\"
-          
-          # Copy required DLLs from various sources
-          $dllSources = @(
-            # SuiteSparse static build should not have DLLs, but check
-            "$env:GITHUB_WORKSPACE\suitesparse-deps\bin\*.dll",
-            # OpenBLAS DLLs
-            "$env:GITHUB_WORKSPACE\deps\openblas-windows\lib\*.dll",
-            # System runtime DLLs
-            "C:\Windows\System32\vcruntime140.dll",
-            "C:\Windows\System32\msvcp140.dll",
-            "C:\Windows\System32\vcruntime140_1.dll"
-          )
-          
-          foreach ($source in $dllSources) {
-            if (Test-Path $source -ErrorAction SilentlyContinue) {
-              Copy-Item $source -Destination "dist\" -ErrorAction SilentlyContinue
-              Write-Host "✓ Copied DLLs from: $source"
-            }
-          }
-          
-          # Use dumpbin to find additional dependencies
-          $requiredDlls = & dumpbin /dependents $exePath | 
-            Where-Object { $_ -match '\.dll' } | 
-            ForEach-Object { $_.Trim() }
-          
-          Write-Host "Executable dependencies:"
-          $requiredDlls | ForEach-Object { Write-Host "  - $_" }
 
       - name: Create Final Package
         run: |
