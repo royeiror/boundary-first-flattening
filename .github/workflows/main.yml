@@ -111,69 +111,122 @@ jobs:
       - name: Patch BFF Source Files
         shell: pwsh
         run: |
-          # Patch cblas.h include in Common.h
-          $CommonHeader = "$env:GITHUB_WORKSPACE\src\Common.h"
+          # Patch cblas.h includes in all relevant files
           $cblasPath = "$env:GITHUB_WORKSPACE\deps\openblas-windows\include\cblas.h"
+          $relativePath = "../../deps/openblas-windows/include/cblas.h"
           
-          Write-Host "Patching Common.h at: $CommonHeader"
           Write-Host "cblas.h location: $cblasPath"
           
           if (Test-Path $cblasPath) {
             Write-Host "✓ Found cblas.h"
-            # Create relative path from src/ to deps/openblas-windows/include/
-            $relativePath = "../deps/openblas-windows/include/cblas.h"
-            (Get-Content $CommonHeader -Raw) -replace '#include <cblas\.h>', "#include `"$relativePath`"" | Set-Content $CommonHeader
-            Write-Host "✓ Patched Common.h with relative cblas.h path"
+            
+            # Files that need patching (from your previous workflow)
+            $filesToPatch = @(
+              "$env:GITHUB_WORKSPACE\include\bff\linear-algebra\Common.h",
+              "$env:GITHUB_WORKSPACE\include\bff\linear-algebra\DenseMatrix.inl",
+              "$env:GITHUB_WORKSPACE\include\bff\linear-algebra\Cholesky.inl",
+              "$env:GITHUB_WORKSPACE\src\Common.h"  # Also check src directory
+            )
+            
+            foreach ($file in $filesToPatch) {
+              if (Test-Path $file) {
+                $content = Get-Content $file -Raw
+                $newContent = $content -replace '#include <cblas\.h>', "#include `"$relativePath`""
+                $newContent = $newContent -replace '#include "cblas\.h"', "#include `"$relativePath`""
+                
+                if ($newContent -ne $content) {
+                  Set-Content $file -Value $newContent -NoNewline
+                  Write-Host "✓ Patched $((Get-Item $file).Name)"
+                } else {
+                  Write-Host "⚠ No cblas.h include found in $((Get-Item $file).Name)"
+                }
+              } else {
+                Write-Host "⚠ File not found: $file"
+              }
+            }
+            
+            # Also copy cblas.h to include directory as backup (from previous workflow)
+            $cblasDest = "$env:GITHUB_WORKSPACE\include\cblas.h"
+            Copy-Item $cblasPath -Destination $cblasDest -Force -ErrorAction SilentlyContinue
+            Write-Host "✓ Copied cblas.h to include directory as backup"
+            
           } else {
             Write-Host "✗ cblas.h not found at expected location"
+            Write-Host "Searching for cblas.h..."
+            Get-ChildItem "$env:GITHUB_WORKSPACE\deps" -Filter "cblas.h" -Recurse -ErrorAction SilentlyContinue | Select-Object FullName
             exit 1
-          }
-          
-          # Patch DenseMatrix.inl and Cholesky.inl if they exist
-          $filesToPatch = @(
-            "$env:GITHUB_WORKSPACE\include\bff\linear-algebra\DenseMatrix.inl",
-            "$env:GITHUB_WORKSPACE\include\bff\linear-algebra\Cholesky.inl"
-          )
-          
-          foreach ($file in $filesToPatch) {
-            if (Test-Path $file) {
-              (Get-Content $file -Raw) -replace '#include <cblas\.h>', "#include `"$relativePath`"" | Set-Content $file
-              Write-Host "✓ Patched $((Get-Item $file).Name)"
-            }
           }
 
       - name: Add BFF_API Export Macros
         shell: pwsh
         run: |
-          $CommonHeader = "$env:GITHUB_WORKSPACE\src\Common.h"
-          $CommonSource = "$env:GITHUB_WORKSPACE\src\Common.cpp"
+          # Check both possible locations for Common.h
+          $commonHeaderPaths = @(
+            "$env:GITHUB_WORKSPACE\include\bff\linear-algebra\Common.h",
+            "$env:GITHUB_WORKSPACE\src\Common.h"
+          )
           
-          # Add BFF_API definition to Common.h
-          $content = Get-Content $CommonHeader -Raw
-          $apiMacro = "#ifdef _WIN32" + "`n" +
-            "#ifdef BFF_EXPORTS" + "`n" +
-            "#define BFF_API __declspec(dllexport)" + "`n" +
-            "#else" + "`n" +
-            "#define BFF_API __declspec(dllimport)" + "`n" +
-            "#endif" + "`n" +
-            "#else" + "`n" +
-            "#define BFF_API" + "`n" +
-            "#endif" + "`n" +
-            "`n"
+          $commonHeader = $null
+          foreach ($path in $commonHeaderPaths) {
+            if (Test-Path $path) {
+              $commonHeader = $path
+              Write-Host "Found Common.h at: $commonHeader"
+              break
+            }
+          }
           
-          $content = $apiMacro + $content
+          if (-not $commonHeader) {
+            Write-Host "⚠ Common.h not found in expected locations"
+            Write-Host "Searching for Common.h..."
+            Get-ChildItem "$env:GITHUB_WORKSPACE" -Filter "Common.h" -Recurse -ErrorAction SilentlyContinue | Select-Object FullName
+            # Continue anyway, as maybe it doesn't need patching
+          } else {
+            # Add BFF_API definition to Common.h
+            $content = Get-Content $commonHeader -Raw
+            $apiMacro = "#ifdef _WIN32" + "`n" +
+              "#ifdef BFF_EXPORTS" + "`n" +
+              "#define BFF_API __declspec(dllexport)" + "`n" +
+              "#else" + "`n" +
+              "#define BFF_API __declspec(dllimport)" + "`n" +
+              "#endif" + "`n" +
+              "#else" + "`n" +
+              "#define BFF_API" + "`n" +
+              "#endif" + "`n" +
+              "`n"
+            
+            # Only add if not already present
+            if ($content -notmatch 'BFF_API') {
+              $content = $apiMacro + $content
+              Set-Content $commonHeader -Value $content -NoNewline
+              Write-Host "✓ Added BFF_API macros to Common.h"
+            } else {
+              Write-Host "✓ BFF_API macros already present in Common.h"
+            }
+          }
           
-          # Add BFF_API to common declaration if present
-          $content = $content -replace '(extern\s+\"C\"\s+\{[^}]*\}.*common)', 'BFF_API $1'
-          Set-Content $CommonHeader -Value $content -NoNewline
-          Write-Host "✓ Added BFF_API macros to Common.h"
+          # Find and patch Common.cpp
+          $commonSourcePaths = @(
+            "$env:GITHUB_WORKSPACE\src\linear-algebra\Common.cpp",
+            "$env:GITHUB_WORKSPACE\src\Common.cpp"
+          )
           
-          # Add BFF_EXPORTS define to Common.cpp
-          if (Test-Path $CommonSource) {
-            $sourceContent = Get-Content $CommonSource -Raw
-            $sourceContent = "#define BFF_EXPORTS" + "`n" + $sourceContent
-            Set-Content $CommonSource -Value $sourceContent -NoNewline
-            Write-Host "✓ Added BFF_EXPORTS to Common.cpp"
+          $commonSource = $null
+          foreach ($path in $commonSourcePaths) {
+            if (Test-Path $path) {
+              $commonSource = $path
+              Write-Host "Found Common.cpp at: $commonSource"
+              break
+            }
+          }
+          
+          if ($commonSource) {
+            $sourceContent = Get-Content $commonSource -Raw
+            # Add BFF_EXPORTS define if not present
+            if ($sourceContent -notmatch 'BFF_EXPORTS') {
+              $sourceContent = "#define BFF_EXPORTS" + "`n" + $sourceContent
+              Set-Content $commonSource -Value $sourceContent -NoNewline
+              Write-Host "✓ Added BFF_EXPORTS to Common.cpp"
+            }
           }
 
       - name: Configure BFF with CMake (Static Build)
