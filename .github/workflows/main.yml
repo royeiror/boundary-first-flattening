@@ -355,8 +355,16 @@ jobs:
           if (Test-Path $openblasLib) {
             Write-Host "✓ Found OpenBLAS library at: $openblasLib"
           } else {
-            Write-Host "✗ OpenBLAS library not found"
+            Write-Host "✗ OpenBLAS library not found at $openblasLib"
+            Write-Host "Available libraries in $BFF_OPENBLAS_LIB:"
             Get-ChildItem -Path $BFF_OPENBLAS_LIB -Filter "*.lib" | Select-Object Name
+            # Try the OpenBLAS from chocolatey
+            $chocoOpenBLAS = Join-Path $OPENBLAS_DIR "lib\libopenblas.lib"
+            if (Test-Path $chocoOpenBLAS) {
+              Write-Host "✓ Found OpenBLAS at: $chocoOpenBLAS"
+              $openblasLib = $chocoOpenBLAS
+              $BFF_OPENBLAS_LIB = $OPENBLAS_DIR
+            }
           }
           
           # Configure with explicit paths for everything
@@ -370,6 +378,7 @@ jobs:
             -DOpenBLAS_LIBRARY="$openblasLib" `
             -DBLAS_INCLUDE_DIR="$BFF_OPENBLAS_INCLUDE" `
             -DBLAS_LIBRARIES="$openblasLib" `
+            -DBLAS_openblas_LIBRARY="$openblasLib" `
             -DBLA_VENDOR=OpenBLAS `
             -DBUILD_GUI=ON `
             -DBUILD_CLI=ON `
@@ -378,10 +387,10 @@ jobs:
             -G "Visual Studio 17 2022" `
             -A x64
           
-          # Debug: Show what include paths CMake actually set
-          Write-Host "=== CMake Cache Variables ==="
-          Get-Content CMakeCache.txt | Select-String -Pattern "BLAS|OpenBLAS|INCLUDE" | Select-Object -First 20
-
+          # Debug: Show what BLAS libraries CMake actually found
+          Write-Host "=== CMake BLAS Configuration ==="
+          Get-Content CMakeCache.txt | Select-String -Pattern "BLAS|OpenBLAS" | Select-Object
+          
       - name: Fix NanoGUI Pre-Link Error
         run: |
           # Navigate to the NanoGUI source directory
