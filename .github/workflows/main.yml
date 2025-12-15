@@ -34,7 +34,6 @@ jobs:
           mkdir suitesparse-build
           cd suitesparse-build
           
-          # Build with proper install prefix
           cmake ../suitesparse-src `
             -DCMAKE_BUILD_TYPE=Release `
             -DCMAKE_INSTALL_PREFIX="$env:GITHUB_WORKSPACE/install" `
@@ -112,9 +111,12 @@ jobs:
           Write-Host "`nLib directory contents:"
           if (Test-Path "$SUITESPARSE_DIR/lib") {
             Get-ChildItem "$SUITESPARSE_DIR/lib" -File | Select-Object Name
-          } else {
-            Write-Host "Lib directory not found!"
-            Get-ChildItem "$SUITESPARSE_DIR" -Recurse | Where-Object { $_.Name -match "\.lib$" } | Select-Object -First 20 FullName
+          }
+          
+          # Check if headers are in suitesparse/ subdirectory
+          if (Test-Path "$SUITESPARSE_DIR/include/suitesparse") {
+            Write-Host "`nHeaders found in suitesparse/ subdirectory:"
+            Get-ChildItem "$SUITESPARSE_DIR/include/suitesparse" -Filter "*.h" | Select-Object -First 10 Name
           }
           
           # Set environment variable for later steps
@@ -134,7 +136,7 @@ jobs:
             exit 1
           }
 
-      - name: Patch BFF Source Files
+      - name: Patch BFF Source Files for cblas.h
         shell: pwsh
         run: |
           # Patch cblas.h includes in all relevant files
@@ -161,7 +163,7 @@ jobs:
                 
                 if ($newContent -ne $content) {
                   Set-Content $file -Value $newContent -NoNewline
-                  Write-Host "✓ Patched $((Get-Item $file).Name)"
+                  Write-Host "✓ Patched $((Get-Item $file).Name) for cblas.h"
                 } else {
                   Write-Host "⚠ No cblas.h include found in $((Get-Item $file).Name)"
                 }
@@ -170,103 +172,50 @@ jobs:
               }
             }
             
-            # Also copy cblas.h to include directory as backup
-            $cblasDest = "$env:GITHUB_WORKSPACE\include\cblas.h"
-            Copy-Item $cblasPath -Destination $cblasDest -Force -ErrorAction SilentlyContinue
-            Write-Host "✓ Copied cblas.h to include directory as backup"
-            
           } else {
             Write-Host "✗ cblas.h not found at expected location"
-            Write-Host "Searching for cblas.h..."
-            Get-ChildItem "$env:GITHUB_WORKSPACE\deps" -Filter "cblas.h" -Recurse -ErrorAction SilentlyContinue | Select-Object FullName
             exit 1
           }
 
-      - name: Create custom FindSuiteSparse script
+      - name: Patch Common.h for SuiteSparse headers
+        shell: pwsh
         run: |
-          $SUITESPARSE_DIR = $env:SUITESPARSE_DIR
-          Write-Host "Creating custom FindSuiteSparse.cmake for directory: $SUITESPARSE_DIR"
+          # Patch Common.h to include suitesparse/cholmod.h
+          $CommonHeader = "$env:GITHUB_WORKSPACE\include\bff\linear-algebra\Common.h"
           
-          # First check what headers are actually available
-          Write-Host "Looking for headers in: $SUITESPARSE_DIR/include"
-          if (Test-Path "$SUITESPARSE_DIR/include") {
-            $headers = Get-ChildItem "$SUITESPARSE_DIR/include" -Recurse -Filter "*.h" | Select-Object -First 20 Name
-            Write-Host "Found headers:"
-            $headers | ForEach-Object { Write-Host "  $_" }
-          }
-          
-          # Create a custom FindSuiteSparse.cmake file
-          $CUSTOM_FIND = 'set(SUITESPARSE_DIR "' + $SUITESPARSE_DIR + '")' + "`n" +
-            'set(SUITESPARSE_INCLUDE_DIR "${SUITESPARSE_DIR}/include")' + "`n" +
-            'set(SUITESPARSE_LIBRARY_DIR "${SUITESPARSE_DIR}/lib")' + "`n" +
-            'set(SUITESPARSE_INCLUDE_DIRS "${SUITESPARSE_INCLUDE_DIR}")' + "`n" +
-            'set(SUITESPARSE_LIBRARY_DIRS "${SUITESPARSE_LIBRARY_DIR}")' + "`n" +
-            '`n' +
-            '# Find libraries' + "`n" +
-            'set(SUITESPARSE_LIBRARIES "")' + "`n" +
-            '`n' +
-            '# Add common SuiteSparse libraries' + "`n" +
-            'foreach(LIB amd camd ccolamd colamd cholmod spqr ldl btf klu cxsparse umfpack suitesparseconfig)' + "`n" +
-            '  find_library(SUITESPARSE_${LIB}_LIBRARY' + "`n" +
-            '    NAMES ${LIB} lib${LIB}' + "`n" +
-            '    PATHS ${SUITESPARSE_LIBRARY_DIR}' + "`n" +
-            '    NO_DEFAULT_PATH' + "`n" +
-            '  )' + "`n" +
-            '  if(SUITESPARSE_${LIB}_LIBRARY)' + "`n" +
-            '    list(APPEND SUITESPARSE_LIBRARIES ${SUITESPARSE_${LIB}_LIBRARY})' + "`n" +
-            '    set(SuiteSparse_${LIB}_FOUND TRUE)' + "`n" +
-            '  else()' + "`n" +
-            '    set(SuiteSparse_${LIB}_FOUND FALSE)' + "`n" +
-            '  endif()' + "`n" +
-            'endforeach()' + "`n" +
-            '`n' +
-            '# Set found variables' + "`n" +
-            'if(SUITESPARSE_LIBRARIES)' + "`n" +
-            '  set(SuiteSparse_FOUND TRUE)' + "`n" +
-            '  set(SuiteSparse_INCLUDE_DIRS ${SUITESPARSE_INCLUDE_DIRS})' + "`n" +
-            '  set(SuiteSparse_LIBRARIES ${SUITESPARSE_LIBRARIES})' + "`n" +
-            '  message(STATUS "Found SuiteSparse:")' + "`n" +
-            '  message(STATUS "  Includes: ${SUITESPARSE_INCLUDE_DIRS}")' + "`n" +
-            '  message(STATUS "  Libraries: ${SUITESPARSE_LIBRARIES}")' + "`n" +
-            'else()' + "`n" +
-            '  set(SuiteSparse_FOUND FALSE)' + "`n" +
-            '  message(STATUS "SuiteSparse not found")' + "`n" +
-            'endif()' + "`n" +
-            '`n' +
-            'mark_as_advanced(' + "`n" +
-            '  SUITESPARSE_DIR' + "`n" +
-            '  SUITESPARSE_INCLUDE_DIR' + "`n" +
-            '  SUITESPARSE_LIBRARY_DIR' + "`n" +
-            '  SUITESPARSE_LIBRARIES' + "`n" +
-            ')'
-          
-          Set-Content -Path "FindSuiteSparseCustom.cmake" -Value $CUSTOM_FIND
-          Write-Host "✓ Created custom FindSuiteSparse.cmake"
-
-      - name: Patch BFF CMakeLists.txt to use custom SuiteSparse
-        run: |
-          $CMAKELISTS = "CMakeLists.txt"
-          $content = Get-Content $CMAKELISTS -Raw
-          
-          # Insert our custom find after the find_package(Eigen3) line
-          $PATCH = 'find_package(Eigen3 3.2 REQUIRED)' + "`n" + "`n" +
-            '# Use custom SuiteSparse find script' + "`n" +
-            'set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${CMAKE_CURRENT_SOURCE_DIR})' + "`n" +
-            'find_package(SuiteSparseCustom REQUIRED)' + "`n" +
-            '`n' +
-            'find_package(OpenGL REQUIRED)'
-          
-          # Replace the find_package(SuiteSparse) section
-          $newContent = $content -replace 'find_package\(Eigen3 3\.2 REQUIRED\)\s*\n\s*find_package\(OpenGL REQUIRED\)', $PATCH
-          
-          if ($newContent -ne $content) {
-            Set-Content -Path $CMAKELISTS -Value $newContent -NoNewline
-            Write-Host "✓ Patched CMakeLists.txt to use custom SuiteSparse find"
+          if (Test-Path $CommonHeader) {
+            Write-Host "Patching Common.h at: $CommonHeader"
+            
+            $content = Get-Content $CommonHeader -Raw
+            
+            # First, check what the current include looks like
+            Write-Host "Current cholmod.h include line:"
+            $content -split "`n" | Where-Object { $_ -match 'cholmod\.h' } | ForEach-Object { Write-Host "  $_" }
+            
+            # Replace #include <cholmod.h> with #include <suitesparse/cholmod.h>
+            $newContent = $content -replace '#include <cholmod\.h>', '#include <suitesparse/cholmod.h>'
+            
+            if ($newContent -ne $content) {
+              Set-Content $CommonHeader -Value $newContent -NoNewline
+              Write-Host "✓ Patched Common.h to include suitesparse/cholmod.h"
+            } else {
+              # Try alternative pattern
+              $newContent = $content -replace '#include "cholmod\.h"', '#include <suitesparse/cholmod.h>'
+              if ($newContent -ne $content) {
+                Set-Content $CommonHeader -Value $newContent -NoNewline
+                Write-Host "✓ Patched Common.h (alternative pattern)"
+              } else {
+                Write-Host "⚠ Could not find cholmod.h include to patch in Common.h"
+                # Add it manually if not found
+                if ($content -notmatch 'suitesparse/cholmod') {
+                  $newContent = $content -replace '(#include.*)', '#include <suitesparse/cholmod.h>' + "`n" + '$1'
+                  Set-Content $CommonHeader -Value $newContent -NoNewline
+                  Write-Host "✓ Added suitesparse/cholmod.h include to Common.h"
+                }
+              }
+            }
           } else {
-            # Try alternative pattern
-            $newContent = $content -replace 'find_package\(Eigen3 3\.2 REQUIRED\)', $PATCH
-            Set-Content -Path $CMAKELISTS -Value $newContent -NoNewline
-            Write-Host "✓ Patched CMakeLists.txt (alternative pattern)"
+            Write-Host "⚠ Common.h not found at: $CommonHeader"
           }
 
       - name: Add BFF_API Export Macros
@@ -324,7 +273,33 @@ jobs:
           }
           mkdir build
 
-      - name: Configure BFF with CMake
+      - name: Copy SuiteSparse headers to include/suitesparse if needed
+        run: |
+          $SUITESPARSE_DIR = $env:SUITESPARSE_DIR
+          $targetDir = "$env:GITHUB_WORKSPACE\include\suitesparse"
+          
+          # Check if headers are in suitesparse/ subdirectory
+          if (Test-Path "$SUITESPARSE_DIR/include/suitesparse") {
+            Write-Host "Headers are already in suitesparse/ subdirectory"
+          } else {
+            # Create suitesparse directory in BFF include
+            New-Item -ItemType Directory -Force -Path $targetDir
+            
+            # Copy all headers from SuiteSparse include
+            if (Test-Path "$SUITESPARSE_DIR/include") {
+              Copy-Item "$SUITESPARSE_DIR/include/*.h" -Destination $targetDir -ErrorAction SilentlyContinue
+              Copy-Item "$SUITESPARSE_DIR/include/*.hpp" -Destination $targetDir -ErrorAction SilentlyContinue
+              
+              # Also copy any subdirectories
+              Get-ChildItem "$SUITESPARSE_DIR/include" -Directory | ForEach-Object {
+                $subDir = $_.Name
+                Copy-Item "$SUITESPARSE_DIR/include/$subDir/*" -Destination "$targetDir/" -Recurse -ErrorAction SilentlyContinue
+              }
+              Write-Host "✓ Copied SuiteSparse headers to $targetDir"
+            }
+          }
+
+      - name: Configure BFF with CMake (Manual SuiteSparse setup)
         run: |
           cd build
           
@@ -336,25 +311,32 @@ jobs:
           Write-Host "OpenBLAS include: $BFF_OPENBLAS_INCLUDE"
           Write-Host "OpenBLAS lib: $BFF_OPENBLAS_LIB"
           
-          # First check if the files exist
-          Write-Host "Checking for SuiteSparse libraries..."
-          if (Test-Path "$SUITESPARSE_DIR/lib") {
-            Get-ChildItem "$SUITESPARSE_DIR/lib" -Filter "*.lib" | Select-Object -First 10 Name
-          }
+          # Create a simple CMakeLists.txt patch file
+          $PATCH_FILE = "SuiteSparsePatch.cmake"
+          $PATCH_CONTENT = 'set(SuiteSparse_FOUND TRUE)' + "`n" +
+            'set(SuiteSparse_INCLUDE_DIRS "' + $SUITESPARSE_DIR + '/include")' + "`n" +
+            'set(SuiteSparse_LIBRARY_DIRS "' + $SUITESPARSE_DIR + '/lib")' + "`n" +
+            'set(SuiteSparse_LIBRARIES' + "`n" +
+            '  "' + $SUITESPARSE_DIR + '/lib/libamd.lib"' + "`n" +
+            '  "' + $SUITESPARSE_DIR + '/lib/libcamd.lib"' + "`n" +
+            '  "' + $SUITESPARSE_DIR + '/lib/libccolamd.lib"' + "`n" +
+            '  "' + $SUITESPARSE_DIR + '/lib/libcolamd.lib"' + "`n" +
+            '  "' + $SUITESPARSE_DIR + '/lib/libcholmod.lib"' + "`n" +
+            '  "' + $SUITESPARSE_DIR + '/lib/libspqr.lib"' + "`n" +
+            '  "' + $SUITESPARSE_DIR + '/lib/libldl.lib"' + "`n" +
+            '  "' + $SUITESPARSE_DIR + '/lib/libbtf.lib"' + "`n" +
+            '  "' + $SUITESPARSE_DIR + '/lib/libklu.lib"' + "`n" +
+            '  "' + $SUITESPARSE_DIR + '/lib/libcxsparse.lib"' + "`n" +
+            '  "' + $SUITESPARSE_DIR + '/lib/libumfpack.lib"' + "`n" +
+            '  "' + $SUITESPARSE_DIR + '/lib/suitesparseconfig.lib"' + "`n" +
+            ')' + "`n"
           
-          Write-Host "Checking for SuiteSparse headers..."
-          if (Test-Path "$SUITESPARSE_DIR/include") {
-            $headerCount = (Get-ChildItem "$SUITESPARSE_DIR/include" -Recurse -Filter "*.h" | Measure-Object).Count
-            Write-Host "Found $headerCount header files"
-          }
+          Set-Content -Path $PATCH_FILE -Value $PATCH_CONTENT
+          Write-Host "✓ Created SuiteSparse patch file"
           
-          # Copy the custom FindSuiteSparse script to build directory
-          Copy-Item "../FindSuiteSparseCustom.cmake" -Destination "." -Force
-          
-          # Configure with explicit paths
+          # Configure with explicit settings
           cmake .. `
             -DCMAKE_BUILD_TYPE=Release `
-            -DCMAKE_PREFIX_PATH="$SUITESPARSE_DIR" `
             -DSUITESPARSE_DIR="$SUITESPARSE_DIR" `
             -DSUITESPARSE_INCLUDE_DIR="$SUITESPARSE_DIR/include" `
             -DSUITESPARSE_LIBRARY_DIR="$SUITESPARSE_DIR/lib" `
@@ -374,10 +356,8 @@ jobs:
           $NanoGUICMake = "$env:GITHUB_WORKSPACE\deps\nanogui\CMakeLists.txt"
           
           if (Test-Path $NanoGUICMake) {
-            # Simple approach: just append to end of file
             $content = Get-Content $NanoGUICMake -Raw
             
-            # Check if patch already exists
             if ($content -notmatch "BUILD_SHARED_LIBS OFF") {
               $patchText = "`n`n" + 
                 "# Force static build for Windows compatibility" + "`n" +
@@ -386,12 +366,13 @@ jobs:
               
               Set-Content $NanoGUICMake -Value ($content + $patchText) -NoNewline
               Write-Host "✓ Added static build configuration to NanoGUI CMakeLists.txt"
-            } else {
-              Write-Host "✓ NanoGUI already configured for static build"
             }
-          } else {
-            Write-Host "⚠ NanoGUI CMakeLists.txt not found"
           }
+
+      - name: Build BFF core library first
+        run: |
+          cd build
+          cmake --build . --config Release --target bff --parallel --verbose
 
       - name: Build BFF Viewer
         run: |
@@ -405,44 +386,35 @@ jobs:
           
           if (-not (Test-Path $exePath)) {
             Write-Host "✗ bff-viewer.exe not found at: $exePath"
-            Write-Host "Trying to build just bff library first..."
-            cd build
-            cmake --build . --config Release --target bff --parallel
-            Write-Host "Now trying bff-viewer again..."
-            cmake --build . --config Release --target bff-viewer --parallel
+            exit 1
           }
           
-          if (Test-Path $exePath) {
-            Write-Host "✓ Found bff-viewer.exe"
-            
-            # Create distribution directory
-            New-Item -ItemType Directory -Force -Path "dist"
-            Copy-Item $exePath -Destination "dist\"
-            
-            # Copy required DLLs
-            $dllSources = @(
-              "$env:GITHUB_WORKSPACE\deps\openblas-windows\lib\*.dll",
-              "C:\Windows\System32\vcruntime140.dll",
-              "C:\Windows\System32\msvcp140.dll",
-              "C:\Windows\System32\vcruntime140_1.dll"
-            )
-            
-            foreach ($source in $dllSources) {
-              if (Test-Path $source -ErrorAction SilentlyContinue) {
-                Copy-Item $source -Destination "dist\" -ErrorAction SilentlyContinue
-                Write-Host "✓ Copied DLLs from: $source"
-              }
+          Write-Host "✓ Found bff-viewer.exe"
+          
+          # Create distribution directory
+          New-Item -ItemType Directory -Force -Path "dist"
+          Copy-Item $exePath -Destination "dist\"
+          
+          # Copy required DLLs
+          $dllSources = @(
+            "$env:GITHUB_WORKSPACE\deps\openblas-windows\lib\*.dll",
+            "C:\Windows\System32\vcruntime140.dll",
+            "C:\Windows\System32\msvcp140.dll",
+            "C:\Windows\System32\vcruntime140_1.dll"
+          )
+          
+          foreach ($source in $dllSources) {
+            if (Test-Path $source -ErrorAction SilentlyContinue) {
+              Copy-Item $source -Destination "dist\" -ErrorAction SilentlyContinue
+              Write-Host "✓ Copied DLLs from: $source"
             }
-            
-            # Also copy NanoGUI DLL if it exists
-            $nanoguiDll = "$env:GITHUB_WORKSPACE\build\deps\nanogui\Release\nanogui.dll"
-            if (Test-Path $nanoguiDll) {
-              Copy-Item $nanoguiDll -Destination "dist\"
-              Write-Host "✓ Copied NanoGUI DLL"
-            }
-          } else {
-            Write-Host "✗ bff-viewer.exe still not found after rebuild attempt"
-            exit 1
+          }
+          
+          # Copy NanoGUI DLL if it exists
+          $nanoguiDll = "$env:GITHUB_WORKSPACE\build\deps\nanogui\Release\nanogui.dll"
+          if (Test-Path $nanoguiDll) {
+            Copy-Item $nanoguiDll -Destination "dist\"
+            Write-Host "✓ Copied NanoGUI DLL"
           }
 
       - name: Create Final Package
