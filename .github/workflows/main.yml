@@ -325,7 +325,8 @@ jobs:
             Copy-Item $CBLAS_SRC -Destination $CBLAS_DEST -Force
             Write-Host "✓ Copied cblas.h to include directory as backup"
           }
-      - name: Configure BFF with BLAS support
+          
+            - name: Configure BFF with BLAS support
         run: |
           mkdir build
           cd build
