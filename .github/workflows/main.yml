@@ -380,7 +380,7 @@ jobs:
           # Debug: Show what include paths CMake actually set
           Write-Host "=== CMake Cache Variables ==="
           Get-Content CMakeCache.txt | Select-String -Pattern "BLAS|OpenBLAS|INCLUDE" | Select-Object -First 20
-          
+
       - name: Fix NanoGUI Pre-Link Error
         run: |
           # Navigate to the NanoGUI source directory
