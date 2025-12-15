@@ -1,4 +1,4 @@
-name: Build BFF Windows with GUI
+name: Build BFF v1.6 for Windows
 
 on:
   push:
@@ -29,16 +29,11 @@ jobs:
         with:
           cmake-version: "3.25.x"
 
-      - name: Install required tools
-        run: |
-          choco install nasm -y
-
-      - name: Build SuiteSparse
+      - name: Build SuiteSparse (Static with OpenBLAS)
         run: |
           mkdir suitesparse-build
           cd suitesparse-build
           
-          # Build with explicit install path
           cmake ../suitesparse-src `
             -DCMAKE_BUILD_TYPE=Release `
             -DCMAKE_INSTALL_PREFIX="$env:GITHUB_WORKSPACE/install" `
@@ -53,49 +48,10 @@ jobs:
             -DBUILD_CCOLAMD=ON `
             -DBUILD_CAMD=ON `
             -DBUILD_Suitesparseconfig=ON `
-            -DCMAKE_WINDOWS_EXPORT_ALL_SYMBOLS=ON
+            -DBUILD_SHARED_LIBS=OFF `
+            -DCMAKE_WINDOWS_EXPORT_ALL_SYMBOLS=OFF
           
           cmake --build . --config Release --target install --parallel
-          
-          # Verify the install directory
-          Write-Host "Checking install directory..."
-          if (Test-Path "$env:GITHUB_WORKSPACE/install") {
-            Write-Host "✓ Install directory created successfully"
-            Get-ChildItem -Path "$env:GITHUB_WORKSPACE/install" -Recurse | Select-Object Name, FullName
-          } else {
-            Write-Host "✗ Install directory not found"
-            exit 1
-          }
-
-      - name: Verify SuiteSparse build
-        run: |
-          Write-Host "Verifying SuiteSparse installation..."
-          $installPath = Join-Path $env:GITHUB_WORKSPACE "install"
-          
-          if (Test-Path $installPath) {
-            Write-Host "✓ Main install directory exists"
-            
-            # Check for essential directories
-            $includePath = Join-Path $installPath "include"
-            $libPath = Join-Path $installPath "lib"
-            
-            if (Test-Path $includePath) {
-              Write-Host "✓ Include directory exists"
-              Get-ChildItem $includePath | Select-Object -First 5 Name
-            } else {
-              Write-Host "✗ Include directory missing"
-            }
-            
-            if (Test-Path $libPath) {
-              Write-Host "✓ Library directory exists"
-              Get-ChildItem $libPath | Select-Object -First 5 Name
-            } else {
-              Write-Host "✗ Library directory missing"
-            }
-          } else {
-            Write-Host "✗ Install directory not found at $installPath"
-            exit 1
-          }
 
       - name: Set SuiteSparse path
         id: set-output
@@ -104,32 +60,20 @@ jobs:
           Write-Host "Setting SuiteSparse path to: $path"
           echo "suitesparse-path=$path" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
-      - name: Change to workspace root and upload
-        run: |
-          cd $env:GITHUB_WORKSPACE
-          Write-Host "Current directory: $(Get-Location)"
-          Write-Host "Contents of install directory:"
-          if (Test-Path "install") {
-            Get-ChildItem "install" -Recurse | Select-Object Name
-          } else {
-            Write-Host "install directory not found!"
-            exit 1
-          }
-
       - name: Upload SuiteSparse artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: suitesparse-windows
+          name: suitesparse-windows-static
           path: install/
           if-no-files-found: error
           retention-days: 1
 
   build-bff:
-    name: Build BFF
+    name: Build BFF GUI Application
     runs-on: windows-latest
     needs: build-suite-sparse
     steps:
-      - name: Checkout BFF
+      - name: Checkout BFF v1.6 with Submodules
         uses: actions/checkout@v4
         with:
           repository: GeometryCollective/boundary-first-flattening
@@ -139,7 +83,7 @@ jobs:
       - name: Download SuiteSparse artifacts
         uses: actions/download-artifact@v4
         with:
-          name: suitesparse-windows
+          name: suitesparse-windows-static
           path: suitesparse-deps
 
       - name: Setup MSBuild
@@ -150,475 +94,197 @@ jobs:
         with:
           cmake-version: "3.25.x"
 
-      - name: Install dependencies with BLAS headers
+      - name: Create blas.lib symlink for OpenBLAS
         run: |
-          choco install eigen -y
-          # Install OpenBLAS with development headers
-          choco install openblas -y --installargs "ADDLOCAL=headers"
-          choco install vcpkg -y
-          vcpkg integrate install
-          vcpkg install glew freeglut libpng tiff cblas lapack --triplet x64-windows
-
-      - name: Find and Configure SuiteSparse
-        run: |
-          # The artifact contains bin/, include/, lib/ directly in suitesparse-deps
-          $SUITESPARSE_DIR = (Resolve-Path "suitesparse-deps").Path
-          Write-Host "SuiteSparse directory: $SUITESPARSE_DIR"
+          $openblasLib = "$env:GITHUB_WORKSPACE\deps\openblas-windows\lib\libopenblas.lib"
+          $blasSymlink = "$env:GITHUB_WORKSPACE\deps\openblas-windows\lib\blas.lib"
           
-          # Verify SuiteSparse files exist
-          $cholmodHeader = Join-Path $SUITESPARSE_DIR "include\suitesparse\cholmod.h"
-          if (Test-Path $cholmodHeader) {
-            Write-Host "✓ Found cholmod.h at: $cholmodHeader"
+          if (Test-Path $openblasLib) {
+            New-Item -ItemType SymbolicLink -Path $blasSymlink -Target $openblasLib
+            Write-Host "✓ Created blas.lib symlink to libopenblas.lib"
           } else {
-            Write-Host "Checking alternative locations..."
-            # Check if it's in include/ directly
-            $cholmodAlt = Join-Path $SUITESPARSE_DIR "include\cholmod.h"
-            if (Test-Path $cholmodAlt) {
-              Write-Host "✓ Found cholmod.h at: $cholmodAlt"
-            } else {
-              Write-Host "✗ Missing cholmod.h"
-              Write-Host "Include directory contents:"
-              Get-ChildItem -Path (Join-Path $SUITESPARSE_DIR "include") -Recurse | Select-Object FullName
-              exit 1
-            }
+            Write-Host "✗ libopenblas.lib not found at: $openblasLib"
+            Get-ChildItem "$env:GITHUB_WORKSPACE\deps\openblas-windows\lib\" -ErrorAction SilentlyContinue
+            exit 1
           }
-          
-          # Create environment variable for subsequent steps
-          echo "SUITESPARSE_DIR=$SUITESPARSE_DIR" | Out-File -FilePath $env:GITHUB_ENV -Append
 
-      - name: Patch BFF CMakeLists.txt
+      - name: Patch BFF Source Files
+        shell: pwsh
         run: |
-          $SUITESPARSE_DIR = $env:SUITESPARSE_DIR
-          Write-Host "Using SuiteSparse directory: $SUITESPARSE_DIR"
+          # Patch cblas.h include in Common.h
+          $CommonHeader = "$env:GITHUB_WORKSPACE\src\Common.h"
+          $cblasPath = "$env:GITHUB_WORKSPACE\deps\openblas-windows\include\cblas.h"
           
-          # Note: The headers are in suitesparse-deps/include/suitesparse/
-          $INCLUDE_DIR = Join-Path $SUITESPARSE_DIR "include"
+          Write-Host "Patching Common.h at: $CommonHeader"
+          Write-Host "cblas.h location: $cblasPath"
           
-          # Create a custom find script
-          $CUSTOM_FIND = 'set(SUITESPARSE_DIR "' + $SUITESPARSE_DIR + '")\n' +
-            'set(SUITESPARSE_INCLUDE_DIR "${SUITESPARSE_DIR}/include")\n' +
-            'set(SUITESPARSE_LIBRARY_DIR "${SUITESPARSE_DIR}/lib")\n' +
-            '\n' +
-            'file(GLOB SUITESPARSE_LIBRARIES "${SUITESPARSE_LIBRARY_DIR}/*.lib")\n' +
-            '\n' +
-            'set(SUITESPARSE_INCLUDE_DIRS "${SUITESPARSE_INCLUDE_DIR}")\n' +
-            'set(SUITESPARSE_LIBRARIES "${SUITESPARSE_LIBRARIES}")\n' +
-            'set(SUITESPARSE_FOUND TRUE)\n' +
-            '\n' +
-            'message(STATUS "SuiteSparse manually configured:")\n' +
-            'message(STATUS "  Include dir: ${SUITESPARSE_INCLUDE_DIR}")\n' +
-            'message(STATUS "  Library dir: ${SUITESPARSE_LIBRARY_DIR}")\n'
-          
-          Set-Content -Path "FindSuiteSparseCustom.cmake" -Value $CUSTOM_FIND
-          
-          # Patch the main CMakeLists.txt
-          $PATCH = 'find_package(Eigen3 3.2 REQUIRED)\n' +
-            '\n' +
-            '# Manually set SuiteSparse paths before find_package\n' +
-            'set(SUITESPARSE_DIR "' + $SUITESPARSE_DIR + '")\n' +
-            'set(SUITESPARSE_INCLUDE_DIR "${SUITESPARSE_DIR}/include")\n' +
-            'set(SUITESPARSE_LIBRARY_DIR "${SUITESPARSE_DIR}/lib")\n' +
-            '\n' +
-            '# Override the find module\n' +
-            'set(SuiteSparse_FOUND TRUE)\n' +
-            'set(SuiteSparse_INCLUDE_DIRS "${SUITESPARSE_INCLUDE_DIR}")\n' +
-            'set(SuiteSparse_LIBRARY_DIRS "${SUITESPARSE_LIBRARY_DIR}")\n' +
-            '\n' +
-            'file(GLOB SuiteSparse_LIBRARIES "${SUITESPARSE_LIBRARY_DIR}/*.lib")\n' +
-            '\n' +
-            'message(STATUS "SuiteSparse manually configured:")\n' +
-            'message(STATUS "  Include dir: ${SUITESPARSE_INCLUDE_DIR}")\n' +
-            'message(STATUS "  Library dir: ${SUITESPARSE_LIBRARY_DIR}")\n' +
-            '\n' +
-            'find_package(OpenGL REQUIRED)\n'
-          
-          $content = Get-Content -Path "CMakeLists.txt" -Raw
-          $pattern = 'find_package\(Eigen3 3\.2 REQUIRED\)'
-          $replacement = $PATCH
-          $content = $content -replace $pattern, $replacement
-          Set-Content -Path "CMakeLists.txt" -Value $content
-          
-      - name: Patch BFF headers for cblas.h
-        run: |
-          # The problematic file that includes cblas.h
-          $DENSE_MATRIX_INL = Join-Path $env:GITHUB_WORKSPACE "include\bff\linear-algebra\DenseMatrix.inl"
-          
-          Write-Host "Patching: $DENSE_MATRIX_INL"
-          
-          if (Test-Path $DENSE_MATRIX_INL) {
-            # Get the absolute path to cblas.h
-            $CBLAS_PATH = Join-Path $env:GITHUB_WORKSPACE "deps\openblas-windows\include\cblas.h"
-            
-            # Convert to Windows path with backslashes and quotes
-            $CBLAS_INCLUDE = '"' + $CBLAS_PATH + '"'
-            
-            Write-Host "cblas.h location: $CBLAS_PATH"
-            
-            if (Test-Path $CBLAS_PATH) {
-              Write-Host "✓ cblas.h exists at expected location"
-            } else {
-              Write-Host "✗ cblas.h not found at expected location"
-              # List what's in the deps directory
-              Write-Host "Contents of deps directory:"
-              Get-ChildItem -Path (Join-Path $env:GITHUB_WORKSPACE "deps") -Recurse | Select-Object FullName
-              exit 1
-            }
-            
-            # Read the file
-            $content = Get-Content -Path $DENSE_MATRIX_INL -Raw
-            
-            # Replace with Windows absolute path
-            $newContent = $content -replace '#include <cblas\.h>', "#include $CBLAS_INCLUDE"
-            $newContent = $newContent -replace '#include "cblas\.h"', "#include $CBLAS_INCLUDE"
-            
-            # Also try to fix the broken path from previous attempt
-            $newContent = $newContent -replace '#include "deps/openblas-windows/include/cblas\.h"', "#include $CBLAS_INCLUDE"
-            $newContent = $newContent -replace '#include <deps/openblas-windows/include/cblas\.h>', "#include $CBLAS_INCLUDE"
-            
-            if ($newContent -ne $content) {
-              Write-Host "✓ Patched cblas.h include with absolute path"
-              Set-Content -Path $DENSE_MATRIX_INL -Value $newContent
-              
-              # Verify the change
-              $updatedContent = Get-Content -Path $DENSE_MATRIX_INL -Raw
-              Write-Host "First 5 lines after patch:"
-              $updatedLines = $updatedContent -split "`n"
-              for ($i = 0; $i -lt 5 -and $i -lt $updatedLines.Count; $i++) {
-                Write-Host "Line $($i+1): $($updatedLines[$i])"
-              }
-            } else {
-              Write-Host "✗ Could not find cblas.h include to patch"
-              # Show the first 10 lines to see what's there
-              Write-Host "First 10 lines of file:"
-              $lines = $content -split "`n"
-              for ($i = 0; $i -lt 10 -and $i -lt $lines.Count; $i++) {
-                Write-Host "Line $($i+1): $($lines[$i])"
-              }
-            }
+          if (Test-Path $cblasPath) {
+            Write-Host "✓ Found cblas.h"
+            # Create relative path from src/ to deps/openblas-windows/include/
+            $relativePath = "../deps/openblas-windows/include/cblas.h"
+            (Get-Content $CommonHeader -Raw) -replace '#include <cblas\.h>', "#include `"$relativePath`"" | Set-Content $CommonHeader
+            Write-Host "✓ Patched Common.h with relative cblas.h path"
           } else {
-            Write-Host "✗ File not found: $DENSE_MATRIX_INL"
+            Write-Host "✗ cblas.h not found at expected location"
             exit 1
           }
           
-          # Also patch Cholesky.inl if it exists
-          $CHOLESKY_INL = Join-Path $env:GITHUB_WORKSPACE "include\bff\linear-algebra\Cholesky.inl"
-          if (Test-Path $CHOLESKY_INL) {
-            $content = Get-Content -Path $CHOLESKY_INL -Raw
-            $CBLAS_INCLUDE = '"' + (Join-Path $env:GITHUB_WORKSPACE "deps\openblas-windows\include\cblas.h") + '"'
-            
-            $newContent = $content -replace '#include <cblas\.h>', "#include $CBLAS_INCLUDE"
-            $newContent = $newContent -replace '#include "cblas\.h"', "#include $CBLAS_INCLUDE"
-            $newContent = $newContent -replace '#include "deps/openblas-windows/include/cblas\.h"', "#include $CBLAS_INCLUDE"
-            $newContent = $newContent -replace '#include <deps/openblas-windows/include/cblas\.h>', "#include $CBLAS_INCLUDE"
-            
-            if ($newContent -ne $content) {
-              Set-Content -Path $CHOLESKY_INL -Value $newContent
-              Write-Host "✓ Patched Cholesky.inl"
+          # Patch DenseMatrix.inl and Cholesky.inl if they exist
+          $filesToPatch = @(
+            "$env:GITHUB_WORKSPACE\include\bff\linear-algebra\DenseMatrix.inl",
+            "$env:GITHUB_WORKSPACE\include\bff\linear-algebra\Cholesky.inl"
+          )
+          
+          foreach ($file in $filesToPatch) {
+            if (Test-Path $file) {
+              (Get-Content $file -Raw) -replace '#include <cblas\.h>', "#include `"$relativePath`"" | Set-Content $file
+              Write-Host "✓ Patched $((Get-Item $file).Name)"
             }
-          }
-          
-          # Also copy cblas.h to a more accessible location as backup
-          $CBLAS_SRC = Join-Path $env:GITHUB_WORKSPACE "deps\openblas-windows\include\cblas.h"
-          $CBLAS_DEST = Join-Path $env:GITHUB_WORKSPACE "include\cblas.h"
-          
-          if (Test-Path $CBLAS_SRC) {
-            Copy-Item $CBLAS_SRC -Destination $CBLAS_DEST -Force
-            Write-Host "✓ Copied cblas.h to include directory as backup"
           }
 
-      - name: Fix BFF DLL Export Symbols
+      - name: Add BFF_API Export Macros
+        shell: pwsh
         run: |
-          # Check for Common.h file which likely contains the 'common' symbol
-          $COMMON_H = Join-Path $env:GITHUB_WORKSPACE "include\bff\linear-algebra\Common.h"
-          $COMMON_CPP = Join-Path $env:GITHUB_WORKSPACE "src\linear-algebra\Common.cpp"
+          $CommonHeader = "$env:GITHUB_WORKSPACE\src\Common.h"
+          $CommonSource = "$env:GITHUB_WORKSPACE\src\Common.cpp"
           
-          Write-Host "Checking for Common.h at: $COMMON_H"
+          # Add BFF_API definition to Common.h
+          $content = Get-Content $CommonHeader -Raw
+          $apiMacro = "#ifdef _WIN32" + "`n" +
+            "#ifdef BFF_EXPORTS" + "`n" +
+            "#define BFF_API __declspec(dllexport)" + "`n" +
+            "#else" + "`n" +
+            "#define BFF_API __declspec(dllimport)" + "`n" +
+            "#endif" + "`n" +
+            "#else" + "`n" +
+            "#define BFF_API" + "`n" +
+            "#endif" + "`n" +
+            "`n"
           
-          if (Test-Path $COMMON_H) {
-            $content = Get-Content -Path $COMMON_H -Raw
-            
-            # Look for the 'common' symbol declaration
-            if ($content -match 'extern.*common') {
-              Write-Host "Found 'common' symbol declaration in Common.h"
-              
-              # Add DLL export/import macros if not present
-              if ($content -notmatch 'BFF_API' -and $content -notmatch '__declspec') {
-                Write-Host "Adding DLL export macros to Common.h"
-                
-                # Add BFF_API definition at the beginning
-                $newContent = '#ifdef _WIN32' + "`n" +
-                  '#ifdef BFF_EXPORTS' + "`n" +
-                  '#define BFF_API __declspec(dllexport)' + "`n" +
-                  '#else' + "`n" +
-                  '#define BFF_API __declspec(dllimport)' + "`n" +
-                  '#endif' + "`n" +
-                  '#else' + "`n" +
-                  '#define BFF_API' + "`n" +
-                  '#endif' + "`n" +
-                  "`n" + $content
-                
-                # Add BFF_API to the common declaration
-                $newContent = $newContent -replace '(extern.*common)', 'BFF_API $1'
-                
-                Set-Content -Path $COMMON_H -Value $newContent
-                Write-Host "✓ Patched Common.h with DLL export macros"
-              }
-            }
+          $content = $apiMacro + $content
+          
+          # Add BFF_API to common declaration if present
+          $content = $content -replace '(extern\s+\"C\"\s+\{[^}]*\}.*common)', 'BFF_API $1'
+          Set-Content $CommonHeader -Value $content -NoNewline
+          Write-Host "✓ Added BFF_API macros to Common.h"
+          
+          # Add BFF_EXPORTS define to Common.cpp
+          if (Test-Path $CommonSource) {
+            $sourceContent = Get-Content $CommonSource -Raw
+            $sourceContent = "#define BFF_EXPORTS" + "`n" + $sourceContent
+            Set-Content $CommonSource -Value $sourceContent -NoNewline
+            Write-Host "✓ Added BFF_EXPORTS to Common.cpp"
           }
-          
-          # Also check Common.cpp for the definition
-          if (Test-Path $COMMON_CPP) {
-            $content = Get-Content -Path $COMMON_CPP -Raw
-            
-            # Add BFF_EXPORTS define at the top to enable exports
-            if ($content -notmatch 'BFF_EXPORTS') {
-              $newContent = '#define BFF_EXPORTS' + "`n" + $content
-              Set-Content -Path $COMMON_CPP -Value $newContent
-              Write-Host "✓ Added BFF_EXPORTS definition to Common.cpp"
-            }
-          }
-          
-          # SIMPLER APPROACH: Just add BFF_EXPORTS via CMake flag instead of patching CMakeLists.txt
-          Write-Host "Note: Will add BFF_EXPORTS via CMake command line instead of patching CMakeLists.txt"
-          
-      - name: Configure BFF with BLAS support
+
+      - name: Configure BFF with CMake (Static Build)
         run: |
           mkdir build
           cd build
           
-          $SUITESPARSE_DIR = $env:SUITESPARSE_DIR
-          $OPENBLAS_DIR = "C:\tools\openblas"
-          $VCPKG_DIR = "C:\vcpkg\installed\x64-windows"
+          $SUITESPARSE_DIR = (Resolve-Path "../suitesparse-deps").Path
           $BFF_OPENBLAS_INCLUDE = "$env:GITHUB_WORKSPACE\deps\openblas-windows\include"
           $BFF_OPENBLAS_LIB = "$env:GITHUB_WORKSPACE\deps\openblas-windows\lib"
           
-          # Verify the cblas.h file exists
-          Write-Host "Checking for cblas.h..."
-          $cblasPath = Join-Path $BFF_OPENBLAS_INCLUDE "cblas.h"
-          if (Test-Path $cblasPath) {
-            Write-Host "✓ Found cblas.h at: $cblasPath"
-          } else {
-            Write-Host "✗ cblas.h not found at expected location"
-            Write-Host "Searching for cblas.h in BFF deps..."
-            Get-ChildItem -Path "$env:GITHUB_WORKSPACE\deps" -Filter "cblas.h" -Recurse | Select-Object FullName
-            exit 1
-          }
+          Write-Host "SuiteSparse directory: $SUITESPARSE_DIR"
+          Write-Host "OpenBLAS include: $BFF_OPENBLAS_INCLUDE"
+          Write-Host "OpenBLAS lib: $BFF_OPENBLAS_LIB"
           
-          # Verify OpenBLAS library exists
-          Write-Host "Checking for OpenBLAS library..."
-          $openblasLib = Join-Path $BFF_OPENBLAS_LIB "libopenblas.lib"
-          if (Test-Path $openblasLib) {
-            Write-Host "✓ Found OpenBLAS library at: $openblasLib"
-          } else {
-            Write-Host "✗ OpenBLAS library not found at $openblasLib"
-            # FIXED: Use ${} syntax for variable with colon
-            Write-Host "Available libraries in ${BFF_OPENBLAS_LIB}:"
-            Get-ChildItem -Path $BFF_OPENBLAS_LIB -Filter "*.lib" | Select-Object Name
-            # Try the OpenBLAS from chocolatey
-            $chocoOpenBLAS = Join-Path $OPENBLAS_DIR "lib\libopenblas.lib"
-            if (Test-Path $chocoOpenBLAS) {
-              Write-Host "✓ Found OpenBLAS at: $chocoOpenBLAS"
-              $openblasLib = $chocoOpenBLAS
-              $BFF_OPENBLAS_LIB = $OPENBLAS_DIR
-            }
-          }
-          
-          # Configure with explicit paths for everything
           cmake .. `
             -DCMAKE_BUILD_TYPE=Release `
-            -DCMAKE_PREFIX_PATH="$SUITESPARSE_DIR;$VCPKG_DIR;$OPENBLAS_DIR" `
-            -DCMAKE_INCLUDE_PATH="$SUITESPARSE_DIR/include;$SUITESPARSE_DIR/include/suitesparse;$BFF_OPENBLAS_INCLUDE;$OPENBLAS_DIR/include;$VCPKG_DIR/include" `
-            -DCMAKE_LIBRARY_PATH="$SUITESPARSE_DIR/lib;$BFF_OPENBLAS_LIB;$OPENBLAS_DIR/lib;$VCPKG_DIR/lib" `
-            -DEigen3_DIR="C:\tools\eigen\share\eigen3\cmake" `
-            -DOpenBLAS_INCLUDE_DIR="$BFF_OPENBLAS_INCLUDE" `
-            -DOpenBLAS_LIBRARY="$openblasLib" `
+            -DCMAKE_PREFIX_PATH="$SUITESPARSE_DIR" `
+            -DCMAKE_INCLUDE_PATH="$SUITESPARSE_DIR/include;$BFF_OPENBLAS_INCLUDE" `
+            -DCMAKE_LIBRARY_PATH="$SUITESPARSE_DIR/lib;$BFF_OPENBLAS_LIB" `
             -DBLAS_INCLUDE_DIR="$BFF_OPENBLAS_INCLUDE" `
-            -DBLAS_LIBRARIES="$openblasLib" `
-            -DBLAS_openblas_LIBRARY="$openblasLib" `
+            -DBLAS_LIBRARIES="$BFF_OPENBLAS_LIB/blas.lib" `
             -DBLA_VENDOR=OpenBLAS `
             -DBUILD_GUI=ON `
             -DBUILD_CLI=ON `
-            -DBUILD_WITH_OPENMP=ON `
-            -DCMAKE_WINDOWS_EXPORT_ALL_SYMBOLS=ON `
+            -DBUILD_SHARED_LIBS=OFF `
+            -DBFF_EXPORTS=ON `
+            -DCMAKE_WINDOWS_EXPORT_ALL_SYMBOLS=OFF `
             -G "Visual Studio 17 2022" `
             -A x64
-          
-          # Debug: Show what BLAS libraries CMake actually found
-          Write-Host "=== CMake BLAS Configuration ==="
-          Get-Content CMakeCache.txt | Select-String -Pattern "BLAS|OpenBLAS" | Select-Object
 
-      - name: Copy OpenBLAS as blas.lib
+      - name: Patch NanoGUI for Static Build
         run: |
-          # Copy libopenblas.lib to blas.lib in vcpkg directory
-          $sourceLib = "C:\tools\openblas\lib\libopenblas.lib"
-          $destLib = "C:\vcpkg\installed\x64-windows\lib\blas.lib"
+          $NanoGUICMake = "$env:GITHUB_WORKSPACE\deps\nanogui\CMakeLists.txt"
           
-          if (Test-Path $sourceLib) {
-            Copy-Item $sourceLib -Destination $destLib -Force
-            Write-Host "✓ Copied $sourceLib to $destLib"
-          } else {
-            # Try BFF's bundled OpenBLAS
-            $bffSource = "$env:GITHUB_WORKSPACE\deps\openblas-windows\lib\libopenblas.lib"
-            if (Test-Path $bffSource) {
-              Copy-Item $bffSource -Destination $destLib -Force
-              Write-Host "✓ Copied BFF's $bffSource to $destLib"
-            } else {
-              Write-Host "✗ Could not find OpenBLAS library"
-              Get-ChildItem -Path "C:\" -Filter "libopenblas.lib" -Recurse -ErrorAction SilentlyContinue | Select-Object FullName
-            }
+          if (Test-Path $NanoGUICMake) {
+            $content = Get-Content $NanoGUICMake -Raw
+            # Ensure static build is forced for NanoGUI too
+            $patched = $content -replace '(project\(nanogui[^)]*\))', '$1' + "`n" +
+              "set(BUILD_SHARED_LIBS OFF CACHE BOOL `"Build static libraries`" FORCE)" + "`n" +
+              "set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS OFF CACHE BOOL `"Disable auto-export`" FORCE)"
+            Set-Content $NanoGUICMake -Value $patched -NoNewline
+            Write-Host "✓ Patched NanoGUI CMakeLists.txt for static build"
           }
-          
-      - name: Fix NanoGUI Pre-Link Error
-        run: |
-          # Navigate to the NanoGUI source directory
-          cd deps/nanogui
-          
-          # Create a patch file to disable WINDOWS_EXPORT_ALL_SYMBOLS
-          $PATCH_CONTENT = @'
-          # Disable automatic DLL export generation to avoid PreLinkEvent crash
-          set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS OFF)
-          '@
-          
-          # Apply the patch to NanoGUI's CMakeLists.txt
-          # We'll add it near the beginning of the file
-          $CMAKELISTS_PATH = "CMakeLists.txt"
-          $content = Get-Content $CMAKELISTS_PATH -Raw
-          
-          # Insert our patch after the project() call
-          $pattern = 'project\(nanogui[^)]*\)'
-          if ($content -match $pattern) {
-              $patchedContent = $content -replace $pattern, "$&`n$PATCH_CONTENT"
-              Set-Content -Path $CMAKELISTS_PATH -Value $patchedContent -NoNewline
-              Write-Host "✓ Patched NanoGUI CMakeLists.txt to disable CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS"
-          } else {
-              Write-Host "⚠ Could not find project() declaration, trying alternative location..."
-              # Try adding at a different location
-              $patchedContent = "cmake_minimum_required(VERSION 3.1)`n$PATCH_CONTENT`n" + $content
-              Set-Content -Path $CMAKELISTS_PATH -Value $patchedContent -NoNewline
-              Write-Host "✓ Added patch at beginning of CMakeLists.txt"
-          }
-          
-          # Go back to the workspace root
-          cd ../..
 
-      - name: Build BFF without GUI first
+      - name: Build BFF Viewer
         run: |
           cd build
-          # First build the core library without GUI to isolate issues
-          cmake --build . --config Release --target bff --parallel --verbose
-          
-          # Check if bff.lib was created
-          Write-Host "Checking if bff.lib was built..."
-          if (Test-Path "Release\bff.lib") {
-            Write-Host "✓ bff.lib built successfully"
-          } else {
-            Write-Host "✗ bff.lib not found"
-            exit 1
-          }
-
-      - name: Build GUI components
-        run: |
-          cd build
-          # Now build the GUI components
           cmake --build . --config Release --target bff-viewer --parallel --verbose
 
-      - name: Build CLI components
+      - name: Gather Runtime Dependencies
+        shell: pwsh
         run: |
-          cd build
-          # Build CLI if needed
-          cmake --build . --config Release --target bff-command-line --parallel --verbose
+          $exePath = "$env:GITHUB_WORKSPACE\build\Release\bff-viewer.exe"
+          
+          if (-not (Test-Path $exePath)) {
+            Write-Host "✗ bff-viewer.exe not found at: $exePath"
+            Get-ChildItem "$env:GITHUB_WORKSPACE\build\Release\" -ErrorAction SilentlyContinue
+            exit 1
+          }
+          
+          Write-Host "✓ Found bff-viewer.exe"
+          
+          # Create distribution directory
+          New-Item -ItemType Directory -Force -Path "dist"
+          Copy-Item $exePath -Destination "dist\"
+          
+          # Copy required DLLs from various sources
+          $dllSources = @(
+            # SuiteSparse static build should not have DLLs, but check
+            "$env:GITHUB_WORKSPACE\suitesparse-deps\bin\*.dll",
+            # OpenBLAS DLLs
+            "$env:GITHUB_WORKSPACE\deps\openblas-windows\lib\*.dll",
+            # System runtime DLLs
+            "C:\Windows\System32\vcruntime140.dll",
+            "C:\Windows\System32\msvcp140.dll",
+            "C:\Windows\System32\vcruntime140_1.dll"
+          )
+          
+          foreach ($source in $dllSources) {
+            if (Test-Path $source -ErrorAction SilentlyContinue) {
+              Copy-Item $source -Destination "dist\" -ErrorAction SilentlyContinue
+              Write-Host "✓ Copied DLLs from: $source"
+            }
+          }
+          
+          # Use dumpbin to find additional dependencies
+          $requiredDlls = & dumpbin /dependents $exePath | 
+            Where-Object { $_ -match '\.dll' } | 
+            ForEach-Object { $_.Trim() }
+          
+          Write-Host "Executable dependencies:"
+          $requiredDlls | ForEach-Object { Write-Host "  - $_" }
 
-      - name: Collect DLLs and package
+      - name: Create Final Package
         run: |
-          mkdir -p bff-package
-          
-          # Copy executables (check different possible names)
-          $exeNames = @("bff-viewer.exe", "BFF_GUI.exe", "bff-command-line.exe", "BFF_CLI.exe")
-          foreach ($exe in $exeNames) {
-            $exePath = Join-Path "build\Release" $exe
-            if (Test-Path $exePath) {
-              Write-Host "✓ Found executable: $exe"
-              Copy-Item $exePath -Destination "bff-package/" -ErrorAction SilentlyContinue
-            }
-          }
-          
-          # Check what executables were built
-          Write-Host "Checking built executables..."
-          Get-ChildItem "build\Release\*.exe" | Select-Object Name
-          
-          # Get SuiteSparse directory from environment
-          $SUITESPARSE_DIR = $env:SUITESPARSE_DIR
-          
-          # Copy SuiteSparse DLLs
-          if (Test-Path "$SUITESPARSE_DIR/bin/*.dll") {
-            Copy-Item "$SUITESPARSE_DIR/bin/*.dll" -Destination "bff-package/" -ErrorAction SilentlyContinue
-          }
-          
-          # Copy OpenBLAS DLLs
-          $openblasDll = "C:\tools\openblas\bin\libopenblas.dll"
-          if (Test-Path $openblasDll) {
-            Copy-Item $openblasDll -Destination "bff-package/" -ErrorAction SilentlyContinue
-          }
-          
-          # Copy common runtime DLLs
-          $systemDlls = @("msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll", "concrt140.dll")
-          foreach ($dll in $systemDlls) {
-            $systemPath = Join-Path "C:\Windows\System32" $dll
-            if (Test-Path $systemPath) {
-              Copy-Item $systemPath -Destination "bff-package/" -ErrorAction SilentlyContinue
-            }
-          }
-          
-          # Copy vcpkg DLLs
-          $vcpkgBin = "C:\vcpkg\installed\x64-windows\bin"
-          if (Test-Path $vcpkgBin) {
-            # Copy common graphics DLLs
-            $graphicsDlls = @("glew32.dll", "freeglut.dll", "libpng16.dll", "tiff.dll", "zlib1.dll")
-            foreach ($dll in $graphicsDlls) {
-              $dllPath = Join-Path $vcpkgBin $dll
-              if (Test-Path $dllPath) {
-                Copy-Item $dllPath -Destination "bff-package/" -ErrorAction SilentlyContinue
-              }
-            }
-          }
-          
-          # Create README
-          $README = 'Boundary First Flattening (BFF) v1.6 Windows Build\n' +
-            '=================================================\n' +
-            '\n' +
-            'This package contains:\n' +
-            '1. bff-viewer.exe - The graphical user interface\n' +
-            '2. bff-command-line.exe - Command line interface\n' +
-            '3. All required DLL dependencies\n' +
-            '\n' +
-            'Requirements:\n' +
-            '- Windows 10 or later\n' +
-            '- Visual C++ Redistributable 2022\n' +
-            '\n' +
-            'Usage:\n' +
-            '1. Double-click bff-viewer.exe to launch the application\n' +
-            '2. Use File menu to open OBJ files\n' +
-            '\n' +
-            'Note: This is an automated build from GitHub Actions.\n'
-          
-          Set-Content -Path "bff-package/README.txt" -Value $README
-          
-          # List package contents
-          Write-Host "Package contents:"
-          Get-ChildItem "bff-package/" -Recurse | Select-Object Name
+          Compress-Archive -Path "$env:GITHUB_WORKSPACE\dist\*" -DestinationPath "bff-viewer-windows.zip"
 
-      - name: Upload BFF artifacts
+      - name: Upload BFF Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: bff-windows-gui
-          path: bff-package/
-          if-no-files-found: error
+          name: bff-viewer-windows
+          path: bff-viewer-windows.zip
           retention-days: 7
 
-      - name: Create release (on tag)
+      - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          files: bff-package/*
-          draft: true
+          files: bff-viewer-windows.zip
+          draft: false
           prerelease: false
