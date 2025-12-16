@@ -33,7 +33,8 @@ jobs:
         7z x openblas.zip -oopenblas-install
         
         echo "Downloading pre-built METIS..."
-        mkdir -p metis-install/lib metis-install/include
+        mkdir -p metis-install/lib
+        mkdir -p metis-install/include
         wget https://github.com/GraphChallenge/GraphChallenge-Data/raw/master/metis-5.1.0-win-x86_64/lib/libmetis.lib -O metis-install/lib/metis.lib
         wget https://github.com/GraphChallenge/GraphChallenge-Data/raw/master/metis-5.1.0-win-x86_64/include/metis.h -O metis-install/include/metis.h
         
@@ -41,7 +42,8 @@ jobs:
       shell: bash
       run: |
         echo "Downloading SuiteSparse for Windows..."
-        mkdir -p suitesparse-deps/{lib,include}
+        mkdir -p suitesparse-deps/lib
+        mkdir -p suitesparse-deps/include
         
         SUITESPARSE_URL="https://github.com/jlblancoc/suitesparse-metis-for-windows/releases/download/v1.4.0"
         
@@ -55,82 +57,44 @@ jobs:
         cp ../../openblas-install/lib/libopenblas.lib blas.lib
         cp ../../openblas-install/lib/libopenblas.lib lapack.lib
         
-- name: Apply critical BFF patches
-  shell: bash
-  run: |
-    echo "Applying essential BFF patches for Windows..."
-    
-    # 1. Patch for Windows DLL export
-    echo "Patching BFF_API macros..."
-    cat > api_patch.h << 'EOF'
-#ifndef BFF_API_H
-#define BFF_API_H
-
-#ifdef _WIN32
-    #ifdef bff_EXPORTS
-        #define BFF_API __declspec(dllexport)
-    #else
-        #define BFF_API __declspec(dllimport)
-    #endif
-#else
-    #define BFF_API
-#endif
-
-#endif
-EOF
-    
-    # Include the API macro in main headers
-    for header in include/bff/*.h include/bff/*/*.h; do
-      if [ -f "$header" ]; then
-        sed -i '1i #include "api_patch.h"' "$header"
-      fi
-    done
-    
-    # 2. Create custom FindSuiteSparse.cmake
-    echo "Creating custom FindSuiteSparse.cmake..."
-    cat > cmake/FindSuiteSparse.cmake << 'EOF'
-# Manual configuration for SuiteSparse on Windows
-if(WIN32)
-  message(STATUS "Using manually configured SuiteSparse for Windows")
-  
-  set(SuiteSparse_FOUND ON)
-  set(SuiteSparse_INCLUDE_DIRS "\${CMAKE_SOURCE_DIR}/suitesparse-deps/include")
-  
-  # Use forward slashes for Windows compatibility
-  file(TO_CMAKE_PATH "\${CMAKE_SOURCE_DIR}/suitesparse-deps/lib" SUITESPARSE_LIB_DIR)
-  
-  set(SuiteSparse_LIBRARIES
-    "\${SUITESPARSE_LIB_DIR}/libamd.lib"
-    "\${SUITESPARSE_LIB_DIR}/libcamd.lib"
-    "\${SUITESPARSE_LIB_DIR}/libccolamd.lib"
-    "\${SUITESPARSE_LIB_DIR}/libcolamd.lib"
-    "\${SUITESPARSE_LIB_DIR}/libcholmod.lib"
-    "\${SUITESPARSE_LIB_DIR}/libspqr.lib"
-    "\${SUITESPARSE_LIB_DIR}/libldl.lib"
-    "\${SUITESPARSE_LIB_DIR}/libbtf.lib"
-    "\${SUITESPARSE_LIB_DIR}/libklu.lib"
-    "\${SUITESPARSE_LIB_DIR}/libcxsparse.lib"
-    "\${SUITESPARSE_LIB_DIR}/libumfpack.lib"
-    "\${SUITESPARSE_LIB_DIR}/suitesparseconfig.lib"
-    "\${CMAKE_SOURCE_DIR}/metis-install/lib/metis.lib"
-    "\${CMAKE_SOURCE_DIR}/openblas-install/lib/libopenblas.lib"
-  )
-  
-  message(STATUS "SuiteSparse includes: \${SuiteSparse_INCLUDE_DIRS}")
-  message(STATUS "SuiteSparse libraries configured")
-endif()
-EOF
-    
-    # 3. Patch main CMakeLists.txt
-    echo "Patching main CMakeLists.txt..."
-    sed -i 's|find_package(SuiteSparse REQUIRED)|# find_package(SuiteSparse REQUIRED)\ninclude(cmake/FindSuiteSparse.cmake)|' CMakeLists.txt
-    
-    # 4. Fix NanoGUI build
-    echo "Patching NanoGUI for static build..."
-    sed -i 's|add_library(nanogui SHARED|add_library(nanogui STATIC|' deps/nanogui/CMakeLists.txt
-    sed -i 's|NANOGUI_BUILD SHARED|NANOGUI_BUILD STATIC|' deps/nanogui/CMakeLists.txt
-    
-    echo "Patches applied successfully!"
+    - name: Apply critical BFF patches
+      shell: bash
+      run: |
+        echo "Applying essential BFF patches for Windows..."
+        
+        # 1. Create custom FindSuiteSparse.cmake
+        echo "Creating custom FindSuiteSparse.cmake..."
+        mkdir -p cmake
+        echo '# Manual SuiteSparse config for Windows' > cmake/FindSuiteSparse.cmake
+        echo 'set(SuiteSparse_FOUND ON)' >> cmake/FindSuiteSparse.cmake
+        echo 'set(SuiteSparse_INCLUDE_DIRS "$ENV{GITHUB_WORKSPACE}/suitesparse-deps/include")' >> cmake/FindSuiteSparse.cmake
+        echo 'set(SuiteSparse_LIBRARIES' >> cmake/FindSuiteSparse.cmake
+        echo '  "$ENV{GITHUB_WORKSPACE}/suitesparse-deps/lib/libamd.lib"' >> cmake/FindSuiteSparse.cmake
+        echo '  "$ENV{GITHUB_WORKSPACE}/suitesparse-deps/lib/libcamd.lib"' >> cmake/FindSuiteSparse.cmake
+        echo '  "$ENV{GITHUB_WORKSPACE}/suitesparse-deps/lib/libccolamd.lib"' >> cmake/FindSuiteSparse.cmake
+        echo '  "$ENV{GITHUB_WORKSPACE}/suitesparse-deps/lib/libcolamd.lib"' >> cmake/FindSuiteSparse.cmake
+        echo '  "$ENV{GITHUB_WORKSPACE}/suitesparse-deps/lib/libcholmod.lib"' >> cmake/FindSuiteSparse.cmake
+        echo '  "$ENV{GITHUB_WORKSPACE}/suitesparse-deps/lib/libspqr.lib"' >> cmake/FindSuiteSparse.cmake
+        echo '  "$ENV{GITHUB_WORKSPACE}/suitesparse-deps/lib/libldl.lib"' >> cmake/FindSuiteSparse.cmake
+        echo '  "$ENV{GITHUB_WORKSPACE}/suitesparse-deps/lib/libbtf.lib"' >> cmake/FindSuiteSparse.cmake
+        echo '  "$ENV{GITHUB_WORKSPACE}/suitesparse-deps/lib/libklu.lib"' >> cmake/FindSuiteSparse.cmake
+        echo '  "$ENV{GITHUB_WORKSPACE}/suitesparse-deps/lib/libcxsparse.lib"' >> cmake/FindSuiteSparse.cmake
+        echo '  "$ENV{GITHUB_WORKSPACE}/suitesparse-deps/lib/libumfpack.lib"' >> cmake/FindSuiteSparse.cmake
+        echo '  "$ENV{GITHUB_WORKSPACE}/suitesparse-deps/lib/suitesparseconfig.lib"' >> cmake/FindSuiteSparse.cmake
+        echo '  "$ENV{GITHUB_WORKSPACE}/metis-install/lib/metis.lib"' >> cmake/FindSuiteSparse.cmake
+        echo '  "$ENV{GITHUB_WORKSPACE}/openblas-install/lib/libopenblas.lib"' >> cmake/FindSuiteSparse.cmake
+        echo ')' >> cmake/FindSuiteSparse.cmake
+        
+        # 2. Patch CMakeLists.txt
+        echo "Patching CMakeLists.txt..."
+        sed -i 's|find_package(SuiteSparse REQUIRED)|include(cmake/FindSuiteSparse.cmake)|' CMakeLists.txt
+        
+        # 3. Patch NanoGUI
+        echo "Patching NanoGUI for static build..."
+        sed -i 's|add_library(nanogui SHARED|add_library(nanogui STATIC|' deps/nanogui/CMakeLists.txt
+        sed -i 's|NANOGUI_BUILD SHARED|NANOGUI_BUILD STATIC|' deps/nanogui/CMakeLists.txt
+        
+        echo "Patches applied successfully!"
         
     - name: Configure and Build BFF
       shell: cmd
