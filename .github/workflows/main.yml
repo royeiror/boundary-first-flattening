@@ -159,9 +159,13 @@ jobs:
         shell: pwsh
         run: |
           $SUITESPARSE_DIR = (Resolve-Path "suitesparse-deps").Path
+          # Convert Windows path to CMake-friendly format (forward slashes)
+          $SUITESPARSE_DIR_CMAKE = $SUITESPARSE_DIR -replace '\\', '/'
+          
           $CMAKELISTS = "CMakeLists.txt"
           
           Write-Host "Patching CMakeLists.txt to manually set SuiteSparse..."
+          Write-Host "Using SuiteSparse directory: $SUITESPARSE_DIR_CMAKE"
           
           # Read the entire file
           $content = Get-Content $CMAKELISTS -Raw
@@ -169,22 +173,22 @@ jobs:
           # Find the find_package(SuiteSparse) line and replace it with our manual setup
           $MANUAL_SETUP = '# Manually set SuiteSparse paths (bypassing FindSuiteSparse)' + "`n" +
             'set(SuiteSparse_FOUND TRUE)' + "`n" +
-            'set(SuiteSparse_INCLUDE_DIRS "' + $SUITESPARSE_DIR + '/include")' + "`n" +
-            'set(SuiteSparse_LIBRARY_DIRS "' + $SUITESPARSE_DIR + '/lib")' + "`n" +
+            'set(SuiteSparse_INCLUDE_DIRS "' + $SUITESPARSE_DIR_CMAKE + '/include")' + "`n" +
+            'set(SuiteSparse_LIBRARY_DIRS "' + $SUITESPARSE_DIR_CMAKE + '/lib")' + "`n" +
             'set(SuiteSparse_LIBRARIES' + "`n" +
-            '  "' + $SUITESPARSE_DIR + '/lib/libamd.lib"' + "`n" +
-            '  "' + $SUITESPARSE_DIR + '/lib/libcamd.lib"' + "`n" +
-            '  "' + $SUITESPARSE_DIR + '/lib/libccolamd.lib"' + "`n" +
-            '  "' + $SUITESPARSE_DIR + '/lib/libcolamd.lib"' + "`n" +
-            '  "' + $SUITESPARSE_DIR + '/lib/libcholmod.lib"' + "`n" +
-            '  "' + $SUITESPARSE_DIR + '/lib/libspqr.lib"' + "`n" +
-            '  "' + $SUITESPARSE_DIR + '/lib/libldl.lib"' + "`n" +
-            '  "' + $SUITESPARSE_DIR + '/lib/libbtf.lib"' + "`n" +
-            '  "' + $SUITESPARSE_DIR + '/lib/libklu.lib"' + "`n" +
-            '  "' + $SUITESPARSE_DIR + '/lib/libcxsparse.lib"' + "`n" +
-            '  "' + $SUITESPARSE_DIR + '/lib/libumfpack.lib"' + "`n" +
-            '  "' + $SUITESPARSE_DIR + '/lib/suitesparseconfig.lib"' + "`n" +
-            '  "' + $SUITESPARSE_DIR + '/lib/libmetis.lib"' + "`n" +
+            '  "' + $SUITESPARSE_DIR_CMAKE + '/lib/libamd.lib"' + "`n" +
+            '  "' + $SUITESPARSE_DIR_CMAKE + '/lib/libcamd.lib"' + "`n" +
+            '  "' + $SUITESPARSE_DIR_CMAKE + '/lib/libccolamd.lib"' + "`n" +
+            '  "' + $SUITESPARSE_DIR_CMAKE + '/lib/libcolamd.lib"' + "`n" +
+            '  "' + $SUITESPARSE_DIR_CMAKE + '/lib/libcholmod.lib"' + "`n" +
+            '  "' + $SUITESPARSE_DIR_CMAKE + '/lib/libspqr.lib"' + "`n" +
+            '  "' + $SUITESPARSE_DIR_CMAKE + '/lib/libldl.lib"' + "`n" +
+            '  "' + $SUITESPARSE_DIR_CMAKE + '/lib/libbtf.lib"' + "`n" +
+            '  "' + $SUITESPARSE_DIR_CMAKE + '/lib/libklu.lib"' + "`n" +
+            '  "' + $SUITESPARSE_DIR_CMAKE + '/lib/libcxsparse.lib"' + "`n" +
+            '  "' + $SUITESPARSE_DIR_CMAKE + '/lib/libumfpack.lib"' + "`n" +
+            '  "' + $SUITESPARSE_DIR_CMAKE + '/lib/suitesparseconfig.lib"' + "`n" +
+            '  "' + $SUITESPARSE_DIR_CMAKE + '/lib/libmetis.lib"' + "`n" +
             ')' + "`n" +
             'message(STATUS "Manually configured SuiteSparse:")' + "`n" +
             'message(STATUS "  Includes: ${SuiteSparse_INCLUDE_DIRS}")' + "`n" +
@@ -203,14 +207,15 @@ jobs:
             Write-Host "✓ Patched CMakeLists.txt to bypass FindSuiteSparse"
           } else {
             Write-Host "⚠ Could not find find_package(SuiteSparse) in CMakeLists.txt"
-            # Show lines around line 32 (where the error occurs)
-            Write-Host "Lines 25-35 of CMakeLists.txt:"
+            # Show what the file looks like around the find_package area
+            Write-Host "Searching for 'SuiteSparse' in CMakeLists.txt:"
             $lines = Get-Content $CMAKELISTS
-            for ($i = 24; $i -lt 35 -and $i -lt $lines.Count; $i++) {
-              Write-Host "Line $($i+1): $($lines[$i])"
+            for ($i = 0; $i -lt $lines.Count; $i++) {
+              if ($lines[$i] -match 'SuiteSparse') {
+                Write-Host "Line $($i+1): $($lines[$i])"
+              }
             }
           }
-
       - name: Clean build directory
         run: |
           if (Test-Path "build") {
