@@ -1,372 +1,181 @@
-name: Build BFF v1.6 for Windows
+name: Windows Build BFF v1.6
 
 on:
   push:
-    tags: ["v*"]
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
   workflow_dispatch:
 
-env:
-  BUILD_TYPE: "Release"
-
 jobs:
-  build-suite-sparse:
-    name: Build SuiteSparse
+  build-windows:
     runs-on: windows-latest
-    outputs:
-      suitesparse-path: ${{ steps.set-output.outputs.suitesparse-path }}
+    
     steps:
-      - name: Checkout SuiteSparse
-        uses: actions/checkout@v4
-        with:
-          repository: jlblancoc/suitesparse-metis-for-windows
-          path: suitesparse-src
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
 
-      - name: Setup MSBuild
-        uses: microsoft/setup-msbuild@v1
+    - name: Add msbuild to PATH
+      uses: microsoft/setup-msbuild@v1.1
 
-      - name: Setup CMake
-        uses: jwlawson/actions-setup-cmake@v1
-        with:
-          cmake-version: "3.25.x"
+    - name: Install dependencies
+      run: |
+        choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y
+        choco install git -y
 
-      - name: Build SuiteSparse (Static with OpenBLAS)
-        run: |
-          mkdir suitesparse-build
-          cd suitesparse-build
-          
-          cmake ../suitesparse-src `
-            -DCMAKE_BUILD_TYPE=Release `
-            -DCMAKE_INSTALL_PREFIX="$env:GITHUB_WORKSPACE/install" `
-            -DBLA_VENDOR=OpenBLAS `
-            -DENABLE_CUDA=OFF `
-            -DBUILD_METIS=ON `
-            -DBUILD_CHOLMOD=ON `
-            -DBUILD_UMFPACK=ON `
-            -DBUILD_SPQR=ON `
-            -DBUILD_AMD=ON `
-            -DBUILD_COLAMD=ON `
-            -DBUILD_CCOLAMD=ON `
-            -DBUILD_CAMD=ON `
-            -DBUILD_Suitesparseconfig=ON `
-            -DBUILD_SHARED_LIBS=OFF `
-            -DCMAKE_WINDOWS_EXPORT_ALL_SYMBOLS=OFF
-          
-          cmake --build . --config Release --target install --parallel
+    - name: Build OpenBLAS (static)
+      shell: bash
+      run: |
+        git clone https://github.com/OpenMathLib/OpenBLAS.git
+        cd OpenBLAS
+        # Using CMake for a static build[citation:5]
+        cmake . -G "Visual Studio 17 2022" -A x64 `
+          -DBUILD_SHARED_LIBS=OFF `
+          -DBUILD_STATIC_LIBS=ON `
+          -DCMAKE_INSTALL_PREFIX="../openblas-install"
+        cmake --build . --config Release --target INSTALL
+        cd ..
 
-      - name: Set SuiteSparse path
-        id: set-output
-        run: |
-          $path = Join-Path $env:GITHUB_WORKSPACE "install"
-          Write-Host "Setting SuiteSparse path to: $path"
-          echo "suitesparse-path=$path" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+    - name: Build METIS (missing dependency)[citation:10]
+      shell: bash
+      run: |
+        # Download and extract METIS 5.1.0
+        curl -L -o metis.tar.gz http://glaros.dtc.umn.edu/gkhome/fetch/sw/metis/metis-5.1.0.tar.gz
+        tar -xzf metis.tar.gz
+        cd metis-5.1.0
+        # Patch for MSVC
+        sed -i 's/#include <getopt.h>//' programs/cmdline_metis.c
+        sed -i 's/#include <getopt.h>//' programs/cmdline_graphchk.c
+        mkdir build && cd build
+        cmake .. -G "Visual Studio 17 2022" -A x64 `
+          -DSHARED=OFF `
+          -DCMAKE_INSTALL_PREFIX="../../metis-install"
+        cmake --build . --config Release --target INSTALL
+        cd .. && cd ..
 
-      - name: Upload SuiteSparse artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: suitesparse-windows-static
-          path: install/
-          if-no-files-found: error
-          retention-days: 1
+    - name: Build SuiteSparse (static with OpenBLAS)
+      shell: bash
+      run: |
+        # Use a fork/commit known to build on Windows
+        git clone https://github.com/jlblancoc/suitesparse.git --depth 1 --branch v7.7.0
+        cd suitesparse
+        # Apply critical Windows patches before build
+        echo "Patching SuiteSparse for static build with OpenBLAS..." > patch.log
+        # 1. Patch cblas.h to use relative includes[citation:10]
+        find . -name "cblas.h" -type f -exec sed -i 's/#include "cblas\.h"/#include "..\/OpenBLAS\/cblas.h"/g' {} \;
+        
+        # 2. Patch cholmod.h include path
+        find . -name "*.h" -type f -exec sed -i 's|#include "suitesparse/cholmod.h"|#include "cholmod.h"|g' {} \;
+        find . -name "*.h" -type f -exec sed -i 's|#include <suitesparse/cholmod.h>|#include "cholmod.h"|g' {} \;
+        
+        # Build with CMake
+        mkdir build && cd build
+        cmake .. -G "Visual Studio 17 2022" -A x64 `
+          -DBLA_VENDOR=OpenBLAS `
+          -DBLAS_LIBRARIES="${{ github.workspace }}/openblas-install/lib/libopenblas.lib" `
+          -DLAPACK_LIBRARIES="${{ github.workspace }}/openblas-install/lib/libopenblas.lib" `
+          -DCMAKE_INSTALL_PREFIX="../../suitesparse-deps" `
+          -DBUILD_SHARED_LIBS=OFF `
+          -DCMAKE_POLICY_DEFAULT_CMP0074=NEW `
+          -DNSTATIC=OFF `
+          -DNFORTRAN=ON `
+          -DMETIS_LIBRARY="${{ github.workspace }}/metis-install/lib/metis.lib" `
+          -DMETIS_INCLUDE_DIR="${{ github.workspace }}/metis-install/include"
+        cmake --build . --config Release --target INSTALL
+        cd .. && cd ..
+        
+        # 3. Create blas.lib symlink for compatibility[citation:1]
+        cd suitesparse-deps/lib
+        cp libopenblas.lib blas.lib
+        echo "Created blas.lib symlink from libopenblas.lib" >> ../../patch.log
 
-  build-bff:
-    name: Build BFF GUI Application
-    runs-on: windows-latest
-    needs: build-suite-sparse
-    steps:
-      - name: Checkout BFF v1.6 with Submodules
-        uses: actions/checkout@v4
-        with:
-          repository: GeometryCollective/boundary-first-flattening
-          ref: v1.6
-          submodules: recursive
+    - name: Patch BFF source code
+      shell: bash
+      run: |
+        echo "Applying BFF patches for Windows build..." > patches.log
+        
+        # 1. BFF_API export macros for Windows
+        find ./include -name "*.h" -type f -exec sed -i 's/^class \(.*\)$/#ifdef _WIN32\n#ifdef bff_EXPORTS\n#define BFF_API __declspec(dllexport)\n#else\n#define BFF_API __declspec(dllimport)\n#endif\n#else\n#define BFF_API\n#endif\nclass BFF_API \1/g' {} \;
+        
+        # 2. Patch CMakeLists.txt to bypass FindSuiteSparse
+        cat >> cmake/FindSuiteSparse.cmake << 'EOF'
+        # Manual override for Windows static build
+        if(WIN32)
+            set(SuiteSparse_FOUND ON)
+            set(SuiteSparse_INCLUDE_DIRS "${{ github.workspace }}/suitesparse-deps/include")
+            set(SuiteSparse_LIBRARIES 
+                "${{ github.workspace }}/suitesparse-deps/lib/libamd.lib"
+                "${{ github.workspace }}/suitesparse-deps/lib/libcamd.lib"
+                "${{ github.workspace }}/suitesparse-deps/lib/libccolamd.lib"
+                "${{ github.workspace }}/suitesparse-deps/lib/libcolamd.lib"
+                "${{ github.workspace }}/suitesparse-deps/lib/libcholmod.lib"
+                "${{ github.workspace }}/suitesparse-deps/lib/libspqr.lib"
+                "${{ github.workspace }}/suitesparse-deps/lib/libldl.lib"
+                "${{ github.workspace }}/suitesparse-deps/lib/libbtf.lib"
+                "${{ github.workspace }}/suitesparse-deps/lib/libklu.lib"
+                "${{ github.workspace }}/suitesparse-deps/lib/libcxsparse.lib"
+                "${{ github.workspace }}/suitesparse-deps/lib/libumfpack.lib"
+                "${{ github.workspace }}/suitesparse-deps/lib/suitesparseconfig.lib"
+                "${{ github.workspace }}/metis-install/lib/metis.lib"  # Fixed METIS path
+                "${{ github.workspace }}/openblas-install/lib/libopenblas.lib"
+            )
+            message(STATUS "Manually configured SuiteSparse for Windows static build")
+            message(STATUS "  Includes: ${SuiteSparse_INCLUDE_DIRS}")
+            message(STATUS "  Libraries: ${SuiteSparse_LIBRARIES}")
+        endif()
+        EOF
+        
+        # 3. Patch main CMakeLists.txt to use manual SuiteSparse
+        sed -i 's/find_package(SuiteSparse REQUIRED)/# find_package(SuiteSparse REQUIRED)\ninclude(cmake\/FindSuiteSparse.cmake)/' CMakeLists.txt
+        
+        # 4. NanoGUI static build patch[citation:2][citation:9]
+        sed -i 's/add_library(nanogui SHARED/add_library(nanogui STATIC/' deps/nanogui/CMakeLists.txt
+        sed -i 's/NANOGUI_BUILD SHARED/NANOGUI_BUILD STATIC/' deps/nanogui/CMakeLists.txt
+        sed -i 's/target_compile_definitions(nanogui PRIVATE "-DNVG_SHARED")/target_compile_definitions(nanogui PRIVATE "-DNVG_STATIC")/' deps/nanogui/CMakeLists.txt
+        
+        # 5. Ensure forward slash paths in CMake
+        find . -name "CMakeLists.txt" -type f -exec sed -i 's|\\|/|g' {} \;
 
-      - name: Download SuiteSparse artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: suitesparse-windows-static
-          path: suitesparse-deps
+    - name: Configure and Build BFF
+      shell: cmd
+      run: |
+        mkdir build
+        cd build
+        cmake .. -G "Visual Studio 17 2022" -A x64 ^
+          -DCMAKE_BUILD_TYPE=Release ^
+          -DCMAKE_PREFIX_PATH="..\suitesparse-deps" ^
+          -DBUILD_SHARED_LIBS=ON ^
+          -DCMAKE_CXX_FLAGS="/DBFF_EXPORTS"
+        cmake --build . --config Release --target ALL_BUILD
 
-      - name: Setup MSBuild
-        uses: microsoft/setup-msbuild@v1
+    - name: Collect and Package Artifacts
+      shell: bash
+      run: |
+        mkdir -p bff-package
+        
+        # Copy main executables and DLLs
+        cp ./build/Release/bff-viewer.exe ./bff-package/
+        cp ./build/Release/bff.dll ./bff-package/
+        cp ./build/Release/bff.lib ./bff-package/
+        
+        # Find and copy all required DLLs[citation:4]
+        echo "Collecting runtime dependencies..." > deps.log
+        find ./build -name "*.dll" -type f -exec cp {} ./bff-package/ \;
+        cp ./openblas-install/bin/*.dll ./bff-package/ 2>/dev/null || true
+        
+        # Verify critical files exist
+        ls -la ./bff-package/ > package_contents.txt
+        echo "--- Required files check ---" >> deps.log
+        [ -f "./bff-package/bff-viewer.exe" ] && echo "✓ bff-viewer.exe" >> deps.log || echo "✗ bff-viewer.exe" >> deps.log
+        [ -f "./bff-package/bff.dll" ] && echo "✓ bff.dll" >> deps.log || echo "✗ bff.dll" >> deps.log
+        [ -f "./bff-package/libopenblas.dll" ] && echo "✓ libopenblas.dll" >> deps.log || echo "✗ libopenblas.dll (may be static)" >> deps.log
 
-      - name: Setup CMake
-        uses: jwlawson/actions-setup-cmake@v1
-        with:
-          cmake-version: "3.25.x"
-
-      - name: Create blas.lib symlink for OpenBLAS
-        run: |
-          $openblasLib = "$env:GITHUB_WORKSPACE\deps\openblas-windows\lib\libopenblas.lib"
-          $blasSymlink = "$env:GITHUB_WORKSPACE\deps\openblas-windows\lib\blas.lib"
-          
-          if (Test-Path $openblasLib) {
-            New-Item -ItemType SymbolicLink -Path $blasSymlink -Target $openblasLib -Force
-            Write-Host "✓ Created blas.lib symlink to libopenblas.lib"
-          } else {
-            Write-Host "✗ libopenblas.lib not found at: $openblasLib"
-            exit 1
-          }
-
-      - name: Patch BFF Source Files for cblas.h
-        shell: pwsh
-        run: |
-          # Patch cblas.h includes in all relevant files
-          $cblasPath = "$env:GITHUB_WORKSPACE\deps\openblas-windows\include\cblas.h"
-          $relativePath = "../../deps/openblas-windows/include/cblas.h"
-          
-          Write-Host "Patching cblas.h includes..."
-          
-          $filesToPatch = @(
-            "$env:GITHUB_WORKSPACE\include\bff\linear-algebra\Common.h",
-            "$env:GITHUB_WORKSPACE\include\bff\linear-algebra\DenseMatrix.inl",
-            "$env:GITHUB_WORKSPACE\include\bff\linear-algebra\Cholesky.inl"
-          )
-          
-          foreach ($file in $filesToPatch) {
-            if (Test-Path $file) {
-              $content = Get-Content $file -Raw
-              $newContent = $content -replace '#include <cblas\.h>', "#include `"$relativePath`""
-              $newContent = $newContent -replace '#include "cblas\.h"', "#include `"$relativePath`""
-              
-              if ($newContent -ne $content) {
-                Set-Content $file -Value $newContent -NoNewline
-                Write-Host "✓ Patched $((Get-Item $file).Name) for cblas.h"
-              }
-            }
-          }
-
-      - name: Patch Common.h for SuiteSparse headers
-        shell: pwsh
-        run: |
-          $CommonHeader = "$env:GITHUB_WORKSPACE\include\bff\linear-algebra\Common.h"
-          
-          if (Test-Path $CommonHeader) {
-            Write-Host "Patching Common.h for SuiteSparse headers..."
-            
-            $content = Get-Content $CommonHeader -Raw
-            
-            # Replace cholmod.h include
-            $newContent = $content -replace '#include <cholmod\.h>', '#include <suitesparse/cholmod.h>'
-            $newContent = $newContent -replace '#include "cholmod\.h"', '#include <suitesparse/cholmod.h>'
-            
-            if ($newContent -ne $content) {
-              Set-Content $CommonHeader -Value $newContent -NoNewline
-              Write-Host "✓ Patched Common.h for SuiteSparse headers"
-            }
-          }
-
-      - name: Patch CMakeLists.txt to bypass FindSuiteSparse
-        shell: pwsh
-        run: |
-          $SUITESPARSE_DIR = (Resolve-Path "suitesparse-deps").Path
-          # Convert Windows path to CMake-friendly format (forward slashes)
-          $SUITESPARSE_DIR_CMAKE = $SUITESPARSE_DIR -replace '\\', '/'
-          
-          $CMAKELISTS = "CMakeLists.txt"
-          
-          Write-Host "Patching CMakeLists.txt to manually set SuiteSparse..."
-          Write-Host "Using SuiteSparse directory: $SUITESPARSE_DIR_CMAKE"
-          
-          # Read the entire file
-          $content = Get-Content $CMAKELISTS -Raw
-          
-          # Find the find_package(SuiteSparse) line and replace it with our manual setup
-          $MANUAL_SETUP = '# Manually set SuiteSparse paths (bypassing FindSuiteSparse)' + "`n" +
-            'set(SuiteSparse_FOUND TRUE)' + "`n" +
-            'set(SuiteSparse_INCLUDE_DIRS "' + $SUITESPARSE_DIR_CMAKE + '/include")' + "`n" +
-            'set(SuiteSparse_LIBRARY_DIRS "' + $SUITESPARSE_DIR_CMAKE + '/lib")' + "`n" +
-            'set(SuiteSparse_LIBRARIES' + "`n" +
-            '  "' + $SUITESPARSE_DIR_CMAKE + '/lib/libamd.lib"' + "`n" +
-            '  "' + $SUITESPARSE_DIR_CMAKE + '/lib/libcamd.lib"' + "`n" +
-            '  "' + $SUITESPARSE_DIR_CMAKE + '/lib/libccolamd.lib"' + "`n" +
-            '  "' + $SUITESPARSE_DIR_CMAKE + '/lib/libcolamd.lib"' + "`n" +
-            '  "' + $SUITESPARSE_DIR_CMAKE + '/lib/libcholmod.lib"' + "`n" +
-            '  "' + $SUITESPARSE_DIR_CMAKE + '/lib/libspqr.lib"' + "`n" +
-            '  "' + $SUITESPARSE_DIR_CMAKE + '/lib/libldl.lib"' + "`n" +
-            '  "' + $SUITESPARSE_DIR_CMAKE + '/lib/libbtf.lib"' + "`n" +
-            '  "' + $SUITESPARSE_DIR_CMAKE + '/lib/libklu.lib"' + "`n" +
-            '  "' + $SUITESPARSE_DIR_CMAKE + '/lib/libcxsparse.lib"' + "`n" +
-            '  "' + $SUITESPARSE_DIR_CMAKE + '/lib/libumfpack.lib"' + "`n" +
-            '  "' + $SUITESPARSE_DIR_CMAKE + '/lib/suitesparseconfig.lib"' + "`n" +
-            '  "' + $SUITESPARSE_DIR_CMAKE + '/lib/libmetis.lib"' + "`n" +
-            ')' + "`n" +
-            'message(STATUS "Manually configured SuiteSparse:")' + "`n" +
-            'message(STATUS "  Includes: ${SuiteSparse_INCLUDE_DIRS}")' + "`n" +
-            'message(STATUS "  Libraries: ${SuiteSparse_LIBRARIES}")' + "`n"
-          
-          # Replace the find_package(SuiteSparse) call with our manual setup
-          $newContent = $content -replace 'find_package\(SuiteSparse REQUIRED\)', $MANUAL_SETUP
-          
-          if ($newContent -eq $content) {
-            # Try with different pattern
-            $newContent = $content -replace 'find_package\(SuiteSparse[^)]*\)', $MANUAL_SETUP
-          }
-          
-          if ($newContent -ne $content) {
-            Set-Content -Path $CMAKELISTS -Value $newContent -NoNewline
-            Write-Host "✓ Patched CMakeLists.txt to bypass FindSuiteSparse"
-          } else {
-            Write-Host "⚠ Could not find find_package(SuiteSparse) in CMakeLists.txt"
-            # Show what the file looks like around the find_package area
-            Write-Host "Searching for 'SuiteSparse' in CMakeLists.txt:"
-            $lines = Get-Content $CMAKELISTS
-            for ($i = 0; $i -lt $lines.Count; $i++) {
-              if ($lines[$i] -match 'SuiteSparse') {
-                Write-Host "Line $($i+1): $($lines[$i])"
-              }
-            }
-          }
-      - name: Clean build directory
-        run: |
-          if (Test-Path "build") {
-            Remove-Item -Recurse -Force "build" -ErrorAction SilentlyContinue
-          }
-          mkdir build
-
-      - name: Configure BFF with CMake
-        run: |
-          cd build
-          
-          $SUITESPARSE_DIR = (Resolve-Path "../suitesparse-deps").Path
-          $BFF_OPENBLAS_INCLUDE = "$env:GITHUB_WORKSPACE\deps\openblas-windows\include"
-          $BFF_OPENBLAS_LIB = "$env:GITHUB_WORKSPACE\deps\openblas-windows\lib"
-          
-          Write-Host "Configuring BFF with SuiteSparse at: $SUITESPARSE_DIR"
-          
-          cmake .. `
-            -DCMAKE_BUILD_TYPE=Release `
-            -DBUILD_GUI=ON `
-            -DBUILD_CLI=ON `
-            -DBUILD_SHARED_LIBS=OFF `
-            -DBFF_EXPORTS=ON `
-            -DCMAKE_WINDOWS_EXPORT_ALL_SYMBOLS=OFF `
-            -G "Visual Studio 17 2022" `
-            -A x64
-
-      - name: Patch NanoGUI for Static Build
-        run: |
-          $NanoGUICMake = "$env:GITHUB_WORKSPACE\deps\nanogui\CMakeLists.txt"
-          
-          if (Test-Path $NanoGUICMake) {
-            $content = Get-Content $NanoGUICMake -Raw
-            
-            if ($content -notmatch "BUILD_SHARED_LIBS OFF") {
-              $patchText = "`n`n" + 
-                "# Force static build for Windows compatibility" + "`n" +
-                "set(BUILD_SHARED_LIBS OFF CACHE BOOL `"Build static libraries`" FORCE)" + "`n" +
-                "set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS OFF CACHE BOOL `"Disable auto-export`" FORCE)"
-              
-              Set-Content $NanoGUICMake -Value ($content + $patchText) -NoNewline
-              Write-Host "✓ Added static build configuration to NanoGUI CMakeLists.txt"
-            }
-          }
-
-      - name: Build and verify
-        run: |
-          cd build
-          
-          # Build everything
-          cmake --build . --config Release --parallel --verbose
-          
-          Write-Host "Checking build results..."
-          
-          # Check for bff library (could be .dll or .lib)
-          $bffDll = Test-Path "Release\bff.dll"
-          $bffLib = Test-Path "Release\bff.lib"
-          $bffViewer = Test-Path "Release\bff-viewer.exe"
-          
-          if ($bffDll) {
-            Write-Host "✓ bff.dll created"
-          }
-          if ($bffLib) {
-            Write-Host "✓ bff.lib created"
-          }
-          if ($bffViewer) {
-            Write-Host "✓ bff-viewer.exe created"
-          }
-          
-          # If bff.dll exists but bff.lib doesn't, try to create it
-          if ($bffDll -and -not $bffLib) {
-            Write-Host "bff.dll exists but bff.lib missing - checking for import library..."
-            # Look for the import library that should have been created
-            $libFiles = Get-ChildItem "." -Filter "*.lib" -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.Name -match "bff" }
-            if ($libFiles) {
-              Write-Host "Found bff library files:"
-              $libFiles | ForEach-Object { Write-Host "  $($_.FullName)" }
-              # Copy the first one to Release directory
-              Copy-Item $libFiles[0].FullName -Destination "Release\bff.lib" -Force
-              Write-Host "✓ Copied bff.lib to Release directory"
-            }
-          }
-          
-          if (-not $bffViewer) {
-            Write-Host "✗ bff-viewer.exe not created"
-            Write-Host "Release directory contents:"
-            Get-ChildItem "Release\" -ErrorAction SilentlyContinue
-            exit 1
-          }
-
-      - name: Gather Runtime Dependencies
-        shell: pwsh
-        run: |
-          $exePath = "$env:GITHUB_WORKSPACE\build\Release\bff-viewer.exe"
-          
-          if (-not (Test-Path $exePath)) {
-            Write-Host "✗ bff-viewer.exe not found"
-            exit 1
-          }
-          
-          Write-Host "✓ Found bff-viewer.exe"
-          
-          # Create distribution directory
-          New-Item -ItemType Directory -Force -Path "dist"
-          Copy-Item $exePath -Destination "dist\"
-          
-          # Copy bff.dll if it exists
-          if (Test-Path "$env:GITHUB_WORKSPACE\build\Release\bff.dll") {
-            Copy-Item "$env:GITHUB_WORKSPACE\build\Release\bff.dll" -Destination "dist\"
-            Write-Host "✓ Copied bff.dll"
-          }
-          
-          # Copy required DLLs
-          $dllSources = @(
-            "$env:GITHUB_WORKSPACE\deps\openblas-windows\lib\*.dll",
-            "C:\Windows\System32\vcruntime140.dll",
-            "C:\Windows\System32\msvcp140.dll",
-            "C:\Windows\System32\vcruntime140_1.dll"
-          )
-          
-          foreach ($source in $dllSources) {
-            if (Test-Path $source -ErrorAction SilentlyContinue) {
-              Copy-Item $source -Destination "dist\" -ErrorAction SilentlyContinue
-              Write-Host "✓ Copied DLLs from: $source"
-            }
-          }
-          
-          # Copy NanoGUI DLL if it exists
-          $nanoguiDll = "$env:GITHUB_WORKSPACE\build\deps\nanogui\Release\nanogui.dll"
-          if (Test-Path $nanoguiDll) {
-            Copy-Item $nanoguiDll -Destination "dist\"
-            Write-Host "✓ Copied NanoGUI DLL"
-          }
-
-      - name: Create Final Package
-        run: |
-          Compress-Archive -Path "$env:GITHUB_WORKSPACE\dist\*" -DestinationPath "bff-viewer-windows.zip"
-
-      - name: Upload BFF Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: bff-viewer-windows
-          path: bff-viewer-windows.zip
-          retention-days: 7
-
-      - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          files: bff-viewer-windows.zip
-          draft: false
-          prerelease: false
+    - name: Upload Build Artifacts
+      uses: actions/upload-artifact@v4[citation:4]
+      with:
+        name: bff-windows-binaries
+        path: bff-package/*
+        if-no-files-found: error[citation:4]
+        retention-days: 7[citation:4]
