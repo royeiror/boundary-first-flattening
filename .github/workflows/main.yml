@@ -10,7 +10,7 @@ on:
 jobs:
   build-windows:
     runs-on: windows-latest
-    timeout-minutes: 45  # Set timeout to prevent hanging
+    timeout-minutes: 45
     
     steps:
     - name: Checkout code
@@ -28,12 +28,10 @@ jobs:
     - name: Download pre-built OpenBLAS and METIS
       shell: bash
       run: |
-        # Download pre-compiled OpenBLAS for Windows (much faster than building)
         echo "Downloading pre-built OpenBLAS..."
         wget https://github.com/OpenMathLib/OpenBLAS/releases/download/v0.3.28/OpenBLAS-0.3.28-x64.zip -O openblas.zip
         7z x openblas.zip -oopenblas-install
         
-        # Download pre-built METIS
         echo "Downloading pre-built METIS..."
         mkdir -p metis-install/lib metis-install/include
         wget https://github.com/GraphChallenge/GraphChallenge-Data/raw/master/metis-5.1.0-win-x86_64/lib/libmetis.lib -O metis-install/lib/metis.lib
@@ -42,11 +40,9 @@ jobs:
     - name: Download pre-built SuiteSparse
       shell: bash
       run: |
-        # Download SuiteSparse binaries compiled for Windows
         echo "Downloading SuiteSparse for Windows..."
         mkdir -p suitesparse-deps/{lib,include}
         
-        # Download individual SuiteSparse components (using a known working build)
         SUITESPARSE_URL="https://github.com/jlblancoc/suitesparse-metis-for-windows/releases/download/v1.4.0"
         
         wget "${SUITESPARSE_URL}/suitesparse-include.zip" -O suitesparse-include.zip
@@ -55,11 +51,9 @@ jobs:
         wget "${SUITESPARSE_URL}/suitesparse-lib.zip" -O suitesparse-lib.zip
         7z x suitesparse-lib.zip -osuitesparse-deps/lib
         
-        # Create required symlinks/compatibility files
         cd suitesparse-deps/lib
         cp ../../openblas-install/lib/libopenblas.lib blas.lib
         cp ../../openblas-install/lib/libopenblas.lib lapack.lib
-        echo "Created compatibility symlinks"
         
     - name: Apply critical BFF patches
       shell: bash
@@ -87,43 +81,43 @@ EOF
         
         # Include the API macro in main headers
         for header in include/bff/*.h include/bff/*/*.h; do
-            if [ -f "$header" ]; then
-                sed -i '1i #include "api_patch.h"' "$header"
-            fi
+          if [ -f "$header" ]; then
+            sed -i '1i #include "api_patch.h"' "$header"
+          fi
         done
         
         # 2. Create custom FindSuiteSparse.cmake
         echo "Creating custom FindSuiteSparse.cmake..."
-        cat > cmake/FindSuiteSparse.cmake << EOF
+        cat > cmake/FindSuiteSparse.cmake << 'EOF'
 # Manual configuration for SuiteSparse on Windows
 if(WIN32)
-    message(STATUS "Using manually configured SuiteSparse for Windows")
-    
-    set(SuiteSparse_FOUND ON)
-    set(SuiteSparse_INCLUDE_DIRS "\${CMAKE_SOURCE_DIR}/suitesparse-deps/include")
-    
-    # Use forward slashes for Windows compatibility
-    file(TO_CMAKE_PATH "\${CMAKE_SOURCE_DIR}/suitesparse-deps/lib" SUITESPARSE_LIB_DIR)
-    
-    set(SuiteSparse_LIBRARIES
-        "\${SUITESPARSE_LIB_DIR}/libamd.lib"
-        "\${SUITESPARSE_LIB_DIR}/libcamd.lib"
-        "\${SUITESPARSE_LIB_DIR}/libccolamd.lib"
-        "\${SUITESPARSE_LIB_DIR}/libcolamd.lib"
-        "\${SUITESPARSE_LIB_DIR}/libcholmod.lib"
-        "\${SUITESPARSE_LIB_DIR}/libspqr.lib"
-        "\${SUITESPARSE_LIB_DIR}/libldl.lib"
-        "\${SUITESPARSE_LIB_DIR}/libbtf.lib"
-        "\${SUITESPARSE_LIB_DIR}/libklu.lib"
-        "\${SUITESPARSE_LIB_DIR}/libcxsparse.lib"
-        "\${SUITESPARSE_LIB_DIR}/libumfpack.lib"
-        "\${SUITESPARSE_LIB_DIR}/suitesparseconfig.lib"
-        "\${CMAKE_SOURCE_DIR}/metis-install/lib/metis.lib"
-        "\${CMAKE_SOURCE_DIR}/openblas-install/lib/libopenblas.lib"
-    )
-    
-    message(STATUS "SuiteSparse includes: \${SuiteSparse_INCLUDE_DIRS}")
-    message(STATUS "SuiteSparse libraries configured")
+  message(STATUS "Using manually configured SuiteSparse for Windows")
+  
+  set(SuiteSparse_FOUND ON)
+  set(SuiteSparse_INCLUDE_DIRS "\${CMAKE_SOURCE_DIR}/suitesparse-deps/include")
+  
+  # Use forward slashes for Windows compatibility
+  file(TO_CMAKE_PATH "\${CMAKE_SOURCE_DIR}/suitesparse-deps/lib" SUITESPARSE_LIB_DIR)
+  
+  set(SuiteSparse_LIBRARIES
+    "\${SUITESPARSE_LIB_DIR}/libamd.lib"
+    "\${SUITESPARSE_LIB_DIR}/libcamd.lib"
+    "\${SUITESPARSE_LIB_DIR}/libccolamd.lib"
+    "\${SUITESPARSE_LIB_DIR}/libcolamd.lib"
+    "\${SUITESPARSE_LIB_DIR}/libcholmod.lib"
+    "\${SUITESPARSE_LIB_DIR}/libspqr.lib"
+    "\${SUITESPARSE_LIB_DIR}/libldl.lib"
+    "\${SUITESPARSE_LIB_DIR}/libbtf.lib"
+    "\${SUITESPARSE_LIB_DIR}/libklu.lib"
+    "\${SUITESPARSE_LIB_DIR}/libcxsparse.lib"
+    "\${SUITESPARSE_LIB_DIR}/libumfpack.lib"
+    "\${SUITESPARSE_LIB_DIR}/suitesparseconfig.lib"
+    "\${CMAKE_SOURCE_DIR}/metis-install/lib/metis.lib"
+    "\${CMAKE_SOURCE_DIR}/openblas-install/lib/libopenblas.lib"
+  )
+  
+  message(STATUS "SuiteSparse includes: \${SuiteSparse_INCLUDE_DIRS}")
+  message(STATUS "SuiteSparse libraries configured")
 endif()
 EOF
         
@@ -145,7 +139,6 @@ EOF
         mkdir build
         cd build
         
-        # Configure with explicit paths
         cmake .. -G "Visual Studio 17 2022" -A x64 ^
           -DCMAKE_BUILD_TYPE=Release ^
           -DBUILD_SHARED_LIBS=ON ^
@@ -163,28 +156,24 @@ EOF
         echo "Packaging build artifacts..."
         mkdir -p bff-package
         
-        # Copy executables
         if [ -f "./build/Release/bff-viewer.exe" ]; then
-            cp ./build/Release/bff-viewer.exe ./bff-package/
-            echo "✓ bff-viewer.exe"
+          cp ./build/Release/bff-viewer.exe ./bff-package/
+          echo "✓ bff-viewer.exe"
         fi
         
         if [ -f "./build/Release/bff.dll" ]; then
-            cp ./build/Release/bff.dll ./bff-package/
-            echo "✓ bff.dll"
+          cp ./build/Release/bff.dll ./bff-package/
+          echo "✓ bff.dll"
         fi
         
-        # Copy required DLLs
         echo "Copying runtime dependencies..."
         find ./build -name "*.dll" -exec cp {} ./bff-package/ \;
         
-        # Copy OpenBLAS DLL
         if [ -f "./openblas-install/bin/libopenblas.dll" ]; then
-            cp ./openblas-install/bin/libopenblas.dll ./bff-package/
-            echo "✓ libopenblas.dll"
+          cp ./openblas-install/bin/libopenblas.dll ./bff-package/
+          echo "✓ libopenblas.dll"
         fi
         
-        # List package contents
         echo "Package contents:"
         ls -la ./bff-package/
         
