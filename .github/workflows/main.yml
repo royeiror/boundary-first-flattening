@@ -102,21 +102,16 @@ jobs:
           
           Write-Host "`nInclude directory contents:"
           if (Test-Path "$SUITESPARSE_DIR/include") {
-            Get-ChildItem "$SUITESPARSE_DIR/include" -Recurse -File | Select-Object -First 30 Name
-          } else {
-            Write-Host "Include directory not found!"
-            Get-ChildItem "$SUITESPARSE_DIR" -Recurse | Where-Object { $_.Name -match "\.h$" } | Select-Object -First 20 FullName
+            Get-ChildItem "$SUITESPARSE_DIR/include" -File | Select-Object -First 20 Name
+            Write-Host "`nChecking for suitesparse subdirectory:"
+            if (Test-Path "$SUITESPARSE_DIR/include/suitesparse") {
+              Get-ChildItem "$SUITESPARSE_DIR/include/suitesparse" -Filter "*.h" | Select-Object -First 10 Name
+            }
           }
           
           Write-Host "`nLib directory contents:"
           if (Test-Path "$SUITESPARSE_DIR/lib") {
             Get-ChildItem "$SUITESPARSE_DIR/lib" -File | Select-Object Name
-          }
-          
-          # Check if headers are in suitesparse/ subdirectory
-          if (Test-Path "$SUITESPARSE_DIR/include/suitesparse") {
-            Write-Host "`nHeaders found in suitesparse/ subdirectory:"
-            Get-ChildItem "$SUITESPARSE_DIR/include/suitesparse" -Filter "*.h" | Select-Object -First 10 Name
           }
           
           # Set environment variable for later steps
@@ -132,102 +127,63 @@ jobs:
             Write-Host "✓ Created blas.lib symlink to libopenblas.lib"
           } else {
             Write-Host "✗ libopenblas.lib not found at: $openblasLib"
-            Get-ChildItem "$env:GITHUB_WORKSPACE\deps\openblas-windows\lib\" -ErrorAction SilentlyContinue
             exit 1
           }
 
-      - name: Patch BFF Source Files for cblas.h
+      - name: Patch BFF Source Files
         shell: pwsh
         run: |
-          # Patch cblas.h includes in all relevant files
+          # Patch cblas.h includes
           $cblasPath = "$env:GITHUB_WORKSPACE\deps\openblas-windows\include\cblas.h"
           $relativePath = "../../deps/openblas-windows/include/cblas.h"
           
-          Write-Host "cblas.h location: $cblasPath"
+          Write-Host "Patching cblas.h includes..."
           
-          if (Test-Path $cblasPath) {
-            Write-Host "✓ Found cblas.h"
-            
-            # Files that need patching
-            $filesToPatch = @(
-              "$env:GITHUB_WORKSPACE\include\bff\linear-algebra\Common.h",
-              "$env:GITHUB_WORKSPACE\include\bff\linear-algebra\DenseMatrix.inl",
-              "$env:GITHUB_WORKSPACE\include\bff\linear-algebra\Cholesky.inl"
-            )
-            
-            foreach ($file in $filesToPatch) {
-              if (Test-Path $file) {
-                $content = Get-Content $file -Raw
-                $newContent = $content -replace '#include <cblas\.h>', "#include `"$relativePath`""
-                $newContent = $newContent -replace '#include "cblas\.h"', "#include `"$relativePath`""
-                
-                if ($newContent -ne $content) {
-                  Set-Content $file -Value $newContent -NoNewline
-                  Write-Host "✓ Patched $((Get-Item $file).Name) for cblas.h"
-                } else {
-                  Write-Host "⚠ No cblas.h include found in $((Get-Item $file).Name)"
-                }
-              } else {
-                Write-Host "⚠ File not found: $file"
+          $filesToPatch = @(
+            "$env:GITHUB_WORKSPACE\include\bff\linear-algebra\Common.h",
+            "$env:GITHUB_WORKSPACE\include\bff\linear-algebra\DenseMatrix.inl",
+            "$env:GITHUB_WORKSPACE\include\bff\linear-algebra\Cholesky.inl"
+          )
+          
+          foreach ($file in $filesToPatch) {
+            if (Test-Path $file) {
+              $content = Get-Content $file -Raw
+              $newContent = $content -replace '#include <cblas\.h>', "#include `"$relativePath`""
+              $newContent = $newContent -replace '#include "cblas\.h"', "#include `"$relativePath`""
+              
+              if ($newContent -ne $content) {
+                Set-Content $file -Value $newContent -NoNewline
+                Write-Host "✓ Patched $((Get-Item $file).Name) for cblas.h"
               }
             }
-            
-          } else {
-            Write-Host "✗ cblas.h not found at expected location"
-            exit 1
           }
 
       - name: Patch Common.h for SuiteSparse headers
         shell: pwsh
         run: |
-          # Patch Common.h to include suitesparse/cholmod.h
           $CommonHeader = "$env:GITHUB_WORKSPACE\include\bff\linear-algebra\Common.h"
           
           if (Test-Path $CommonHeader) {
-            Write-Host "Patching Common.h at: $CommonHeader"
+            Write-Host "Patching Common.h for SuiteSparse headers..."
             
             $content = Get-Content $CommonHeader -Raw
             
-            # First, check what the current include looks like
-            Write-Host "Current cholmod.h include line:"
-            $content -split "`n" | Where-Object { $_ -match 'cholmod\.h' } | ForEach-Object { Write-Host "  $_" }
-            
-            # Replace #include <cholmod.h> with #include <suitesparse/cholmod.h>
+            # Replace cholmod.h include
             $newContent = $content -replace '#include <cholmod\.h>', '#include <suitesparse/cholmod.h>'
+            $newContent = $newContent -replace '#include "cholmod\.h"', '#include <suitesparse/cholmod.h>'
             
             if ($newContent -ne $content) {
               Set-Content $CommonHeader -Value $newContent -NoNewline
-              Write-Host "✓ Patched Common.h to include suitesparse/cholmod.h"
-            } else {
-              # Try alternative pattern
-              $newContent = $content -replace '#include "cholmod\.h"', '#include <suitesparse/cholmod.h>'
-              if ($newContent -ne $content) {
-                Set-Content $CommonHeader -Value $newContent -NoNewline
-                Write-Host "✓ Patched Common.h (alternative pattern)"
-              } else {
-                Write-Host "⚠ Could not find cholmod.h include to patch in Common.h"
-                # Add it manually if not found
-                if ($content -notmatch 'suitesparse/cholmod') {
-                  $newContent = $content -replace '(#include.*)', '#include <suitesparse/cholmod.h>' + "`n" + '$1'
-                  Set-Content $CommonHeader -Value $newContent -NoNewline
-                  Write-Host "✓ Added suitesparse/cholmod.h include to Common.h"
-                }
-              }
+              Write-Host "✓ Patched Common.h for SuiteSparse headers"
             }
-          } else {
-            Write-Host "⚠ Common.h not found at: $CommonHeader"
           }
 
       - name: Add BFF_API Export Macros
         shell: pwsh
         run: |
-          # Find Common.h
           $commonHeader = "$env:GITHUB_WORKSPACE\include\bff\linear-algebra\Common.h"
           
           if (Test-Path $commonHeader) {
-            Write-Host "Found Common.h at: $commonHeader"
-            
-            # Add BFF_API definition to Common.h
             $content = Get-Content $commonHeader -Raw
             $apiMacro = "#ifdef _WIN32" + "`n" +
               "#ifdef BFF_EXPORTS" + "`n" +
@@ -240,25 +196,16 @@ jobs:
               "#endif" + "`n" +
               "`n"
             
-            # Only add if not already present
             if ($content -notmatch 'BFF_API') {
               $content = $apiMacro + $content
               Set-Content $commonHeader -Value $content -NoNewline
               Write-Host "✓ Added BFF_API macros to Common.h"
-            } else {
-              Write-Host "✓ BFF_API macros already present in Common.h"
             }
-          } else {
-            Write-Host "⚠ Common.h not found"
           }
           
-          # Find and patch Common.cpp
           $commonSource = "$env:GITHUB_WORKSPACE\src\linear-algebra\Common.cpp"
-          
           if (Test-Path $commonSource) {
-            Write-Host "Found Common.cpp at: $commonSource"
             $sourceContent = Get-Content $commonSource -Raw
-            # Add BFF_EXPORTS define if not present
             if ($sourceContent -notmatch 'BFF_EXPORTS') {
               $sourceContent = "#define BFF_EXPORTS" + "`n" + $sourceContent
               Set-Content $commonSource -Value $sourceContent -NoNewline
@@ -266,54 +213,20 @@ jobs:
             }
           }
 
-      - name: Clean build directory
-        run: |
-          if (Test-Path "build") {
-            Remove-Item -Recurse -Force "build" -ErrorAction SilentlyContinue
-          }
-          mkdir build
-
-      - name: Copy SuiteSparse headers to include/suitesparse if needed
+      - name: Patch CMakeLists.txt to bypass FindSuiteSparse
+        shell: pwsh
         run: |
           $SUITESPARSE_DIR = $env:SUITESPARSE_DIR
-          $targetDir = "$env:GITHUB_WORKSPACE\include\suitesparse"
+          $CMAKELISTS = "CMakeLists.txt"
           
-          # Check if headers are in suitesparse/ subdirectory
-          if (Test-Path "$SUITESPARSE_DIR/include/suitesparse") {
-            Write-Host "Headers are already in suitesparse/ subdirectory"
-          } else {
-            # Create suitesparse directory in BFF include
-            New-Item -ItemType Directory -Force -Path $targetDir
-            
-            # Copy all headers from SuiteSparse include
-            if (Test-Path "$SUITESPARSE_DIR/include") {
-              Copy-Item "$SUITESPARSE_DIR/include/*.h" -Destination $targetDir -ErrorAction SilentlyContinue
-              Copy-Item "$SUITESPARSE_DIR/include/*.hpp" -Destination $targetDir -ErrorAction SilentlyContinue
-              
-              # Also copy any subdirectories
-              Get-ChildItem "$SUITESPARSE_DIR/include" -Directory | ForEach-Object {
-                $subDir = $_.Name
-                Copy-Item "$SUITESPARSE_DIR/include/$subDir/*" -Destination "$targetDir/" -Recurse -ErrorAction SilentlyContinue
-              }
-              Write-Host "✓ Copied SuiteSparse headers to $targetDir"
-            }
-          }
-
-      - name: Configure BFF with CMake (Manual SuiteSparse setup)
-        run: |
-          cd build
+          Write-Host "Patching CMakeLists.txt to manually set SuiteSparse..."
           
-          $SUITESPARSE_DIR = $env:SUITESPARSE_DIR
-          $BFF_OPENBLAS_INCLUDE = "$env:GITHUB_WORKSPACE\deps\openblas-windows\include"
-          $BFF_OPENBLAS_LIB = "$env:GITHUB_WORKSPACE\deps\openblas-windows\lib"
+          # Read the entire file
+          $content = Get-Content $CMAKELISTS -Raw
           
-          Write-Host "SuiteSparse directory: $SUITESPARSE_DIR"
-          Write-Host "OpenBLAS include: $BFF_OPENBLAS_INCLUDE"
-          Write-Host "OpenBLAS lib: $BFF_OPENBLAS_LIB"
-          
-          # Create a simple CMakeLists.txt patch file
-          $PATCH_FILE = "SuiteSparsePatch.cmake"
-          $PATCH_CONTENT = 'set(SuiteSparse_FOUND TRUE)' + "`n" +
+          # Find the find_package(SuiteSparse) line and replace it with our manual setup
+          $MANUAL_SETUP = '# Manually set SuiteSparse paths (bypassing FindSuiteSparse)' + "`n" +
+            'set(SuiteSparse_FOUND TRUE)' + "`n" +
             'set(SuiteSparse_INCLUDE_DIRS "' + $SUITESPARSE_DIR + '/include")' + "`n" +
             'set(SuiteSparse_LIBRARY_DIRS "' + $SUITESPARSE_DIR + '/lib")' + "`n" +
             'set(SuiteSparse_LIBRARIES' + "`n" +
@@ -329,20 +242,53 @@ jobs:
             '  "' + $SUITESPARSE_DIR + '/lib/libcxsparse.lib"' + "`n" +
             '  "' + $SUITESPARSE_DIR + '/lib/libumfpack.lib"' + "`n" +
             '  "' + $SUITESPARSE_DIR + '/lib/suitesparseconfig.lib"' + "`n" +
-            ')' + "`n"
+            '  "' + $SUITESPARSE_DIR + '/lib/libmetis.lib"' + "`n" +
+            ')' + "`n" +
+            'message(STATUS "Manually configured SuiteSparse:")' + "`n" +
+            'message(STATUS "  Includes: ${SuiteSparse_INCLUDE_DIRS}")' + "`n" +
+            'message(STATUS "  Libraries: ${SuiteSparse_LIBRARIES}")' + "`n"
           
-          Set-Content -Path $PATCH_FILE -Value $PATCH_CONTENT
-          Write-Host "✓ Created SuiteSparse patch file"
+          # Replace the find_package(SuiteSparse) call with our manual setup
+          $newContent = $content -replace 'find_package\(SuiteSparse REQUIRED\)', $MANUAL_SETUP
           
-          # Configure with explicit settings
+          if ($newContent -eq $content) {
+            # Try with different pattern
+            $newContent = $content -replace 'find_package\(SuiteSparse[^)]*\)', $MANUAL_SETUP
+          }
+          
+          if ($newContent -ne $content) {
+            Set-Content -Path $CMAKELISTS -Value $newContent -NoNewline
+            Write-Host "✓ Patched CMakeLists.txt to bypass FindSuiteSparse"
+          } else {
+            Write-Host "⚠ Could not find find_package(SuiteSparse) in CMakeLists.txt"
+            # Show lines around line 32 (where the error occurs)
+            Write-Host "Lines 25-35 of CMakeLists.txt:"
+            $lines = Get-Content $CMAKELISTS
+            for ($i = 24; $i -lt 35 -and $i -lt $lines.Count; $i++) {
+              Write-Host "Line $($i+1): $($lines[$i])"
+            }
+          }
+
+      - name: Clean build directory
+        run: |
+          if (Test-Path "build") {
+            Remove-Item -Recurse -Force "build" -ErrorAction SilentlyContinue
+          }
+          mkdir build
+
+      - name: Configure BFF with CMake (Simple approach)
+        run: |
+          cd build
+          
+          $SUITESPARSE_DIR = $env:SUITESPARSE_DIR
+          $BFF_OPENBLAS_INCLUDE = "$env:GITHUB_WORKSPACE\deps\openblas-windows\include"
+          $BFF_OPENBLAS_LIB = "$env:GITHUB_WORKSPACE\deps\openblas-windows\lib"
+          
+          Write-Host "Configuring with SuiteSparse at: $SUITESPARSE_DIR"
+          
+          # Very simple configuration
           cmake .. `
             -DCMAKE_BUILD_TYPE=Release `
-            -DSUITESPARSE_DIR="$SUITESPARSE_DIR" `
-            -DSUITESPARSE_INCLUDE_DIR="$SUITESPARSE_DIR/include" `
-            -DSUITESPARSE_LIBRARY_DIR="$SUITESPARSE_DIR/lib" `
-            -DBLAS_INCLUDE_DIR="$BFF_OPENBLAS_INCLUDE" `
-            -DBLAS_LIBRARIES="$BFF_OPENBLAS_LIB/blas.lib" `
-            -DBLA_VENDOR=OpenBLAS `
             -DBUILD_GUI=ON `
             -DBUILD_CLI=ON `
             -DBUILD_SHARED_LIBS=OFF `
@@ -385,17 +331,16 @@ jobs:
           $exePath = "$env:GITHUB_WORKSPACE\build\Release\bff-viewer.exe"
           
           if (-not (Test-Path $exePath)) {
-            Write-Host "✗ bff-viewer.exe not found at: $exePath"
+            Write-Host "✗ bff-viewer.exe not found"
             exit 1
           }
           
           Write-Host "✓ Found bff-viewer.exe"
           
-          # Create distribution directory
           New-Item -ItemType Directory -Force -Path "dist"
           Copy-Item $exePath -Destination "dist\"
           
-          # Copy required DLLs
+          # Copy DLLs
           $dllSources = @(
             "$env:GITHUB_WORKSPACE\deps\openblas-windows\lib\*.dll",
             "C:\Windows\System32\vcruntime140.dll",
@@ -404,17 +349,9 @@ jobs:
           )
           
           foreach ($source in $dllSources) {
-            if (Test-Path $source -ErrorAction SilentlyContinue) {
+            if (Test-Path $source) {
               Copy-Item $source -Destination "dist\" -ErrorAction SilentlyContinue
-              Write-Host "✓ Copied DLLs from: $source"
             }
-          }
-          
-          # Copy NanoGUI DLL if it exists
-          $nanoguiDll = "$env:GITHUB_WORKSPACE\build\deps\nanogui\Release\nanogui.dll"
-          if (Test-Path $nanoguiDll) {
-            Copy-Item $nanoguiDll -Destination "dist\"
-            Write-Host "✓ Copied NanoGUI DLL"
           }
 
       - name: Create Final Package
