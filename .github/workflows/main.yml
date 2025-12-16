@@ -221,52 +221,73 @@ jobs:
           
           Write-Host "Patching CMakeLists.txt to manually set SuiteSparse..."
           
+          # Convert Windows path to CMake-friendly format (forward slashes)
+          $SUITESPARSE_DIR_CMAKE = $SUITESPARSE_DIR -replace '\\', '/'
+          
           # Read the entire file
           $content = Get-Content $CMAKELISTS -Raw
           
           # Find the find_package(SuiteSparse) line and replace it with our manual setup
           $MANUAL_SETUP = '# Manually set SuiteSparse paths (bypassing FindSuiteSparse)' + "`n" +
             'set(SuiteSparse_FOUND TRUE)' + "`n" +
-            'set(SuiteSparse_INCLUDE_DIRS "' + $SUITESPARSE_DIR + '/include")' + "`n" +
-            'set(SuiteSparse_LIBRARY_DIRS "' + $SUITESPARSE_DIR + '/lib")' + "`n" +
+            'set(SuiteSparse_INCLUDE_DIRS "' + $SUITESPARSE_DIR_CMAKE + '/include")' + "`n" +
+            'set(SuiteSparse_LIBRARY_DIRS "' + $SUITESPARSE_DIR_CMAKE + '/lib")' + "`n" +
             'set(SuiteSparse_LIBRARIES' + "`n" +
-            '  "' + $SUITESPARSE_DIR + '/lib/libamd.lib"' + "`n" +
-            '  "' + $SUITESPARSE_DIR + '/lib/libcamd.lib"' + "`n" +
-            '  "' + $SUITESPARSE_DIR + '/lib/libccolamd.lib"' + "`n" +
-            '  "' + $SUITESPARSE_DIR + '/lib/libcolamd.lib"' + "`n" +
-            '  "' + $SUITESPARSE_DIR + '/lib/libcholmod.lib"' + "`n" +
-            '  "' + $SUITESPARSE_DIR + '/lib/libspqr.lib"' + "`n" +
-            '  "' + $SUITESPARSE_DIR + '/lib/libldl.lib"' + "`n" +
-            '  "' + $SUITESPARSE_DIR + '/lib/libbtf.lib"' + "`n" +
-            '  "' + $SUITESPARSE_DIR + '/lib/libklu.lib"' + "`n" +
-            '  "' + $SUITESPARSE_DIR + '/lib/libcxsparse.lib"' + "`n" +
-            '  "' + $SUITESPARSE_DIR + '/lib/libumfpack.lib"' + "`n" +
-            '  "' + $SUITESPARSE_DIR + '/lib/suitesparseconfig.lib"' + "`n" +
-            '  "' + $SUITESPARSE_DIR + '/lib/libmetis.lib"' + "`n" +
+            '  "' + $SUITESPARSE_DIR_CMAKE + '/lib/libamd.lib"' + "`n" +
+            '  "' + $SUITESPARSE_DIR_CMAKE + '/lib/libcamd.lib"' + "`n" +
+            '  "' + $SUITESPARSE_DIR_CMAKE + '/lib/libccolamd.lib"' + "`n" +
+            '  "' + $SUITESPARSE_DIR_CMAKE + '/lib/libcolamd.lib"' + "`n" +
+            '  "' + $SUITESPARSE_DIR_CMAKE + '/lib/libcholmod.lib"' + "`n" +
+            '  "' + $SUITESPARSE_DIR_CMAKE + '/lib/libspqr.lib"' + "`n" +
+            '  "' + $SUITESPARSE_DIR_CMAKE + '/lib/libldl.lib"' + "`n" +
+            '  "' + $SUITESPARSE_DIR_CMAKE + '/lib/libbtf.lib"' + "`n" +
+            '  "' + $SUITESPARSE_DIR_CMAKE + '/lib/libklu.lib"' + "`n" +
+            '  "' + $SUITESPARSE_DIR_CMAKE + '/lib/libcxsparse.lib"' + "`n" +
+            '  "' + $SUITESPARSE_DIR_CMAKE + '/lib/libumfpack.lib"' + "`n" +
+            '  "' + $SUITESPARSE_DIR_CMAKE + '/lib/suitesparseconfig.lib"' + "`n" +
+            '  "' + $SUITESPARSE_DIR_CMAKE + '/lib/libmetis.lib"' + "`n" +
             ')' + "`n" +
             'message(STATUS "Manually configured SuiteSparse:")' + "`n" +
             'message(STATUS "  Includes: ${SuiteSparse_INCLUDE_DIRS}")' + "`n" +
             'message(STATUS "  Libraries: ${SuiteSparse_LIBRARIES}")' + "`n"
           
-          # Replace the find_package(SuiteSparse) call with our manual setup
-          $newContent = $content -replace 'find_package\(SuiteSparse REQUIRED\)', $MANUAL_SETUP
-          
-          if ($newContent -eq $content) {
-            # Try with different pattern
-            $newContent = $content -replace 'find_package\(SuiteSparse[^)]*\)', $MANUAL_SETUP
+          # First, let's see what's actually in the file
+          Write-Host "Looking for find_package(SuiteSparse) in CMakeLists.txt..."
+          $lines = Get-Content $CMAKELISTS
+          for ($i = 0; $i -lt $lines.Count; $i++) {
+            if ($lines[$i] -match 'find_package.*SuiteSparse') {
+              Write-Host "Found at line $($i+1): $($lines[$i])"
+            }
           }
           
-          if ($newContent -ne $content) {
-            Set-Content -Path $CMAKELISTS -Value $newContent -NoNewline
-            Write-Host "✓ Patched CMakeLists.txt to bypass FindSuiteSparse"
-          } else {
-            Write-Host "⚠ Could not find find_package(SuiteSparse) in CMakeLists.txt"
-            # Show lines around line 32 (where the error occurs)
-            Write-Host "Lines 25-35 of CMakeLists.txt:"
-            $lines = Get-Content $CMAKELISTS
-            for ($i = 24; $i -lt 35 -and $i -lt $lines.Count; $i++) {
-              Write-Host "Line $($i+1): $($lines[$i])"
+          # Try different patterns to find and replace
+          $patterns = @(
+            'find_package\(SuiteSparse REQUIRED\)',
+            'find_package\(SuiteSparse[^)]*\)',
+            'find_package\s*\(\s*SuiteSparse'
+          )
+          
+          $patched = $false
+          foreach ($pattern in $patterns) {
+            if ($content -match $pattern) {
+              $newContent = $content -replace $pattern, $MANUAL_SETUP
+              if ($newContent -ne $content) {
+                Set-Content -Path $CMAKELISTS -Value $newContent -NoNewline
+                Write-Host "✓ Patched CMakeLists.txt using pattern: $pattern"
+                $patched = $true
+                break
+              }
             }
+          }
+          
+          if (-not $patched) {
+            Write-Host "⚠ Could not find find_package(SuiteSparse) with regex patterns"
+            Write-Host "Inserting manual setup after find_package(Eigen3)..."
+            
+            # Insert after find_package(Eigen3)
+            $newContent = $content -replace '(find_package\(Eigen3 3\.2 REQUIRED\))', '$1' + "`n`n" + $MANUAL_SETUP
+            Set-Content -Path $CMAKELISTS -Value $newContent -NoNewline
+            Write-Host "✓ Inserted manual SuiteSparse setup after find_package(Eigen3)"
           }
 
       - name: Clean build directory
