@@ -25,59 +25,50 @@ jobs:
         choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y
         choco install wget -y
         
-- name: Build SuiteSparse with METIS from source
-  shell: bash
-  run: |
-    echo "Cloning and building SuiteSparse with METIS..."
-    
-    # 1. Clone the CMake project for SuiteSparse (this includes METIS)
-    git clone https://github.com/jlblancoc/suitesparse-metis-for-windows.git
-    cd suitesparse-metis-for-windows
-
-    # 2. Important: Fetch the SuiteSparse source code and merge it
-    # The project expects the SuiteSparse source in a specific folder
-    git clone https://github.com/DrTimothyAldenDavis/SuiteSparse.git SuiteSparse
-    # You may need to checkout a specific compatible version. v7.5.1 is known to work.
-    cd SuiteSparse && git checkout v7.5.1 && cd ..
-
-    # 3. Create a build directory and configure with CMake
-    # This enables OpenBLAS and builds METIS statically.
-    mkdir build && cd build
-    cmake .. -G "Visual Studio 17 2022" -A x64 `
-      -DCMAKE_INSTALL_PREFIX="../../../suitesparse-deps" `
-      -DBUILD_SHARED_LIBS=OFF `
-      -DWITH_OPENBLAS=ON `
-      -DBLAS_LIBRARIES="../../../openblas-install/lib/libopenblas.lib" `
-      -DLAPACK_LIBRARIES="../../../openblas-install/lib/libopenblas.lib" `
-      -DBUILD_METIS=ON
-
-    # 4. Build and install
-    cmake --build . --config Release --target INSTALL
-
-    echo "SuiteSparse and METIS built successfully."
-    
-    # 5. Navigate back to the workspace root and verify the files exist
-    cd ../../../
-    echo "Verifying METIS library exists..."
-    ls -la "suitesparse-deps/lib/" | grep -i metis
-    ls -la "suitesparse-deps/include/" | grep -i metis
-
-    
-  - name: Download pre-built SuiteSparse
+    - name: Download pre-built OpenBLAS
       shell: bash
       run: |
-        echo "Downloading SuiteSparse for Windows..."
-        mkdir -p suitesparse-deps/lib
-        mkdir -p suitesparse-deps/include
+        echo "Downloading pre-built OpenBLAS..."
+        wget https://github.com/OpenMathLib/OpenBLAS/releases/download/v0.3.28/OpenBLAS-0.3.28-x64.zip -O openblas.zip
+        7z x openblas.zip -oopenblas-install
         
-        SUITESPARSE_URL="https://github.com/jlblancoc/suitesparse-metis-for-windows/releases/download/v1.4.0"
+    - name: Build SuiteSparse with METIS from source
+      shell: bash
+      run: |
+        echo "Cloning and building SuiteSparse with METIS..."
         
-        wget "${SUITESPARSE_URL}/suitesparse-include.zip" -O suitesparse-include.zip
-        7z x suitesparse-include.zip -osuitesparse-deps/include
+        # 1. Clone the CMake project for SuiteSparse (this includes METIS)
+        git clone https://github.com/jlblancoc/suitesparse-metis-for-windows.git
+        cd suitesparse-metis-for-windows
         
-        wget "${SUITESPARSE_URL}/suitesparse-lib.zip" -O suitesparse-lib.zip
-        7z x suitesparse-lib.zip -osuitesparse-deps/lib
+        # 2. Fetch the SuiteSparse source code
+        git clone https://github.com/DrTimothyAldenDavis/SuiteSparse.git SuiteSparse
         
+        # 3. Checkout a compatible version (v7.5.1 is known to work)
+        cd SuiteSparse && git checkout v7.5.1 && cd ..
+        
+        # 4. Create a build directory and configure with CMake
+        mkdir build && cd build
+        cmake .. -G "Visual Studio 17 2022" -A x64 `
+          -DCMAKE_INSTALL_PREFIX="../../../suitesparse-deps" `
+          -DBUILD_SHARED_LIBS=OFF `
+          -DWITH_OPENBLAS=ON `
+          -DBLAS_LIBRARIES="../../../openblas-install/lib/libopenblas.lib" `
+          -DLAPACK_LIBRARIES="../../../openblas-install/lib/libopenblas.lib" `
+          -DBUILD_METIS=ON
+        
+        # 5. Build and install
+        cmake --build . --config Release --target INSTALL
+        
+        echo "SuiteSparse and METIS built successfully."
+        
+        # 6. Navigate back to the workspace root and verify the files exist
+        cd ../../../
+        echo "Verifying METIS library exists..."
+        ls -la "suitesparse-deps/lib/" | grep -i metis
+        ls -la "suitesparse-deps/include/" | grep -i metis
+        
+        # 7. Create compatibility symlinks
         cd suitesparse-deps/lib
         cp ../../openblas-install/lib/libopenblas.lib blas.lib
         cp ../../openblas-install/lib/libopenblas.lib lapack.lib
@@ -106,7 +97,7 @@ jobs:
         echo '  "$ENV{GITHUB_WORKSPACE}/suitesparse-deps/lib/libcxsparse.lib"' >> cmake/FindSuiteSparse.cmake
         echo '  "$ENV{GITHUB_WORKSPACE}/suitesparse-deps/lib/libumfpack.lib"' >> cmake/FindSuiteSparse.cmake
         echo '  "$ENV{GITHUB_WORKSPACE}/suitesparse-deps/lib/suitesparseconfig.lib"' >> cmake/FindSuiteSparse.cmake
-        echo '  "$ENV{GITHUB_WORKSPACE}/metis-install/lib/metis.lib"' >> cmake/FindSuiteSparse.cmake
+        echo '  "$ENV{GITHUB_WORKSPACE}/suitesparse-deps/lib/metis.lib"' >> cmake/FindSuiteSparse.cmake
         echo '  "$ENV{GITHUB_WORKSPACE}/openblas-install/lib/libopenblas.lib"' >> cmake/FindSuiteSparse.cmake
         echo ')' >> cmake/FindSuiteSparse.cmake
         
@@ -132,7 +123,6 @@ jobs:
           -DCMAKE_BUILD_TYPE=Release ^
           -DBUILD_SHARED_LIBS=ON ^
           -DCMAKE_PREFIX_PATH="%cd%/../suitesparse-deps" ^
-          -DMETIS_ROOT="%cd%/../metis-install" ^
           -DBLAS_LIBRARIES="%cd%/../openblas-install/lib/libopenblas.lib" ^
           -DLAPACK_LIBRARIES="%cd%/../openblas-install/lib/libopenblas.lib"
         
