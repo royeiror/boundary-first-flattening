@@ -224,32 +224,68 @@ jobs:
           # Convert Windows path to CMake-friendly format (forward slashes)
           $SUITESPARSE_DIR_CMAKE = $SUITESPARSE_DIR -replace '\\', '/'
           
-          # Read the entire file
-          $content = Get-Content $CMAKELISTS -Raw
+          # Check what libraries actually exist
+          Write-Host "Checking for available SuiteSparse libraries in $SUITESPARSE_DIR/lib..."
+          $libFiles = Get-ChildItem "$SUITESPARSE_DIR/lib" -Filter "*.lib" | Select-Object -ExpandProperty Name
+          Write-Host "Available libraries: $libFiles"
           
-          # Find the find_package(SuiteSparse) line and replace it with our manual setup
+          # Build library list based on what actually exists
+          $libraryList = @()
+          $commonLibraries = @("amd", "camd", "ccolamd", "colamd", "cholmod", "spqr", "ldl", "btf", "klu", "cxsparse", "umfpack", "suitesparseconfig")
+          
+          foreach ($lib in $commonLibraries) {
+            $libName = "lib${lib}.lib"
+            $libPath = "$SUITESPARSE_DIR/lib/$libName"
+            if (Test-Path $libPath) {
+              $libraryList += "`"$SUITESPARSE_DIR_CMAKE/lib/$libName`""
+            } else {
+              Write-Host "⚠ Library not found: $libName"
+            }
+          }
+          
+          # Check for metis separately
+          $metisLibs = @("libmetis.lib", "metis.lib")
+          $metisFound = $false
+          foreach ($metisLib in $metisLibs) {
+            $metisPath = "$SUITESPARSE_DIR/lib/$metisLib"
+            if (Test-Path $metisPath) {
+              $libraryList += "`"$SUITESPARSE_DIR_CMAKE/lib/$metisLib`""
+              $metisFound = $true
+              Write-Host "✓ Found METIS library: $metisLib"
+              break
+            }
+          }
+          
+          if (-not $metisFound) {
+            Write-Host "⚠ METIS library not found, skipping"
+          }
+          
+          # Check for OpenBLAS/BLAS library
+          $openblasLib = "$env:GITHUB_WORKSPACE/deps/openblas-windows/lib/blas.lib"
+          if (Test-Path $openblasLib) {
+            $openblasPath = $openblasLib -replace '\\', '/'
+            $libraryList += "`"$openblasPath`""
+            Write-Host "✓ Adding OpenBLAS library"
+          }
+          
+          # Create the manual setup string
           $MANUAL_SETUP = '# Manually set SuiteSparse paths (bypassing FindSuiteSparse)' + "`n" +
             'set(SuiteSparse_FOUND TRUE)' + "`n" +
             'set(SuiteSparse_INCLUDE_DIRS "' + $SUITESPARSE_DIR_CMAKE + '/include")' + "`n" +
             'set(SuiteSparse_LIBRARY_DIRS "' + $SUITESPARSE_DIR_CMAKE + '/lib")' + "`n" +
-            'set(SuiteSparse_LIBRARIES' + "`n" +
-            '  "' + $SUITESPARSE_DIR_CMAKE + '/lib/libamd.lib"' + "`n" +
-            '  "' + $SUITESPARSE_DIR_CMAKE + '/lib/libcamd.lib"' + "`n" +
-            '  "' + $SUITESPARSE_DIR_CMAKE + '/lib/libccolamd.lib"' + "`n" +
-            '  "' + $SUITESPARSE_DIR_CMAKE + '/lib/libcolamd.lib"' + "`n" +
-            '  "' + $SUITESPARSE_DIR_CMAKE + '/lib/libcholmod.lib"' + "`n" +
-            '  "' + $SUITESPARSE_DIR_CMAKE + '/lib/libspqr.lib"' + "`n" +
-            '  "' + $SUITESPARSE_DIR_CMAKE + '/lib/libldl.lib"' + "`n" +
-            '  "' + $SUITESPARSE_DIR_CMAKE + '/lib/libbtf.lib"' + "`n" +
-            '  "' + $SUITESPARSE_DIR_CMAKE + '/lib/libklu.lib"' + "`n" +
-            '  "' + $SUITESPARSE_DIR_CMAKE + '/lib/libcxsparse.lib"' + "`n" +
-            '  "' + $SUITESPARSE_DIR_CMAKE + '/lib/libumfpack.lib"' + "`n" +
-            '  "' + $SUITESPARSE_DIR_CMAKE + '/lib/suitesparseconfig.lib"' + "`n" +
-            '  "' + $SUITESPARSE_DIR_CMAKE + '/lib/libmetis.lib"' + "`n" +
-            ')' + "`n" +
+            'set(SuiteSparse_LIBRARIES' + "`n"
+          
+          foreach ($lib in $libraryList) {
+            $MANUAL_SETUP += '  ' + $lib + "`n"
+          }
+          
+          $MANUAL_SETUP += ')' + "`n" +
             'message(STATUS "Manually configured SuiteSparse:")' + "`n" +
             'message(STATUS "  Includes: ${SuiteSparse_INCLUDE_DIRS}")' + "`n" +
             'message(STATUS "  Libraries: ${SuiteSparse_LIBRARIES}")' + "`n"
+          
+          # Read the entire file
+          $content = Get-Content $CMAKELISTS -Raw
           
           # First, let's see what's actually in the file
           Write-Host "Looking for find_package(SuiteSparse) in CMakeLists.txt..."
@@ -289,6 +325,20 @@ jobs:
             Set-Content -Path $CMAKELISTS -Value $newContent -NoNewline
             Write-Host "✓ Inserted manual SuiteSparse setup after find_package(Eigen3)"
           }
+          
+          # Also need to ensure BLAS is found - add a separate patch for BLAS
+          $BLAS_PATCH = "`n" + 
+            '# Manually set BLAS for SuiteSparse' + "`n" +
+            'set(BLAS_FOUND TRUE)' + "`n" +
+            'set(BLAS_LIBRARIES "' + ($openblasLib -replace '\\', '/') + '")' + "`n" +
+            'set(LAPACK_FOUND TRUE)' + "`n" +
+            'set(LAPACK_LIBRARIES "' + ($openblasLib -replace '\\', '/') + '")' + "`n"
+          
+          # Insert BLAS patch after SuiteSparse setup
+          $finalContent = Get-Content $CMAKELISTS -Raw
+          $finalContent = $finalContent -replace '($MANUAL_SETUP)', '$1' + $BLAS_PATCH
+          Set-Content -Path $CMAKELISTS -Value $finalContent -NoNewline
+          Write-Host "✓ Added BLAS/LAPACK configuration"
 
       - name: Clean build directory
         run: |
