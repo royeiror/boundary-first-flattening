@@ -32,63 +32,65 @@ jobs:
         wget https://github.com/OpenMathLib/OpenBLAS/releases/download/v0.3.28/OpenBLAS-0.3.28-x64.zip -O openblas.zip
         7z x openblas.zip -oopenblas-install
         
-    - name: Build SuiteSparse with METIS from source
-      shell: bash
-      run: |
-        echo "Cloning and building SuiteSparse with METIS..."
+- name: Build SuiteSparse with METIS from source
+  shell: bash
+  run: |
+    echo "Cloning and building SuiteSparse with METIS..."
+    
+    # Clean up any previous build artifacts
+    rm -rf suitesparse-deps
+    rm -rf suitesparse-metis-for-windows
+    rm -rf suitesparse-source
+    
+    # 1. FIRST: Clone and checkout the correct SuiteSparse version
+    echo "Cloning SuiteSparse v7.3.0..."
+    git clone https://github.com/DrTimothyAldenDavis/SuiteSparse.git suitesparse-source
+    cd suitesparse-source
+    git checkout v7.3.0
+    cd ..
+    
+    # 2. Remove SPEX directory to avoid GMP issues
+    rm -rf suitesparse-source/SPEX
+    echo "Removed SPEX directory to avoid GMP dependency"
+    
+    # 3. Clone the CMake project for SuiteSparse
+    git clone https://github.com/jlblancoc/suitesparse-metis-for-windows.git
+    cd suitesparse-metis-for-windows
+    
+    # 4. Replace the SuiteSparse directory with our prepared version
+    rm -rf SuiteSparse
+    cp -r ../suitesparse-source SuiteSparse
+    
+    # 5. Create a build directory and configure with CMake
+    mkdir build
+    cd build
+    cmake .. -G "Visual Studio 17 2022" -A x64 \
+      -DCMAKE_INSTALL_PREFIX="../../../suitesparse-deps" \
+      -DBUILD_SHARED_LIBS=OFF \
+      -DWITH_OPENBLAS=ON \
+      -DBLAS_LIBRARIES="../../../openblas-install/lib/libopenblas.lib" \
+      -DLAPACK_LIBRARIES="../../../openblas-install/lib/libopenblas.lib" \
+      -DBUILD_METIS=ON \
+      -DCMAKE_DISABLE_FIND_PACKAGE_Fortran=ON
+    
+    # 6. Build and install
+    cmake --build . --config Release --target INSTALL
+    
+    echo "SuiteSparse and METIS built successfully."
+    
+    # 7. Navigate back and verify
+    cd ../../../
+    echo "Verifying essential libraries exist..."
+    ls -la "suitesparse-deps/lib/"*.lib 2>/dev/null || echo "No .lib files found yet"
+    
+    # 8. Create compatibility symlinks
+    cd suitesparse-deps/lib
+    cp ../../openblas-install/lib/libopenblas.lib blas.lib
+    cp ../../openblas-install/lib/libopenblas.lib lapack.lib
+    echo "Created compatibility symlinks"
+    
         
-        # Clean up any previous build artifacts
-        rm -rf suitesparse-deps
-        rm -rf suitesparse-metis-for-windows
-        
-        # 1. Clone the CMake project for SuiteSparse
-        git clone https://github.com/jlblancoc/suitesparse-metis-for-windows.git
-        cd suitesparse-metis-for-windows
-        
-        # 2. Remove existing SuiteSparse directory if it exists
-        rm -rf SuiteSparse
-        
-        # 3. Fetch the SuiteSparse source code
-        git clone https://github.com/DrTimothyAldenDavis/SuiteSparse.git SuiteSparse
-        
-        # 4. Checkout v7.3.0 (older, more stable)
-        cd SuiteSparse
-        git checkout v7.3.0
-        cd ..
-        
-        # 5. Remove SPEX directory completely to avoid GMP issues
-        rm -rf SuiteSparse/SPEX
-        echo "Removed SPEX directory to avoid GMP dependency"
-        
-        # 6. Create a build directory and configure with CMake
-        mkdir build
-        cd build
-        cmake .. -G "Visual Studio 17 2022" -A x64 \
-          -DCMAKE_INSTALL_PREFIX="../../../suitesparse-deps" \
-          -DBUILD_SHARED_LIBS=OFF \
-          -DWITH_OPENBLAS=ON \
-          -DBLAS_LIBRARIES="../../../openblas-install/lib/libopenblas.lib" \
-          -DLAPACK_LIBRARIES="../../../openblas-install/lib/libopenblas.lib" \
-          -DBUILD_METIS=ON \
-          -DCMAKE_DISABLE_FIND_PACKAGE_Fortran=ON
-        
-        # 7. Build and install
-        cmake --build . --config Release --target INSTALL
-        
-        echo "SuiteSparse and METIS built successfully."
-        
-        # 8. Navigate back and verify
-        cd ../../../
-        echo "Verifying essential libraries exist..."
-        ls -la "suitesparse-deps/lib/"*.lib 2>/dev/null
-        
-        # 9. Create compatibility symlinks
-        cd suitesparse-deps/lib
-        cp ../../openblas-install/lib/libopenblas.lib blas.lib
-        cp ../../openblas-install/lib/libopenblas.lib lapack.lib
-        echo "Created compatibility symlinks"
-        
-    - name: Apply critical BFF patches
+  - name: Apply critical BFF patches
       shell: bash
       run: |
         echo "Applying essential BFF patches for Windows..."
