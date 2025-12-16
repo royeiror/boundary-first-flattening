@@ -94,29 +94,6 @@ jobs:
         with:
           cmake-version: "3.25.x"
 
-      - name: Debug SuiteSparse structure
-        run: |
-          Write-Host "=== Checking SuiteSparse artifact structure ==="
-          $SUITESPARSE_DIR = (Resolve-Path "suitesparse-deps").Path
-          Write-Host "SuiteSparse directory: $SUITESPARSE_DIR"
-          
-          Write-Host "`nInclude directory contents:"
-          if (Test-Path "$SUITESPARSE_DIR/include") {
-            Get-ChildItem "$SUITESPARSE_DIR/include" -File | Select-Object -First 20 Name
-            Write-Host "`nChecking for suitesparse subdirectory:"
-            if (Test-Path "$SUITESPARSE_DIR/include/suitesparse") {
-              Get-ChildItem "$SUITESPARSE_DIR/include/suitesparse" -Filter "*.h" | Select-Object -First 10 Name
-            }
-          }
-          
-          Write-Host "`nLib directory contents:"
-          if (Test-Path "$SUITESPARSE_DIR/lib") {
-            Get-ChildItem "$SUITESPARSE_DIR/lib" -File | Select-Object Name
-          }
-          
-          # Set environment variable for later steps
-          echo "SUITESPARSE_DIR=$SUITESPARSE_DIR" | Out-File -FilePath $env:GITHUB_ENV -Append
-
       - name: Create blas.lib symlink for OpenBLAS
         run: |
           $openblasLib = "$env:GITHUB_WORKSPACE\deps\openblas-windows\lib\libopenblas.lib"
@@ -130,10 +107,10 @@ jobs:
             exit 1
           }
 
-      - name: Patch BFF Source Files
+      - name: Patch BFF Source Files for cblas.h
         shell: pwsh
         run: |
-          # Patch cblas.h includes
+          # Patch cblas.h includes in all relevant files
           $cblasPath = "$env:GITHUB_WORKSPACE\deps\openblas-windows\include\cblas.h"
           $relativePath = "../../deps/openblas-windows/include/cblas.h"
           
@@ -178,136 +155,62 @@ jobs:
             }
           }
 
-      - name: Add BFF_API Export Macros
-        shell: pwsh
-        run: |
-          $commonHeader = "$env:GITHUB_WORKSPACE\include\bff\linear-algebra\Common.h"
-          
-          if (Test-Path $commonHeader) {
-            $content = Get-Content $commonHeader -Raw
-            $apiMacro = "#ifdef _WIN32" + "`n" +
-              "#ifdef BFF_EXPORTS" + "`n" +
-              "#define BFF_API __declspec(dllexport)" + "`n" +
-              "#else" + "`n" +
-              "#define BFF_API __declspec(dllimport)" + "`n" +
-              "#endif" + "`n" +
-              "#else" + "`n" +
-              "#define BFF_API" + "`n" +
-              "#endif" + "`n" +
-              "`n"
-            
-            if ($content -notmatch 'BFF_API') {
-              $content = $apiMacro + $content
-              Set-Content $commonHeader -Value $content -NoNewline
-              Write-Host "✓ Added BFF_API macros to Common.h"
-            }
-          }
-          
-          $commonSource = "$env:GITHUB_WORKSPACE\src\linear-algebra\Common.cpp"
-          if (Test-Path $commonSource) {
-            $sourceContent = Get-Content $commonSource -Raw
-            if ($sourceContent -notmatch 'BFF_EXPORTS') {
-              $sourceContent = "#define BFF_EXPORTS" + "`n" + $sourceContent
-              Set-Content $commonSource -Value $sourceContent -NoNewline
-              Write-Host "✓ Added BFF_EXPORTS to Common.cpp"
-            }
-          }
-
       - name: Patch CMakeLists.txt to bypass FindSuiteSparse
         shell: pwsh
         run: |
-          $SUITESPARSE_DIR = $env:SUITESPARSE_DIR
+          $SUITESPARSE_DIR = (Resolve-Path "suitesparse-deps").Path
           $CMAKELISTS = "CMakeLists.txt"
           
           Write-Host "Patching CMakeLists.txt to manually set SuiteSparse..."
           
-          # Convert Windows path to CMake-friendly format (forward slashes)
-          $SUITESPARSE_DIR_CMAKE = $SUITESPARSE_DIR -replace '\\', '/'
+          # Read the entire file
+          $content = Get-Content $CMAKELISTS -Raw
           
-          # Check what libraries actually exist
-          Write-Host "Checking for available SuiteSparse libraries in $SUITESPARSE_DIR/lib..."
-          $libFiles = Get-ChildItem "$SUITESPARSE_DIR/lib" -Filter "*.lib" | Select-Object -ExpandProperty Name
-          Write-Host "Available libraries: $libFiles"
-          
-          # Build library list based on what actually exists
-          $libraryList = @()
-          $commonLibraries = @("amd", "camd", "ccolamd", "colamd", "cholmod", "spqr", "ldl", "btf", "klu", "cxsparse", "umfpack")
-          
-          foreach ($lib in $commonLibraries) {
-            $libName = "lib${lib}.lib"
-            $libPath = "$SUITESPARSE_DIR/lib/$libName"
-            if (Test-Path $libPath) {
-              $libraryList += "`"$SUITESPARSE_DIR_CMAKE/lib/$libName`""
-              Write-Host "✓ Adding library: $libName"
-            } else {
-              Write-Host "⚠ Library not found: $libName"
-            }
-          }
-          
-          # Add suitesparseconfig.lib (without lib prefix)
-          $suitesparseconfigPath = "$SUITESPARSE_DIR/lib/suitesparseconfig.lib"
-          if (Test-Path $suitesparseconfigPath) {
-            $libraryList += "`"$SUITESPARSE_DIR_CMAKE/lib/suitesparseconfig.lib`""
-            Write-Host "✓ Adding library: suitesparseconfig.lib"
-          }
-          
-          # Check for OpenBLAS/BLAS library
-          $openblasLib = "$env:GITHUB_WORKSPACE/deps/openblas-windows/lib/blas.lib"
-          if (Test-Path $openblasLib) {
-            $openblasPath = $openblasLib -replace '\\', '/'
-            $libraryList += "`"$openblasPath`""
-            Write-Host "✓ Adding OpenBLAS library: $openblasPath"
-          }
-          
-          # Create the manual setup string
+          # Find the find_package(SuiteSparse) line and replace it with our manual setup
           $MANUAL_SETUP = '# Manually set SuiteSparse paths (bypassing FindSuiteSparse)' + "`n" +
             'set(SuiteSparse_FOUND TRUE)' + "`n" +
-            'set(SuiteSparse_INCLUDE_DIRS "' + $SUITESPARSE_DIR_CMAKE + '/include")' + "`n" +
-            'set(SuiteSparse_LIBRARY_DIRS "' + $SUITESPARSE_DIR_CMAKE + '/lib")' + "`n" +
-            'set(SuiteSparse_LIBRARIES' + "`n"
-          
-          foreach ($lib in $libraryList) {
-            $MANUAL_SETUP += '  ' + $lib + "`n"
-          }
-          
-          $MANUAL_SETUP += ')' + "`n" +
+            'set(SuiteSparse_INCLUDE_DIRS "' + $SUITESPARSE_DIR + '/include")' + "`n" +
+            'set(SuiteSparse_LIBRARY_DIRS "' + $SUITESPARSE_DIR + '/lib")' + "`n" +
+            'set(SuiteSparse_LIBRARIES' + "`n" +
+            '  "' + $SUITESPARSE_DIR + '/lib/libamd.lib"' + "`n" +
+            '  "' + $SUITESPARSE_DIR + '/lib/libcamd.lib"' + "`n" +
+            '  "' + $SUITESPARSE_DIR + '/lib/libccolamd.lib"' + "`n" +
+            '  "' + $SUITESPARSE_DIR + '/lib/libcolamd.lib"' + "`n" +
+            '  "' + $SUITESPARSE_DIR + '/lib/libcholmod.lib"' + "`n" +
+            '  "' + $SUITESPARSE_DIR + '/lib/libspqr.lib"' + "`n" +
+            '  "' + $SUITESPARSE_DIR + '/lib/libldl.lib"' + "`n" +
+            '  "' + $SUITESPARSE_DIR + '/lib/libbtf.lib"' + "`n" +
+            '  "' + $SUITESPARSE_DIR + '/lib/libklu.lib"' + "`n" +
+            '  "' + $SUITESPARSE_DIR + '/lib/libcxsparse.lib"' + "`n" +
+            '  "' + $SUITESPARSE_DIR + '/lib/libumfpack.lib"' + "`n" +
+            '  "' + $SUITESPARSE_DIR + '/lib/suitesparseconfig.lib"' + "`n" +
+            '  "' + $SUITESPARSE_DIR + '/lib/libmetis.lib"' + "`n" +
+            ')' + "`n" +
             'message(STATUS "Manually configured SuiteSparse:")' + "`n" +
             'message(STATUS "  Includes: ${SuiteSparse_INCLUDE_DIRS}")' + "`n" +
             'message(STATUS "  Libraries: ${SuiteSparse_LIBRARIES}")' + "`n"
           
-          # Read the entire file
-          $content = Get-Content $CMAKELISTS -Raw
-          
-          # Try different patterns to find and replace - replace the 2nd find_package(SuiteSparse)
+          # Replace the find_package(SuiteSparse) call with our manual setup
           $newContent = $content -replace 'find_package\(SuiteSparse REQUIRED\)', $MANUAL_SETUP
+          
+          if ($newContent -eq $content) {
+            # Try with different pattern
+            $newContent = $content -replace 'find_package\(SuiteSparse[^)]*\)', $MANUAL_SETUP
+          }
           
           if ($newContent -ne $content) {
             Set-Content -Path $CMAKELISTS -Value $newContent -NoNewline
-            Write-Host "✓ Patched CMakeLists.txt - replaced find_package(SuiteSparse REQUIRED)"
+            Write-Host "✓ Patched CMakeLists.txt to bypass FindSuiteSparse"
           } else {
-            Write-Host "⚠ Could not find find_package(SuiteSparse REQUIRED)"
-            # Try to insert after first find_package(SuiteSparse QUIET NO_MODULE)
-            $newContent = $content -replace '(find_package\(SuiteSparse QUIET NO_MODULE\)[^}]*\})', '$1' + "`n`n" + $MANUAL_SETUP
-            Set-Content -Path $CMAKELISTS -Value $newContent -NoNewline
-            Write-Host "✓ Inserted manual SuiteSparse setup"
+            Write-Host "⚠ Could not find find_package(SuiteSparse) in CMakeLists.txt"
+            # Show lines around line 32 (where the error occurs)
+            Write-Host "Lines 25-35 of CMakeLists.txt:"
+            $lines = Get-Content $CMAKELISTS
+            for ($i = 24; $i -lt 35 -and $i -lt $lines.Count; $i++) {
+              Write-Host "Line $($i+1): $($lines[$i])"
+            }
           }
-          
-          # Also need to ensure BLAS is found - add a separate patch for BLAS
-          if (Test-Path $openblasLib) {
-            $openblasPathCmake = $openblasLib -replace '\\', '/'
-            $BLAS_PATCH = "`n" + 
-              '# Manually set BLAS for SuiteSparse' + "`n" +
-              'set(BLAS_FOUND TRUE)' + "`n" +
-              'set(BLAS_LIBRARIES "' + $openblasPathCmake + '")' + "`n" +
-              'set(LAPACK_FOUND TRUE)' + "`n" +
-              'set(LAPACK_LIBRARIES "' + $openblasPathCmake + '")' + "`n"
-            
-            # Add BLAS patch at the end of the file
-            $finalContent = Get-Content $CMAKELISTS -Raw
-            $finalContent = $finalContent + $BLAS_PATCH
-            Set-Content -Path $CMAKELISTS -Value $finalContent -NoNewline
-            Write-Host "✓ Added BLAS/LAPACK configuration"
-          }
+
       - name: Clean build directory
         run: |
           if (Test-Path "build") {
@@ -315,17 +218,16 @@ jobs:
           }
           mkdir build
 
-      - name: Configure BFF with CMake (Simple approach)
+      - name: Configure BFF with CMake
         run: |
           cd build
           
-          $SUITESPARSE_DIR = $env:SUITESPARSE_DIR
+          $SUITESPARSE_DIR = (Resolve-Path "../suitesparse-deps").Path
           $BFF_OPENBLAS_INCLUDE = "$env:GITHUB_WORKSPACE\deps\openblas-windows\include"
           $BFF_OPENBLAS_LIB = "$env:GITHUB_WORKSPACE\deps\openblas-windows\lib"
           
-          Write-Host "Configuring with SuiteSparse at: $SUITESPARSE_DIR"
+          Write-Host "Configuring BFF with SuiteSparse at: $SUITESPARSE_DIR"
           
-          # Very simple configuration
           cmake .. `
             -DCMAKE_BUILD_TYPE=Release `
             -DBUILD_GUI=ON `
@@ -354,40 +256,51 @@ jobs:
             }
           }
 
-      - name: Build BFF core library first (fixed)
+      - name: Build and verify
         run: |
           cd build
-          # First clean any previous failed builds
-          cmake --build . --config Release --target clean
-          # Build the bff library
-          cmake --build . --config Release --target bff --parallel --verbose
           
-          # Verify bff.lib was created
-          if (Test-Path "Release\bff.lib") {
-            Write-Host "✓ bff.lib successfully created"
-            Write-Host "File size: $((Get-Item 'Release\bff.lib').Length) bytes"
-          } else {
-            Write-Host "✗ bff.lib not found after build"
-            Write-Host "Checking what files were created in Release directory:"
+          # Build everything
+          cmake --build . --config Release --parallel --verbose
+          
+          Write-Host "Checking build results..."
+          
+          # Check for bff library (could be .dll or .lib)
+          $bffDll = Test-Path "Release\bff.dll"
+          $bffLib = Test-Path "Release\bff.lib"
+          $bffViewer = Test-Path "Release\bff-viewer.exe"
+          
+          if ($bffDll) {
+            Write-Host "✓ bff.dll created"
+          }
+          if ($bffLib) {
+            Write-Host "✓ bff.lib created"
+          }
+          if ($bffViewer) {
+            Write-Host "✓ bff-viewer.exe created"
+          }
+          
+          # If bff.dll exists but bff.lib doesn't, try to create it
+          if ($bffDll -and -not $bffLib) {
+            Write-Host "bff.dll exists but bff.lib missing - checking for import library..."
+            # Look for the import library that should have been created
+            $libFiles = Get-ChildItem "." -Filter "*.lib" -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.Name -match "bff" }
+            if ($libFiles) {
+              Write-Host "Found bff library files:"
+              $libFiles | ForEach-Object { Write-Host "  $($_.FullName)" }
+              # Copy the first one to Release directory
+              Copy-Item $libFiles[0].FullName -Destination "Release\bff.lib" -Force
+              Write-Host "✓ Copied bff.lib to Release directory"
+            }
+          }
+          
+          if (-not $bffViewer) {
+            Write-Host "✗ bff-viewer.exe not created"
+            Write-Host "Release directory contents:"
             Get-ChildItem "Release\" -ErrorAction SilentlyContinue
             exit 1
           }
 
-      - name: Build BFF Viewer
-        run: |
-          cd build
-          cmake --build . --config Release --target bff-viewer --parallel --verbose
-          
-          # Verify bff-viewer.exe was created
-          if (Test-Path "Release\bff-viewer.exe") {
-            Write-Host "✓ bff-viewer.exe successfully created"
-            Write-Host "File size: $((Get-Item 'Release\bff-viewer.exe').Length) bytes"
-          } else {
-            Write-Host "✗ bff-viewer.exe not found after build"
-            Write-Host "Checking what files were created in Release directory:"
-            Get-ChildItem "Release\" -ErrorAction SilentlyContinue
-            exit 1
-          }
       - name: Gather Runtime Dependencies
         shell: pwsh
         run: |
@@ -400,10 +313,17 @@ jobs:
           
           Write-Host "✓ Found bff-viewer.exe"
           
+          # Create distribution directory
           New-Item -ItemType Directory -Force -Path "dist"
           Copy-Item $exePath -Destination "dist\"
           
-          # Copy DLLs
+          # Copy bff.dll if it exists
+          if (Test-Path "$env:GITHUB_WORKSPACE\build\Release\bff.dll") {
+            Copy-Item "$env:GITHUB_WORKSPACE\build\Release\bff.dll" -Destination "dist\"
+            Write-Host "✓ Copied bff.dll"
+          }
+          
+          # Copy required DLLs
           $dllSources = @(
             "$env:GITHUB_WORKSPACE\deps\openblas-windows\lib\*.dll",
             "C:\Windows\System32\vcruntime140.dll",
@@ -412,9 +332,17 @@ jobs:
           )
           
           foreach ($source in $dllSources) {
-            if (Test-Path $source) {
+            if (Test-Path $source -ErrorAction SilentlyContinue) {
               Copy-Item $source -Destination "dist\" -ErrorAction SilentlyContinue
+              Write-Host "✓ Copied DLLs from: $source"
             }
+          }
+          
+          # Copy NanoGUI DLL if it exists
+          $nanoguiDll = "$env:GITHUB_WORKSPACE\build\deps\nanogui\Release\nanogui.dll"
+          if (Test-Path $nanoguiDll) {
+            Copy-Item $nanoguiDll -Destination "dist\"
+            Write-Host "✓ Copied NanoGUI DLL"
           }
 
       - name: Create Final Package
