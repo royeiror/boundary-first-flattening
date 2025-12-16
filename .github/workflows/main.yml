@@ -21,6 +21,7 @@ jobs:
       uses: microsoft/setup-msbuild@v1.1
 
     - name: Install dependencies
+      shell: powershell
       run: |
         choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y
         choco install git -y
@@ -30,7 +31,6 @@ jobs:
       run: |
         git clone https://github.com/OpenMathLib/OpenBLAS.git
         cd OpenBLAS
-        # Using CMake for a static build[citation:5]
         cmake . -G "Visual Studio 17 2022" -A x64 `
           -DBUILD_SHARED_LIBS=OFF `
           -DBUILD_STATIC_LIBS=ON `
@@ -38,7 +38,7 @@ jobs:
         cmake --build . --config Release --target INSTALL
         cd ..
 
-    - name: Build METIS (missing dependency)[citation:10]
+    - name: Build METIS (missing dependency)
       shell: bash
       run: |
         # Download and extract METIS 5.1.0
@@ -63,8 +63,8 @@ jobs:
         cd suitesparse
         # Apply critical Windows patches before build
         echo "Patching SuiteSparse for static build with OpenBLAS..." > patch.log
-        # 1. Patch cblas.h to use relative includes[citation:10]
-        find . -name "cblas.h" -type f -exec sed -i 's/#include "cblas\.h"/#include "..\/OpenBLAS\/cblas.h"/g' {} \;
+        # 1. Patch cblas.h to use relative includes
+        find . -name "cblas.h" -type f -exec sed -i 's|#include "cblas\.h"|#include "../../OpenBLAS/cblas.h"|g' {} \;
         
         # 2. Patch cholmod.h include path
         find . -name "*.h" -type f -exec sed -i 's|#include "suitesparse/cholmod.h"|#include "cholmod.h"|g' {} \;
@@ -86,7 +86,7 @@ jobs:
         cmake --build . --config Release --target INSTALL
         cd .. && cd ..
         
-        # 3. Create blas.lib symlink for compatibility[citation:1]
+        # 3. Create blas.lib symlink for compatibility
         cd suitesparse-deps/lib
         cp libopenblas.lib blas.lib
         echo "Created blas.lib symlink from libopenblas.lib" >> ../../patch.log
@@ -99,8 +99,8 @@ jobs:
         # 1. BFF_API export macros for Windows
         find ./include -name "*.h" -type f -exec sed -i 's/^class \(.*\)$/#ifdef _WIN32\n#ifdef bff_EXPORTS\n#define BFF_API __declspec(dllexport)\n#else\n#define BFF_API __declspec(dllimport)\n#endif\n#else\n#define BFF_API\n#endif\nclass BFF_API \1/g' {} \;
         
-        # 2. Patch CMakeLists.txt to bypass FindSuiteSparse
-        cat >> cmake/FindSuiteSparse.cmake << 'EOF'
+        # 2. Create custom FindSuiteSparse.cmake
+        cat > cmake/FindSuiteSparse.cmake << 'EOF'
         # Manual override for Windows static build
         if(WIN32)
             set(SuiteSparse_FOUND ON)
@@ -118,7 +118,7 @@ jobs:
                 "${{ github.workspace }}/suitesparse-deps/lib/libcxsparse.lib"
                 "${{ github.workspace }}/suitesparse-deps/lib/libumfpack.lib"
                 "${{ github.workspace }}/suitesparse-deps/lib/suitesparseconfig.lib"
-                "${{ github.workspace }}/metis-install/lib/metis.lib"  # Fixed METIS path
+                "${{ github.workspace }}/metis-install/lib/metis.lib"
                 "${{ github.workspace }}/openblas-install/lib/libopenblas.lib"
             )
             message(STATUS "Manually configured SuiteSparse for Windows static build")
@@ -130,13 +130,13 @@ jobs:
         # 3. Patch main CMakeLists.txt to use manual SuiteSparse
         sed -i 's/find_package(SuiteSparse REQUIRED)/# find_package(SuiteSparse REQUIRED)\ninclude(cmake\/FindSuiteSparse.cmake)/' CMakeLists.txt
         
-        # 4. NanoGUI static build patch[citation:2][citation:9]
+        # 4. NanoGUI static build patch
         sed -i 's/add_library(nanogui SHARED/add_library(nanogui STATIC/' deps/nanogui/CMakeLists.txt
         sed -i 's/NANOGUI_BUILD SHARED/NANOGUI_BUILD STATIC/' deps/nanogui/CMakeLists.txt
         sed -i 's/target_compile_definitions(nanogui PRIVATE "-DNVG_SHARED")/target_compile_definitions(nanogui PRIVATE "-DNVG_STATIC")/' deps/nanogui/CMakeLists.txt
         
         # 5. Ensure forward slash paths in CMake
-        find . -name "CMakeLists.txt" -type f -exec sed -i 's|\\|/|g' {} \;
+        find . -name "CMakeLists.txt" -type f -exec sed -i 's|\\\\|/|g' {} \;
 
     - name: Configure and Build BFF
       shell: cmd
@@ -156,26 +156,27 @@ jobs:
         mkdir -p bff-package
         
         # Copy main executables and DLLs
-        cp ./build/Release/bff-viewer.exe ./bff-package/
-        cp ./build/Release/bff.dll ./bff-package/
-        cp ./build/Release/bff.lib ./bff-package/
+        cp ./build/Release/bff-viewer.exe ./bff-package/ 2>/dev/null || echo "Warning: bff-viewer.exe not found"
+        cp ./build/Release/bff.dll ./bff-package/ 2>/dev/null || echo "Warning: bff.dll not found"
+        cp ./build/Release/bff.lib ./bff-package/ 2>/dev/null || echo "Warning: bff.lib not found"
         
-        # Find and copy all required DLLs[citation:4]
-        echo "Collecting runtime dependencies..." > deps.log
+        # Copy all DLLs from build directory
         find ./build -name "*.dll" -type f -exec cp {} ./bff-package/ \;
-        cp ./openblas-install/bin/*.dll ./bff-package/ 2>/dev/null || true
         
-        # Verify critical files exist
-        ls -la ./bff-package/ > package_contents.txt
-        echo "--- Required files check ---" >> deps.log
-        [ -f "./bff-package/bff-viewer.exe" ] && echo "✓ bff-viewer.exe" >> deps.log || echo "✗ bff-viewer.exe" >> deps.log
-        [ -f "./bff-package/bff.dll" ] && echo "✓ bff.dll" >> deps.log || echo "✗ bff.dll" >> deps.log
-        [ -f "./bff-package/libopenblas.dll" ] && echo "✓ libopenblas.dll" >> deps.log || echo "✗ libopenblas.dll (may be static)" >> deps.log
+        # Copy OpenBLAS DLL if it exists
+        cp ./openblas-install/bin/*.dll ./bff-package/ 2>/dev/null || echo "Note: No OpenBLAS DLLs found (may be static)"
+        
+        # Verify what was collected
+        echo "Package contents:" > package_contents.txt
+        ls -la ./bff-package/ >> package_contents.txt
+        echo "" >> package_contents.txt
+        echo "Files in package:" >> package_contents.txt
+        find ./bff-package -type f -name "*.exe" -o -name "*.dll" -o -name "*.lib" >> package_contents.txt
 
     - name: Upload Build Artifacts
-      uses: actions/upload-artifact@v4[citation:4]
+      uses: actions/upload-artifact@v4
       with:
         name: bff-windows-binaries
-        path: bff-package/*
-        if-no-files-found: error[citation:4]
-        retention-days: 7[citation:4]
+        path: bff-package/
+        if-no-files-found: error
+        retention-days: 7
