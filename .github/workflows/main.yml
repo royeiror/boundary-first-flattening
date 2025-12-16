@@ -33,7 +33,7 @@ jobs:
         wget https://github.com/OpenMathLib/OpenBLAS/releases/download/v0.3.28/OpenBLAS-0.3.28-x64.zip -O openblas.zip
         7z x openblas.zip -oopenblas-install
         
-    - name: Build SuiteSparse v5.13.0 with METIS
+    - name: Build SuiteSparse v5.13.0 with METIS (Simplified)
       shell: bash
       run: |
         echo "Building SuiteSparse v5.13.0 with METIS..."
@@ -47,144 +47,115 @@ jobs:
         cd SuiteSparse
         git checkout v5.13.0
         
-        # 2. Build METIS first
+        # 2. Build METIS with CMake
         echo "Building METIS..."
         if [ -d "metis-5.1.0" ]; then
           cd metis-5.1.0
-          # Patch for MSVC
-          find . -name "*.c" -type f -exec sed -i 's/#include <getopt.h>//g' {} \;
+          # Apply minimal patch for MSVC
+          sed -i 's/#include <getopt.h>//' programs/cmdline_metis.c 2>/dev/null || true
+          sed -i 's/#include <getopt.h>//' programs/cmdline_graphchk.c 2>/dev/null || true
           
           mkdir build
           cd build
-          cmake .. -G "Visual Studio 17 2022" -A x64 \
-            -DCMAKE_INSTALL_PREFIX="../../../suitesparse-deps" \
-            -DSHARED=OFF
-          cmake --build . --config Release --target INSTALL
+          cmake .. -G "Visual Studio 17 2022" -A x64 -DCMAKE_INSTALL_PREFIX="../../../suitesparse-deps"
+          cmake --build . --config Release
+          # Manually copy the built library
+          find . -name "*.lib" -exec cp {} ../../../suitesparse-deps/lib/ \;
           cd ../../
-        else
-          echo "METIS directory not found, attempting to build from separate source"
-          # Fallback: download and build METIS separately
-          cd ..
-          wget http://glaros.dtc.umn.edu/gkhome/fetch/sw/metis/metis-5.1.0.tar.gz
-          tar -xzf metis-5.1.0.tar.gz
-          cd metis-5.1.0
-          make config shared=0 prefix=../../suitesparse-deps
-          make install
-          cd ..
         fi
         
-        # 3. Build essential SuiteSparse libraries
+        # 3. Prepare directories
+        mkdir -p ../suitesparse-deps/lib
+        mkdir -p ../suitesparse-deps/include
+        
+        # 4. Build SuiteSparse libraries one by one (simplified approach)
         echo "Building SuiteSparse libraries..."
         
-        # First build SuiteSparse_config
+        # SuiteSparse_config first
         if [ -d "SuiteSparse_config" ]; then
-          echo "=== Building SuiteSparse_config ==="
+          echo "Building SuiteSparse_config..."
           cd SuiteSparse_config
           mkdir -p build
           cd build
-          cmake .. -G "Visual Studio 17 2022" -A x64 \
-            -DCMAKE_INSTALL_PREFIX="../../../../suitesparse-deps"
-          cmake --build . --config Release --target INSTALL
+          cmake .. -G "Visual Studio 17 2022" -A x64 -DCMAKE_INSTALL_PREFIX="../../../../suitesparse-deps"
+          cmake --build . --config Release
           cd ../../
         fi
         
-        # Build other libraries in dependency order
-        for lib in AMD CAMD CCOLAMD COLAMD CHOLMOD; do
+        # Build CHOLMOD (most important for BFF)
+        if [ -d "CHOLMOD" ]; then
+          echo "Building CHOLMOD..."
+          cd CHOLMOD
+          mkdir -p build
+          cd build
+          # Create minimal CMakeLists.txt
+          echo 'cmake_minimum_required(VERSION 3.10)' > ../CMakeLists_cholmod.txt
+          echo 'project(CHOLMOD)' >> ../CMakeLists_cholmod.txt
+          echo 'file(GLOB SRC_FILES "*.c" "*.cpp")' >> ../CMakeLists_cholmod.txt
+          echo 'add_library(cholmod STATIC ${SRC_FILES})' >> ../CMakeLists_cholmod.txt
+          echo 'target_include_directories(cholmod PUBLIC ../Include)' >> ../CMakeLists_cholmod.txt
+          
+          cmake .. -G "Visual Studio 17 2022" -A x64 \
+            -DCMAKE_INSTALL_PREFIX="../../../../suitesparse-deps" \
+            -DBLAS_LIBRARIES="../../../../openblas-install/lib/libopenblas.lib"
+          cmake --build . --config Release
+          cd ../../
+        fi
+        
+        # Build other essential libraries
+        for lib in AMD CAMD CCOLAMD COLAMD; do
           if [ -d "$lib" ]; then
-            echo "=== Building $lib ==="
+            echo "Building $lib..."
             cd "$lib"
             mkdir -p build
             cd build
-            
-            # Create a simple CMakeLists.txt if needed
-            if [ ! -f "../CMakeLists.txt" ]; then
-              cat > ../CMakeLists.txt << 'EOF'
-cmake_minimum_required(VERSION 3.10)
-project(${LIBNAME})
-
-file(GLOB SOURCES "*.c" "*.cpp")
-add_library(${LIBNAME} STATIC ${SOURCES})
-
-install(TARGETS ${LIBNAME}
-  ARCHIVE DESTINATION lib
-  LIBRARY DESTINATION lib
-  RUNTIME DESTINATION bin)
-
-install(DIRECTORY ../Include/ DESTINATION include)
-EOF
-            fi
-            
-            cmake .. -G "Visual Studio 17 2022" -A x64 \
-              -DCMAKE_INSTALL_PREFIX="../../../../suitesparse-deps" \
-              -DBLAS_LIBRARIES="../../../../openblas-install/lib/libopenblas.lib" \
-              -DLIBNAME="$lib"
-            cmake --build . --config Release --target INSTALL
+            cmake .. -G "Visual Studio 17 2022" -A x64 -DCMAKE_INSTALL_PREFIX="../../../../suitesparse-deps"
+            cmake --build . --config Release
             cd ../../
           fi
         done
         
-        # 4. Copy headers
-        echo "Copying headers..."
-        mkdir -p ../suitesparse-deps/include
-        cp -r Include/* ../suitesparse-deps/include/ 2>/dev/null || true
-        find . -name "*.h" -maxdepth 2 -exec cp {} ../suitesparse-deps/include/ 2>/dev/null \;
+        # 5. Copy all built libraries
+        echo "Copying built libraries..."
+        find . -name "*.lib" -type f -exec cp {} ../suitesparse-deps/lib/ 2>/dev/null \;
         
-        # 5. Create compatibility symlinks
+        # 6. Copy headers
+        echo "Copying headers..."
+        find . -name "*.h" -type f -exec cp {} ../suitesparse-deps/include/ 2>/dev/null \;
+        cp -r Include/* ../suitesparse-deps/include/ 2>/dev/null || true
+        
+        # 7. Create compatibility symlinks
         cd ../suitesparse-deps/lib
         cp ../../openblas-install/lib/libopenblas.lib blas.lib
         cp ../../openblas-install/lib/libopenblas.lib lapack.lib
         
-        echo "SuiteSparse v5.13.0 built successfully!"
-        echo "Libraries available:"
-        ls -la *.lib
+        echo "SuiteSparse build complete!"
+        ls -la
         
     - name: Apply critical BFF patches
       shell: bash
       run: |
         echo "Applying essential BFF patches for Windows..."
         
-        # 1. Create custom FindSuiteSparse.cmake for v5.13.0
+        # 1. Create custom FindSuiteSparse.cmake using echo commands
         echo "Creating custom FindSuiteSparse.cmake..."
         mkdir -p cmake
-        cat > cmake/FindSuiteSparse.cmake << 'EOF'
-# Manual configuration for SuiteSparse v5.13.0 on Windows
-if(WIN32)
-    message(STATUS "Using manually configured SuiteSparse v5.13.0 for Windows")
-    
-    set(SuiteSparse_FOUND ON)
-    set(SuiteSparse_INCLUDE_DIRS "$ENV{GITHUB_WORKSPACE}/suitesparse-deps/include")
-    
-    # Check which libraries actually exist
-    set(SUITESPARSE_LIBS)
-    
-    foreach(lib amd camd ccolamd colamd cholmod suitesparseconfig metis)
-        set(lib_path "$ENV{GITHUB_WORKSPACE}/suitesparse-deps/lib/${lib}.lib")
-        if(EXISTS "${lib_path}")
-            list(APPEND SUITESPARSE_LIBS "${lib_path}")
-            message(STATUS "Found ${lib}.lib")
-        else
-            # Try with lib prefix
-            set(lib_path "$ENV{GITHUB_WORKSPACE}/suitesparse-deps/lib/lib${lib}.lib")
-            if(EXISTS "${lib_path}")
-                list(APPEND SUITESPARSE_LIBS "${lib_path}")
-                message(STATUS "Found lib${lib}.lib")
-            endif()
-        endif()
-    endforeach()
-    
-    # Add OpenBLAS
-    set(OPENBLAS_PATH "$ENV{GITHUB_WORKSPACE}/openblas-install/lib/libopenblas.lib")
-    if(EXISTS "${OPENBLAS_PATH}")
-        list(APPEND SUITESPARSE_LIBS "${OPENBLAS_PATH}")
-        message(STATUS "Added OpenBLAS")
-    endif()
-    
-    set(SuiteSparse_LIBRARIES ${SUITESPARSE_LIBS})
-    
-    message(STATUS "SuiteSparse includes: ${SuiteSparse_INCLUDE_DIRS}")
-    message(STATUS "SuiteSparse libraries: ${SuiteSparse_LIBRARIES}")
-endif()
-EOF
+        
+        echo '# Manual configuration for SuiteSparse on Windows' > cmake/FindSuiteSparse.cmake
+        echo 'if(WIN32)' >> cmake/FindSuiteSparse.cmake
+        echo '  message(STATUS "Using manually configured SuiteSparse for Windows")' >> cmake/FindSuiteSparse.cmake
+        echo '  set(SuiteSparse_FOUND ON)' >> cmake/FindSuiteSparse.cmake
+        echo '  set(SuiteSparse_INCLUDE_DIRS "$ENV{GITHUB_WORKSPACE}/suitesparse-deps/include")' >> cmake/FindSuiteSparse.cmake
+        echo '  set(SuiteSparse_LIBRARIES' >> cmake/FindSuiteSparse.cmake
+        echo '    "$ENV{GITHUB_WORKSPACE}/suitesparse-deps/lib/libopenblas.lib"' >> cmake/FindSuiteSparse.cmake
+        
+        # Add libraries that might exist
+        for lib in amd camd ccolamd colamd cholmod suitesparseconfig metis; do
+          echo '    "$ENV{GITHUB_WORKSPACE}/suitesparse-deps/lib/'"$lib"'.lib"' >> cmake/FindSuiteSparse.cmake
+        done
+        
+        echo '  )' >> cmake/FindSuiteSparse.cmake
+        echo 'endif()' >> cmake/FindSuiteSparse.cmake
         
         # 2. Patch CMakeLists.txt
         echo "Patching CMakeLists.txt..."
@@ -196,6 +167,15 @@ EOF
         sed -i 's|NANOGUI_BUILD SHARED|NANOGUI_BUILD STATIC|' deps/nanogui/CMakeLists.txt
         
         echo "Patches applied successfully!"
+        
+    - name: Debug - Check what was built
+      shell: bash
+      run: |
+        echo "Checking build artifacts..."
+        echo "SuiteSparse libraries:"
+        find suitesparse-deps -name "*.lib" -type f 2>/dev/null || echo "No .lib files found"
+        echo "OpenBLAS installation:"
+        ls -la openblas-install/lib/ 2>/dev/null || echo "OpenBLAS not found"
         
     - name: Configure and Build BFF
       shell: cmd
