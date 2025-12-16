@@ -51,12 +51,16 @@ jobs:
         # 3. Fetch the SuiteSparse source code
         git clone https://github.com/DrTimothyAldenDavis/SuiteSparse.git SuiteSparse
         
-        # 4. Checkout v7.4.0 (doesn't include SPEX)
+        # 4. Checkout v7.3.0 (older, more stable)
         cd SuiteSparse
-        git checkout v7.4.0
+        git checkout v7.3.0
         cd ..
         
-        # 5. Create a build directory and configure with CMake
+        # 5. Remove SPEX directory completely to avoid GMP issues
+        rm -rf SuiteSparse/SPEX
+        echo "Removed SPEX directory to avoid GMP dependency"
+        
+        # 6. Create a build directory and configure with CMake
         mkdir build
         cd build
         cmake .. -G "Visual Studio 17 2022" -A x64 \
@@ -68,17 +72,17 @@ jobs:
           -DBUILD_METIS=ON \
           -DCMAKE_DISABLE_FIND_PACKAGE_Fortran=ON
         
-        # 6. Build and install
+        # 7. Build and install
         cmake --build . --config Release --target INSTALL
         
         echo "SuiteSparse and METIS built successfully."
         
-        # 7. Navigate back and verify
+        # 8. Navigate back and verify
         cd ../../../
-        echo "Verifying libraries..."
+        echo "Verifying essential libraries exist..."
         ls -la "suitesparse-deps/lib/"*.lib 2>/dev/null
         
-        # 8. Create compatibility symlinks
+        # 9. Create compatibility symlinks
         cd suitesparse-deps/lib
         cp ../../openblas-install/lib/libopenblas.lib blas.lib
         cp ../../openblas-install/lib/libopenblas.lib lapack.lib
