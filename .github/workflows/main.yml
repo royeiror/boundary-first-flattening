@@ -55,14 +55,14 @@ jobs:
         cp ../../openblas-install/lib/libopenblas.lib blas.lib
         cp ../../openblas-install/lib/libopenblas.lib lapack.lib
         
-    - name: Apply critical BFF patches
-      shell: bash
-      run: |
-        echo "Applying essential BFF patches for Windows..."
-        
-        # 1. Patch for Windows DLL export
-        echo "Patching BFF_API macros..."
-        cat > api_patch.h << 'EOF'
+- name: Apply critical BFF patches
+  shell: bash
+  run: |
+    echo "Applying essential BFF patches for Windows..."
+    
+    # 1. Patch for Windows DLL export
+    echo "Patching BFF_API macros..."
+    cat > api_patch.h << 'EOF'
 #ifndef BFF_API_H
 #define BFF_API_H
 
@@ -78,17 +78,17 @@ jobs:
 
 #endif
 EOF
-        
-        # Include the API macro in main headers
-        for header in include/bff/*.h include/bff/*/*.h; do
-          if [ -f "$header" ]; then
-            sed -i '1i #include "api_patch.h"' "$header"
-          fi
-        done
-        
-        # 2. Create custom FindSuiteSparse.cmake
-        echo "Creating custom FindSuiteSparse.cmake..."
-        cat > cmake/FindSuiteSparse.cmake << 'EOF'
+    
+    # Include the API macro in main headers
+    for header in include/bff/*.h include/bff/*/*.h; do
+      if [ -f "$header" ]; then
+        sed -i '1i #include "api_patch.h"' "$header"
+      fi
+    done
+    
+    # 2. Create custom FindSuiteSparse.cmake
+    echo "Creating custom FindSuiteSparse.cmake..."
+    cat > cmake/FindSuiteSparse.cmake << 'EOF'
 # Manual configuration for SuiteSparse on Windows
 if(WIN32)
   message(STATUS "Using manually configured SuiteSparse for Windows")
@@ -120,17 +120,17 @@ if(WIN32)
   message(STATUS "SuiteSparse libraries configured")
 endif()
 EOF
-        
-        # 3. Patch main CMakeLists.txt
-        echo "Patching main CMakeLists.txt..."
-        sed -i 's|find_package(SuiteSparse REQUIRED)|# find_package(SuiteSparse REQUIRED)\ninclude(cmake/FindSuiteSparse.cmake)|' CMakeLists.txt
-        
-        # 4. Fix NanoGUI build
-        echo "Patching NanoGUI for static build..."
-        sed -i 's|add_library(nanogui SHARED|add_library(nanogui STATIC|' deps/nanogui/CMakeLists.txt
-        sed -i 's|NANOGUI_BUILD SHARED|NANOGUI_BUILD STATIC|' deps/nanogui/CMakeLists.txt
-        
-        echo "Patches applied successfully!"
+    
+    # 3. Patch main CMakeLists.txt
+    echo "Patching main CMakeLists.txt..."
+    sed -i 's|find_package(SuiteSparse REQUIRED)|# find_package(SuiteSparse REQUIRED)\ninclude(cmake/FindSuiteSparse.cmake)|' CMakeLists.txt
+    
+    # 4. Fix NanoGUI build
+    echo "Patching NanoGUI for static build..."
+    sed -i 's|add_library(nanogui SHARED|add_library(nanogui STATIC|' deps/nanogui/CMakeLists.txt
+    sed -i 's|NANOGUI_BUILD SHARED|NANOGUI_BUILD STATIC|' deps/nanogui/CMakeLists.txt
+    
+    echo "Patches applied successfully!"
         
     - name: Configure and Build BFF
       shell: cmd
