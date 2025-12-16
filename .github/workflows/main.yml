@@ -354,16 +354,40 @@ jobs:
             }
           }
 
-      - name: Build BFF core library first
+      - name: Build BFF core library first (fixed)
         run: |
           cd build
+          # First clean any previous failed builds
+          cmake --build . --config Release --target clean
+          # Build the bff library
           cmake --build . --config Release --target bff --parallel --verbose
+          
+          # Verify bff.lib was created
+          if (Test-Path "Release\bff.lib") {
+            Write-Host "✓ bff.lib successfully created"
+            Write-Host "File size: $((Get-Item 'Release\bff.lib').Length) bytes"
+          } else {
+            Write-Host "✗ bff.lib not found after build"
+            Write-Host "Checking what files were created in Release directory:"
+            Get-ChildItem "Release\" -ErrorAction SilentlyContinue
+            exit 1
+          }
 
       - name: Build BFF Viewer
         run: |
           cd build
           cmake --build . --config Release --target bff-viewer --parallel --verbose
-
+          
+          # Verify bff-viewer.exe was created
+          if (Test-Path "Release\bff-viewer.exe") {
+            Write-Host "✓ bff-viewer.exe successfully created"
+            Write-Host "File size: $((Get-Item 'Release\bff-viewer.exe').Length) bytes"
+          } else {
+            Write-Host "✗ bff-viewer.exe not found after build"
+            Write-Host "Checking what files were created in Release directory:"
+            Get-ChildItem "Release\" -ErrorAction SilentlyContinue
+            exit 1
+          }
       - name: Gather Runtime Dependencies
         shell: pwsh
         run: |
