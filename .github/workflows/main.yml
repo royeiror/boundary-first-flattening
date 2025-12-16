@@ -231,33 +231,24 @@ jobs:
           
           # Build library list based on what actually exists
           $libraryList = @()
-          $commonLibraries = @("amd", "camd", "ccolamd", "colamd", "cholmod", "spqr", "ldl", "btf", "klu", "cxsparse", "umfpack", "suitesparseconfig")
+          $commonLibraries = @("amd", "camd", "ccolamd", "colamd", "cholmod", "spqr", "ldl", "btf", "klu", "cxsparse", "umfpack")
           
           foreach ($lib in $commonLibraries) {
             $libName = "lib${lib}.lib"
             $libPath = "$SUITESPARSE_DIR/lib/$libName"
             if (Test-Path $libPath) {
               $libraryList += "`"$SUITESPARSE_DIR_CMAKE/lib/$libName`""
+              Write-Host "✓ Adding library: $libName"
             } else {
               Write-Host "⚠ Library not found: $libName"
             }
           }
           
-          # Check for metis separately
-          $metisLibs = @("libmetis.lib", "metis.lib")
-          $metisFound = $false
-          foreach ($metisLib in $metisLibs) {
-            $metisPath = "$SUITESPARSE_DIR/lib/$metisLib"
-            if (Test-Path $metisPath) {
-              $libraryList += "`"$SUITESPARSE_DIR_CMAKE/lib/$metisLib`""
-              $metisFound = $true
-              Write-Host "✓ Found METIS library: $metisLib"
-              break
-            }
-          }
-          
-          if (-not $metisFound) {
-            Write-Host "⚠ METIS library not found, skipping"
+          # Add suitesparseconfig.lib (without lib prefix)
+          $suitesparseconfigPath = "$SUITESPARSE_DIR/lib/suitesparseconfig.lib"
+          if (Test-Path $suitesparseconfigPath) {
+            $libraryList += "`"$SUITESPARSE_DIR_CMAKE/lib/suitesparseconfig.lib`""
+            Write-Host "✓ Adding library: suitesparseconfig.lib"
           }
           
           # Check for OpenBLAS/BLAS library
@@ -265,7 +256,7 @@ jobs:
           if (Test-Path $openblasLib) {
             $openblasPath = $openblasLib -replace '\\', '/'
             $libraryList += "`"$openblasPath`""
-            Write-Host "✓ Adding OpenBLAS library"
+            Write-Host "✓ Adding OpenBLAS library: $openblasPath"
           }
           
           # Create the manual setup string
@@ -287,59 +278,36 @@ jobs:
           # Read the entire file
           $content = Get-Content $CMAKELISTS -Raw
           
-          # First, let's see what's actually in the file
-          Write-Host "Looking for find_package(SuiteSparse) in CMakeLists.txt..."
-          $lines = Get-Content $CMAKELISTS
-          for ($i = 0; $i -lt $lines.Count; $i++) {
-            if ($lines[$i] -match 'find_package.*SuiteSparse') {
-              Write-Host "Found at line $($i+1): $($lines[$i])"
-            }
-          }
+          # Try different patterns to find and replace - replace the 2nd find_package(SuiteSparse)
+          $newContent = $content -replace 'find_package\(SuiteSparse REQUIRED\)', $MANUAL_SETUP
           
-          # Try different patterns to find and replace
-          $patterns = @(
-            'find_package\(SuiteSparse REQUIRED\)',
-            'find_package\(SuiteSparse[^)]*\)',
-            'find_package\s*\(\s*SuiteSparse'
-          )
-          
-          $patched = $false
-          foreach ($pattern in $patterns) {
-            if ($content -match $pattern) {
-              $newContent = $content -replace $pattern, $MANUAL_SETUP
-              if ($newContent -ne $content) {
-                Set-Content -Path $CMAKELISTS -Value $newContent -NoNewline
-                Write-Host "✓ Patched CMakeLists.txt using pattern: $pattern"
-                $patched = $true
-                break
-              }
-            }
-          }
-          
-          if (-not $patched) {
-            Write-Host "⚠ Could not find find_package(SuiteSparse) with regex patterns"
-            Write-Host "Inserting manual setup after find_package(Eigen3)..."
-            
-            # Insert after find_package(Eigen3)
-            $newContent = $content -replace '(find_package\(Eigen3 3\.2 REQUIRED\))', '$1' + "`n`n" + $MANUAL_SETUP
+          if ($newContent -ne $content) {
             Set-Content -Path $CMAKELISTS -Value $newContent -NoNewline
-            Write-Host "✓ Inserted manual SuiteSparse setup after find_package(Eigen3)"
+            Write-Host "✓ Patched CMakeLists.txt - replaced find_package(SuiteSparse REQUIRED)"
+          } else {
+            Write-Host "⚠ Could not find find_package(SuiteSparse REQUIRED)"
+            # Try to insert after first find_package(SuiteSparse QUIET NO_MODULE)
+            $newContent = $content -replace '(find_package\(SuiteSparse QUIET NO_MODULE\)[^}]*\})', '$1' + "`n`n" + $MANUAL_SETUP
+            Set-Content -Path $CMAKELISTS -Value $newContent -NoNewline
+            Write-Host "✓ Inserted manual SuiteSparse setup"
           }
           
           # Also need to ensure BLAS is found - add a separate patch for BLAS
-          $BLAS_PATCH = "`n" + 
-            '# Manually set BLAS for SuiteSparse' + "`n" +
-            'set(BLAS_FOUND TRUE)' + "`n" +
-            'set(BLAS_LIBRARIES "' + ($openblasLib -replace '\\', '/') + '")' + "`n" +
-            'set(LAPACK_FOUND TRUE)' + "`n" +
-            'set(LAPACK_LIBRARIES "' + ($openblasLib -replace '\\', '/') + '")' + "`n"
-          
-          # Insert BLAS patch after SuiteSparse setup
-          $finalContent = Get-Content $CMAKELISTS -Raw
-          $finalContent = $finalContent -replace '($MANUAL_SETUP)', '$1' + $BLAS_PATCH
-          Set-Content -Path $CMAKELISTS -Value $finalContent -NoNewline
-          Write-Host "✓ Added BLAS/LAPACK configuration"
-
+          if (Test-Path $openblasLib) {
+            $openblasPathCmake = $openblasLib -replace '\\', '/'
+            $BLAS_PATCH = "`n" + 
+              '# Manually set BLAS for SuiteSparse' + "`n" +
+              'set(BLAS_FOUND TRUE)' + "`n" +
+              'set(BLAS_LIBRARIES "' + $openblasPathCmake + '")' + "`n" +
+              'set(LAPACK_FOUND TRUE)' + "`n" +
+              'set(LAPACK_LIBRARIES "' + $openblasPathCmake + '")' + "`n"
+            
+            # Add BLAS patch at the end of the file
+            $finalContent = Get-Content $CMAKELISTS -Raw
+            $finalContent = $finalContent + $BLAS_PATCH
+            Set-Content -Path $CMAKELISTS -Value $finalContent -NoNewline
+            Write-Host "✓ Added BLAS/LAPACK configuration"
+          }
       - name: Clean build directory
         run: |
           if (Test-Path "build") {
