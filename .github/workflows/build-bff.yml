@@ -181,15 +181,20 @@ jobs:
         # Read original CMakeLists.txt
         $cmakeContent = Get-Content "CMakeLists.txt" -Raw
         
+        # Create the replacement text using array joining
+        $replacementLines = @(
+            '# find_package(SuiteSparse REQUIRED) - Replaced with manual configuration for Windows',
+            'if(WIN32)',
+            '    include("${CMAKE_SOURCE_DIR}/SuiteSparsePatch.cmake")',
+            'else()',
+            '    find_package(SuiteSparse REQUIRED)',
+            'endif()'
+        )
+        
+        $replacementText = $replacementLines -join "`n"
+        
         # Replace find_package(SuiteSparse) with our patch
-        $cmakeContent = $cmakeContent -replace 'find_package\s*\(\s*SuiteSparse\s+REQUIRED\s*\)', @'
-# find_package(SuiteSparse REQUIRED) - Replaced with manual configuration for Windows
-if(WIN32)
-    include("${CMAKE_SOURCE_DIR}/SuiteSparsePatch.cmake")
-else()
-    find_package(SuiteSparse REQUIRED)
-endif()
-'@
+        $cmakeContent = $cmakeContent -replace 'find_package\s*\(\s*SuiteSparse\s+REQUIRED\s*\)', $replacementText
         
         # Write modified CMakeLists.txt
         $cmakeContent | Out-File -FilePath "CMakeLists.txt" -Encoding UTF8
