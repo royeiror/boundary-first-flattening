@@ -111,71 +111,71 @@ jobs:
       run: |
         Write-Host "Patching BFF for Windows build..."
         
-        # Create a simple CMakeLists.txt patch
-        $patchContent = @"
-# Override SuiteSparse find for Windows
-if(WIN32)
-    message(STATUS "Using manually configured SuiteSparse for Windows")
-    
-    # Include directories
-    include_directories(
-        "\${CMAKE_SOURCE_DIR}/suitesparse-deps/include"
-        "\${CMAKE_SOURCE_DIR}/suitesparse-deps/include/suitesparse"
-    )
-    
-    # Find all SuiteSparse libraries
-    set(SUITESPARSE_LIBS)
-    
-    # List of expected libraries
-    set(EXPECTED_LIBS
-        suitesparseconfig
-        amd
-        camd
-        ccolamd
-        colamd
-        cholmod
-        metis
-    )
-    
-    foreach(lib \${EXPECTED_LIBS})
-        set(lib_path "\${CMAKE_SOURCE_DIR}/suitesparse-deps/lib/\${lib}.lib")
-        if(EXISTS \${lib_path})
-            list(APPEND SUITESPARSE_LIBS \${lib_path})
-            message(STATUS "Found \${lib}: \${lib_path}")
-        else()
-            message(STATUS "Warning: \${lib}.lib not found at \${lib_path}")
-        endif()
-    endforeach()
-    
-    # Add OpenBLAS
-    set(OPENBLAS_PATH "\${CMAKE_SOURCE_DIR}/suitesparse-deps/lib/libopenblas.lib")
-    if(EXISTS \${OPENBLAS_PATH})
-        list(APPEND SUITESPARSE_LIBS \${OPENBLAS_PATH})
-        message(STATUS "Found OpenBLAS: \${OPENBLAS_PATH}")
-        set(BLAS_LIBRARIES \${OPENBLAS_PATH})
-        set(LAPACK_LIBRARIES \${OPENBLAS_PATH})
-    else()
-        message(FATAL_ERROR "OpenBLAS not found: \${OPENBLAS_PATH}")
-    endif()
-    
-    # Create a target that links all SuiteSparse libraries
-    add_library(SuiteSparse::SuiteSparse INTERFACE IMPORTED)
-    target_link_libraries(SuiteSparse::SuiteSparse INTERFACE \${SUITESPARSE_LIBS})
-    target_include_directories(SuiteSparse::SuiteSparse INTERFACE
-        "\${CMAKE_SOURCE_DIR}/suitesparse-deps/include"
-        "\${CMAKE_SOURCE_DIR}/suitesparse-deps/include/suitesparse"
-    )
-    
-    set(SuiteSparse_FOUND TRUE)
-    set(SuiteSparse_LIBRARIES \${SUITESPARSE_LIBS})
-    set(SuiteSparse_INCLUDE_DIRS
-        "\${CMAKE_SOURCE_DIR}/suitesparse-deps/include"
-        "\${CMAKE_SOURCE_DIR}/suitesparse-deps/include/suitesparse"
-    )
-endif()
-"@
+        # Create a simple CMakeLists.txt patch using array joining
+        $patchLines = @(
+            '# Override SuiteSparse find for Windows',
+            'if(WIN32)',
+            '    message(STATUS "Using manually configured SuiteSparse for Windows")',
+            '',
+            '    # Include directories',
+            '    include_directories(',
+            '        "${CMAKE_SOURCE_DIR}/suitesparse-deps/include"',
+            '        "${CMAKE_SOURCE_DIR}/suitesparse-deps/include/suitesparse"',
+            '    )',
+            '',
+            '    # Find all SuiteSparse libraries',
+            '    set(SUITESPARSE_LIBS)',
+            '',
+            '    # List of expected libraries',
+            '    set(EXPECTED_LIBS',
+            '        suitesparseconfig',
+            '        amd',
+            '        camd',
+            '        ccolamd',
+            '        colamd',
+            '        cholmod',
+            '        metis',
+            '    )',
+            '',
+            '    foreach(lib ${EXPECTED_LIBS})',
+            '        set(lib_path "${CMAKE_SOURCE_DIR}/suitesparse-deps/lib/${lib}.lib")',
+            '        if(EXISTS ${lib_path})',
+            '            list(APPEND SUITESPARSE_LIBS ${lib_path})',
+            '            message(STATUS "Found ${lib}: ${lib_path}")',
+            '        else()',
+            '            message(STATUS "Warning: ${lib}.lib not found at ${lib_path}")',
+            '        endif()',
+            '    endforeach()',
+            '',
+            '    # Add OpenBLAS',
+            '    set(OPENBLAS_PATH "${CMAKE_SOURCE_DIR}/suitesparse-deps/lib/libopenblas.lib")',
+            '    if(EXISTS ${OPENBLAS_PATH})',
+            '        list(APPEND SUITESPARSE_LIBS ${OPENBLAS_PATH})',
+            '        message(STATUS "Found OpenBLAS: ${OPENBLAS_PATH}")',
+            '        set(BLAS_LIBRARIES ${OPENBLAS_PATH})',
+            '        set(LAPACK_LIBRARIES ${OPENBLAS_PATH})',
+            '    else()',
+            '        message(FATAL_ERROR "OpenBLAS not found: ${OPENBLAS_PATH}")',
+            '    endif()',
+            '',
+            '    # Create a target that links all SuiteSparse libraries',
+            '    add_library(SuiteSparse::SuiteSparse INTERFACE IMPORTED)',
+            '    target_link_libraries(SuiteSparse::SuiteSparse INTERFACE ${SUITESPARSE_LIBS})',
+            '    target_include_directories(SuiteSparse::SuiteSparse INTERFACE',
+            '        "${CMAKE_SOURCE_DIR}/suitesparse-deps/include"',
+            '        "${CMAKE_SOURCE_DIR}/suitesparse-deps/include/suitesparse"',
+            '    )',
+            '',
+            '    set(SuiteSparse_FOUND TRUE)',
+            '    set(SuiteSparse_LIBRARIES ${SUITESPARSE_LIBS})',
+            '    set(SuiteSparse_INCLUDE_DIRS',
+            '        "${CMAKE_SOURCE_DIR}/suitesparse-deps/include"',
+            '        "${CMAKE_SOURCE_DIR}/suitesparse-deps/include/suitesparse"',
+            '    )',
+            'endif()'
+        )
         
-        # Create the patch file
+        $patchContent = $patchLines -join "`n"
         $patchContent | Out-File -FilePath "SuiteSparsePatch.cmake" -Encoding UTF8
         
         # Read original CMakeLists.txt
