@@ -1,4 +1,265 @@
-name: Windows Build BFF v1.6 - Optimized
+name: Build BFF Windows Binary
+
+on:
+  workflow_dispatch:  # Manual trigger
+  push:
+    branches: [ main, master ]
+    paths:
+      - '.github/workflows/build-bff.yml'
+  release:
+    types: [created]
+
+env:
+  BUILD_DIR: "C:/build"
+  INSTALL_DIR: "C:/local"
+  VCPKG_ROOT: "C:/vcpkg"
+  SUITESPARSE_VERSION: "7.0.1"
+  METIS_VERSION: "5.1.0"
+  CMAKE_GENERATOR: "Visual Studio 17 2022"
+  CMAKE_ARCH: "x64"
+
+jobs:
+  build-dependencies:
+    name: Build SuiteSparse Dependencies
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+    
+    - name: Setup MSBuild
+      uses: microsoft/setup-msbuild@v2
+    
+    - name: Setup Visual Studio
+      uses: microsoft/setup-visual-studio@v1
+      with:
+        components: |
+          Microsoft.VisualStudio.Component.VC.Tools.x86.x64
+          Microsoft.VisualStudio.Component.Windows10SDK
+          Microsoft.VisualStudio.Component.VC.CMake.Project
+    
+    - name: Create Directories
+      shell: cmd
+      run: |
+        mkdir %BUILD_DIR%
+        mkdir %INSTALL_DIR%
+    
+    - name: Install Required Tools
+      shell: cmd
+      run: |
+        choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y
+        choco install git -y
+        choco install ninja -y
+    
+    - name: Download and Extract METIS
+      shell: cmd
+      run: |
+        cd %BUILD_DIR%
+        curl -L -o metis-%METIS_VERSION%.tar.gz https://github.com/jlblancoc/suitesparse-metis-for-windows/releases/download/v1.4.0/metis-%METIS_VERSION%.tar.gz
+        tar -xzf metis-%METIS_VERSION%.tar.gz
+        move metis-%METIS_VERSION% metis
+    
+    - name: Build METIS
+      shell: cmd
+      run: |
+        cd %BUILD_DIR%\metis
+        mkdir build
+        cd build
+        cmake .. -G "%CMAKE_GENERATOR%" -A %CMAKE_ARCH% ^
+          -DCMAKE_INSTALL_PREFIX="%INSTALL_DIR%" ^
+          -DSHARED=0
+        cmake --build . --config Release --target install
+    
+    - name: Download SuiteSparse
+      shell: cmd
+      run: |
+        cd %BUILD_DIR%
+        git clone --depth 1 --branch v%SUITESPARSE_VERSION% https://github.com/DrTimothyAldenDavis/SuiteSparse.git
+        cd SuiteSparse
+        git submodule update --init --recursive
+    
+    - name: Build SuiteSparse (UMFPACK)
+      shell: cmd
+      run: |
+        cd %BUILD_DIR%\SuiteSparse\UMFPACK
+        mkdir build
+        cd build
+        cmake .. -G "%CMAKE_GENERATOR%" -A %CMAKE_ARCH% ^
+          -DCMAKE_INSTALL_PREFIX="%INSTALL_DIR%" ^
+          -DCMAKE_PREFIX_PATH="%INSTALL_DIR%" ^
+          -DCMAKE_BUILD_TYPE=Release ^
+          -DBUILD_SHARED_LIBS=OFF ^
+          -DNSTATIC=ON
+        cmake --build . --config Release --target install
+    
+    - name: Build SuiteSparse (AMD)
+      shell: cmd
+      run: |
+        cd %BUILD_DIR%\SuiteSparse\AMD
+        mkdir build
+        cd build
+        cmake .. -G "%CMAKE_GENERATOR%" -A %CMAKE_ARCH% ^
+          -DCMAKE_INSTALL_PREFIX="%INSTALL_DIR%" ^
+          -DCMAKE_PREFIX_PATH="%INSTALL_DIR%" ^
+          -DCMAKE_BUILD_TYPE=Release ^
+          -DBUILD_SHARED_LIBS=OFF ^
+          -DNSTATIC=ON
+        cmake --build . --config Release --target install
+    
+    - name: Build SuiteSparse (CHOLMOD)
+      shell: cmd
+      run: |
+        cd %BUILD_DIR%\SuiteSparse\CHOLMOD
+        mkdir build
+        cd build
+        cmake .. -G "%CMAKE_GENERATOR%" -A %CMAKE_ARCH% ^
+          -DCMAKE_INSTALL_PREFIX="%INSTALL_DIR%" ^
+          -DCMAKE_PREFIX_PATH="%INSTALL_DIR%" ^
+          -DCMAKE_BUILD_TYPE=Release ^
+          -DBUILD_SHARED_LIBS=OFF ^
+          -DNSTATIC=ON
+        cmake --build . --config Release --target install
+    
+    - name: Verify SuiteSparse Build
+      shell: cmd
+      run: |
+        echo "Checking installed libraries..."
+        dir "%INSTALL_DIR%\lib" /b
+        echo "Checking installed headers..."
+        dir "%INSTALL_DIR%\include" /b
+    
+    - name: Archive Dependencies
+      uses: actions/upload-artifact@v4
+      with:
+        name: suitesparse-dependencies
+        path: |
+          ${{ env.INSTALL_DIR }}/include
+          ${{ env.INSTALL_DIR }}/lib
+        retention-days: 7
+
+  build-bff:
+    name: Build BFF Windows Binary
+    runs-on: windows-latest
+    needs: build-dependencies
+    
+    steps:
+    - name: Checkout BFF Repository
+      uses: actions/checkout@v4
+      with:
+        repository: GeometryCollective/boundary-first-flattening
+        ref: v1.6
+    
+    - name: Setup MSBuild
+      uses: microsoft/setup-msbuild@v2
+    
+    - name: Setup Visual Studio
+      uses: microsoft/setup-visual-studio@v1
+      with:
+        components: |
+          Microsoft.VisualStudio.Component.VC.Tools.x86.x64
+          Microsoft.VisualStudio.Component.Windows10SDK
+          Microsoft.VisualStudio.Component.VC.CMake.Project
+    
+    - name: Download Dependencies
+      uses: actions/download-artifact@v4
+      with:
+        name: suitesparse-dependencies
+        path: ${{ env.INSTALL_DIR }}
+    
+    - name: Install Build Tools
+      shell: cmd
+      run: |
+        choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y
+        choco install git -y
+        choco install ninja -y
+    
+    - name: Install Qt for GUI
+      shell: cmd
+      run: |
+        choco install qtcreator -y
+        # Add Qt to PATH
+        echo "C:\Qt\Tools\QtCreator\bin" >> $env:GITHUB_PATH
+    
+    - name: Clone and Build Eigen
+      shell: cmd
+      run: |
+        cd %BUILD_DIR%
+        git clone --depth 1 --branch 3.4 https://gitlab.com/libeigen/eigen.git
+        cd eigen
+        mkdir build
+        cd build
+        cmake .. -G "%CMAKE_GENERATOR%" -A %CMAKE_ARCH% ^
+          -DCMAKE_INSTALL_PREFIX="%INSTALL_DIR%"
+        cmake --build . --config Release --target install
+    
+    - name: Clone and Build GLFW
+      shell: cmd
+      run: |
+        cd %BUILD_DIR%
+        git clone --depth 1 --branch 3.3.8 https://github.com/glfw/glfw.git
+        cd glfw
+        mkdir build
+        cd build
+        cmake .. -G "%CMAKE_GENERATOR%" -A %CMAKE_ARCH% ^
+          -DCMAKE_INSTALL_PREFIX="%INSTALL_DIR%" ^
+          -DGLFW_BUILD_EXAMPLES=OFF ^
+          -DGLFW_BUILD_TESTS=OFF ^
+          -DGLFW_BUILD_DOCS=OFF
+        cmake --build . --config Release --target install
+    
+    - name: Build BFF Library
+      shell: cmd
+      run: |
+        mkdir build_lib
+        cd build_lib
+        cmake .. -G "%CMAKE_GENERATOR%" -A %CMAKE_ARCH% ^
+          -DCMAKE_INSTALL_PREFIX="%INSTALL_DIR%" ^
+          -DCMAKE_PREFIX_PATH="%INSTALL_DIR%" ^
+          -DBUILD_GUI=OFF ^
+          -DBUILD_TESTING=OFF ^
+          -DCMAKE_BUILD_TYPE=Release
+        cmake --build . --config Release --target install
+    
+    - name: Build BFF GUI Application
+      shell: cmd
+      run: |
+        mkdir build_gui
+        cd build_gui
+        cmake .. -G "%CMAKE_GENERATOR%" -A %CMAKE_ARCH% ^
+          -DCMAKE_PREFIX_PATH="%INSTALL_DIR%;C:/Qt/6.5.0/msvc2019_64" ^
+          -DBUILD_GUI=ON ^
+          -DCMAKE_BUILD_TYPE=Release
+        cmake --build . --config Release --target bff-gui
+    
+    - name: Collect DLL Dependencies
+      shell: cmd
+      run: |
+        # Copy required Qt DLLs
+        mkdir -p release_bin
+        copy build_gui\Release\bff-gui.exe release_bin\
+        
+        # Use windeployqt to gather Qt dependencies
+        call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+        windeployqt release_bin\bff-gui.exe --release
+        
+        # Copy SuiteSparse and other dependencies
+        copy "%INSTALL_DIR%\lib\*.lib" release_bin\
+        
+        # List contents for verification
+        dir release_bin\
+    
+    - name: Create Standalone Package
+      shell: cmd
+      run: |
+        cd release_bin
+        7z a -tzip bff-gui-windows.zip *
+    
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: bff-windows-gui
+        path: release_bin/bff-gui-windows.zip
+        retention-days: 30name: Windows Build BFF v1.6 - Optimized
 
 on:
   push:
