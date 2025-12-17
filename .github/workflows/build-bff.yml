@@ -293,22 +293,23 @@ jobs:
             Write-Host "Copied: libopenblas.dll"
         }
         
-        # Create a README file
-        $readmeContent = @"
-BFF (Boundary First Flattening) Windows Build
-=============================================
-Build Date: $(Get-Date -Format "yyyy-MM-dd")
-Version: 1.6
-
-This package contains the Windows binaries for BFF.
-To run the application, execute the .exe file in this folder.
-
-Dependencies included:
-- OpenBLAS
-- SuiteSparse libraries
-- Required runtime DLLs
-"@
+        # Create a README file - FIXED: Use string concatenation instead of heredoc
+        $readmeLines = @(
+            "BFF (Boundary First Flattening) Windows Build",
+            "=============================================",
+            "Build Date: $(Get-Date -Format 'yyyy-MM-dd')",
+            "Version: 1.6",
+            "",
+            "This package contains the Windows binaries for BFF.",
+            "To run the application, execute the .exe file in this folder.",
+            "",
+            "Dependencies included:",
+            "- OpenBLAS",
+            "- SuiteSparse libraries",
+            "- Required runtime DLLs"
+        )
         
+        $readmeContent = $readmeLines -join "`n"
         $readmeContent | Out-File -FilePath "bff-package/README.txt" -Encoding UTF8
         
         Write-Host "=== Package Contents ==="
