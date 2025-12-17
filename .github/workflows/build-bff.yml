@@ -30,11 +30,6 @@ jobs:
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v2
 
-    - name: Setup Python (already available on runner)
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'  # Use a stable version instead of latest
-
     - name: Install build tools
       shell: cmd
       run: |
@@ -42,8 +37,7 @@ jobs:
         choco install wget -y
         choco install 7zip -y
         choco install git -y
-        # Skip chocolatey Python install since we use setup-python
-        # choco install python3 -y
+        REM Python is already available on the runner, no need to install
         
     - name: Download pre-built OpenBLAS
       shell: powershell
