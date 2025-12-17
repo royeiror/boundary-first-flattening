@@ -1,262 +1,330 @@
-name: Build BFF Windows Binary
+name: Windows Build BFF v1.6
 
 on:
-  workflow_dispatch:  # Manual trigger
   push:
-    branches: [ main, master ]
-    paths:
-      - '.github/workflows/build-bff.yml'
-  release:
-    types: [created]
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
 
 env:
-  BUILD_DIR: "C:/build"
-  INSTALL_DIR: "C:/local"
-  VCPKG_ROOT: "C:/vcpkg"
-  SUITESPARSE_VERSION: "7.0.1"
-  METIS_VERSION: "5.1.0"
+  BUILD_DIR: "C:\\build"
+  INSTALL_DIR: "C:\\suitesparse-deps"
+  OPENBLAS_DIR: "C:\\openblas-install"
   CMAKE_GENERATOR: "Visual Studio 17 2022"
   CMAKE_ARCH: "x64"
 
 jobs:
-  build-dependencies:
-    name: Build SuiteSparse Dependencies
+  build-windows:
     runs-on: windows-latest
+    timeout-minutes: 120
     
     steps:
-    - name: Checkout Repository
-      uses: actions/checkout@v4
-    
-    - name: Setup MSBuild
-      uses: microsoft/setup-msbuild@v2
-    
-    - name: Setup Visual Studio
-      uses: microsoft/setup-visual-studio@v1
-      with:
-        components: |
-          Microsoft.VisualStudio.Component.VC.Tools.x86.x64
-          Microsoft.VisualStudio.Component.Windows10SDK
-          Microsoft.VisualStudio.Component.VC.CMake.Project
-    
-    - name: Create Directories
-      shell: cmd
-      run: |
-        mkdir %BUILD_DIR%
-        mkdir %INSTALL_DIR%
-    
-    - name: Install Required Tools
-      shell: cmd
-      run: |
-        choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y
-        choco install git -y
-        choco install ninja -y
-    
-    - name: Download and Extract METIS
-      shell: cmd
-      run: |
-        cd %BUILD_DIR%
-        curl -L -o metis-%METIS_VERSION%.tar.gz https://github.com/jlblancoc/suitesparse-metis-for-windows/releases/download/v1.4.0/metis-%METIS_VERSION%.tar.gz
-        tar -xzf metis-%METIS_VERSION%.tar.gz
-        move metis-%METIS_VERSION% metis
-    
-    - name: Build METIS
-      shell: cmd
-      run: |
-        cd %BUILD_DIR%\metis
-        mkdir build
-        cd build
-        cmake .. -G "%CMAKE_GENERATOR%" -A %CMAKE_ARCH% ^
-          -DCMAKE_INSTALL_PREFIX="%INSTALL_DIR%" ^
-          -DSHARED=0
-        cmake --build . --config Release --target install
-    
-    - name: Download SuiteSparse
-      shell: cmd
-      run: |
-        cd %BUILD_DIR%
-        git clone --depth 1 --branch v%SUITESPARSE_VERSION% https://github.com/DrTimothyAldenDavis/SuiteSparse.git
-        cd SuiteSparse
-        git submodule update --init --recursive
-    
-    - name: Build SuiteSparse (UMFPACK)
-      shell: cmd
-      run: |
-        cd %BUILD_DIR%\SuiteSparse\UMFPACK
-        mkdir build
-        cd build
-        cmake .. -G "%CMAKE_GENERATOR%" -A %CMAKE_ARCH% ^
-          -DCMAKE_INSTALL_PREFIX="%INSTALL_DIR%" ^
-          -DCMAKE_PREFIX_PATH="%INSTALL_DIR%" ^
-          -DCMAKE_BUILD_TYPE=Release ^
-          -DBUILD_SHARED_LIBS=OFF ^
-          -DNSTATIC=ON
-        cmake --build . --config Release --target install
-    
-    - name: Build SuiteSparse (AMD)
-      shell: cmd
-      run: |
-        cd %BUILD_DIR%\SuiteSparse\AMD
-        mkdir build
-        cd build
-        cmake .. -G "%CMAKE_GENERATOR%" -A %CMAKE_ARCH% ^
-          -DCMAKE_INSTALL_PREFIX="%INSTALL_DIR%" ^
-          -DCMAKE_PREFIX_PATH="%INSTALL_DIR%" ^
-          -DCMAKE_BUILD_TYPE=Release ^
-          -DBUILD_SHARED_LIBS=OFF ^
-          -DNSTATIC=ON
-        cmake --build . --config Release --target install
-    
-    - name: Build SuiteSparse (CHOLMOD)
-      shell: cmd
-      run: |
-        cd %BUILD_DIR%\SuiteSparse\CHOLMOD
-        mkdir build
-        cd build
-        cmake .. -G "%CMAKE_GENERATOR%" -A %CMAKE_ARCH% ^
-          -DCMAKE_INSTALL_PREFIX="%INSTALL_DIR%" ^
-          -DCMAKE_PREFIX_PATH="%INSTALL_DIR%" ^
-          -DCMAKE_BUILD_TYPE=Release ^
-          -DBUILD_SHARED_LIBS=OFF ^
-          -DNSTATIC=ON
-        cmake --build . --config Release --target install
-    
-    - name: Verify SuiteSparse Build
-      shell: cmd
-      run: |
-        echo "Checking installed libraries..."
-        dir "%INSTALL_DIR%\lib" /b
-        echo "Checking installed headers..."
-        dir "%INSTALL_DIR%\include" /b
-    
-    - name: Archive Dependencies
-      uses: actions/upload-artifact@v4
-      with:
-        name: suitesparse-dependencies
-        path: |
-          ${{ env.INSTALL_DIR }}/include
-          ${{ env.INSTALL_DIR }}/lib
-        retention-days: 7
-
-  build-bff:
-    name: Build BFF Windows Binary
-    runs-on: windows-latest
-    needs: build-dependencies
-    
-    steps:
-    - name: Checkout BFF Repository
+    - name: Checkout BFF repository
       uses: actions/checkout@v4
       with:
         repository: GeometryCollective/boundary-first-flattening
         ref: v1.6
-    
+        submodules: recursive
+
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v2
-    
-    - name: Setup Visual Studio
-      uses: microsoft/setup-visual-studio@v1
-      with:
-        components: |
-          Microsoft.VisualStudio.Component.VC.Tools.x86.x64
-          Microsoft.VisualStudio.Component.Windows10SDK
-          Microsoft.VisualStudio.Component.VC.CMake.Project
-    
-    - name: Download Dependencies
-      uses: actions/download-artifact@v4
-      with:
-        name: suitesparse-dependencies
-        path: ${{ env.INSTALL_DIR }}
-    
-    - name: Install Build Tools
+
+    - name: Install build tools
       shell: cmd
       run: |
         choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y
+        choco install wget -y
+        choco install 7zip -y
         choco install git -y
-        choco install ninja -y
-    
-    - name: Install Qt for GUI
-      shell: cmd
+        choco install python3 -y
+        
+    - name: Download pre-built OpenBLAS
+      shell: powershell
       run: |
-        choco install qtcreator -y
-        # Add Qt to PATH
-        echo "C:\Qt\Tools\QtCreator\bin" >> $env:GITHUB_PATH
-    
-    - name: Clone and Build Eigen
-      shell: cmd
+        Write-Host "Downloading pre-built OpenBLAS..."
+        mkdir -Force $env:OPENBLAS_DIR
+        wget https://github.com/OpenMathLib/OpenBLAS/releases/download/v0.3.28/OpenBLAS-0.3.28-x64.zip -OutFile openblas.zip
+        7z x openblas.zip -o"$env:OPENBLAS_DIR"
+        
+    - name: Build SuiteSparse with METIS
+      shell: powershell
       run: |
-        cd %BUILD_DIR%
-        git clone --depth 1 --branch 3.4 https://gitlab.com/libeigen/eigen.git
-        cd eigen
+        Write-Host "Building SuiteSparse with METIS..."
+        
+        # Clean up
+        Remove-Item -Recurse -Force $env:INSTALL_DIR -ErrorAction SilentlyContinue
+        Remove-Item -Recurse -Force SuiteSparse -ErrorAction SilentlyContinue
+        
+        # Create directories
+        New-Item -ItemType Directory -Force -Path "$env:INSTALL_DIR\lib"
+        New-Item -ItemType Directory -Force -Path "$env:INSTALL_DIR\include"
+        
+        # Clone SuiteSparse
+        git clone https://github.com/DrTimothyAldenDavis/SuiteSparse.git
+        cd SuiteSparse
+        git checkout v5.13.0
+        
+        # Build SuiteSparse_config
+        Write-Host "Building SuiteSparse_config..."
+        cd SuiteSparse_config
         mkdir build
         cd build
-        cmake .. -G "%CMAKE_GENERATOR%" -A %CMAKE_ARCH% ^
-          -DCMAKE_INSTALL_PREFIX="%INSTALL_DIR%"
+        cmake .. -G "$env:CMAKE_GENERATOR" -A $env:CMAKE_ARCH -DCMAKE_INSTALL_PREFIX="$env:INSTALL_DIR"
         cmake --build . --config Release --target install
-    
-    - name: Clone and Build GLFW
-      shell: cmd
-      run: |
-        cd %BUILD_DIR%
-        git clone --depth 1 --branch 3.3.8 https://github.com/glfw/glfw.git
-        cd glfw
+        cd ../../
+        
+        # Build AMD
+        Write-Host "Building AMD..."
+        cd AMD
         mkdir build
         cd build
-        cmake .. -G "%CMAKE_GENERATOR%" -A %CMAKE_ARCH% ^
-          -DCMAKE_INSTALL_PREFIX="%INSTALL_DIR%" ^
-          -DGLFW_BUILD_EXAMPLES=OFF ^
-          -DGLFW_BUILD_TESTS=OFF ^
-          -DGLFW_BUILD_DOCS=OFF
+        cmake .. -G "$env:CMAKE_GENERATOR" -A $env:CMAKE_ARCH -DCMAKE_INSTALL_PREFIX="$env:INSTALL_DIR"
         cmake --build . --config Release --target install
-    
-    - name: Build BFF Library
-      shell: cmd
-      run: |
-        mkdir build_lib
-        cd build_lib
-        cmake .. -G "%CMAKE_GENERATOR%" -A %CMAKE_ARCH% ^
-          -DCMAKE_INSTALL_PREFIX="%INSTALL_DIR%" ^
-          -DCMAKE_PREFIX_PATH="%INSTALL_DIR%" ^
-          -DBUILD_GUI=OFF ^
-          -DBUILD_TESTING=OFF ^
-          -DCMAKE_BUILD_TYPE=Release
+        cd ../../
+        
+        # Build CAMD
+        Write-Host "Building CAMD..."
+        cd CAMD
+        mkdir build
+        cd build
+        cmake .. -G "$env:CMAKE_GENERATOR" -A $env:CMAKE_ARCH -DCMAKE_INSTALL_PREFIX="$env:INSTALL_DIR"
         cmake --build . --config Release --target install
+        cd ../../
+        
+        # Build CCOLAMD
+        Write-Host "Building CCOLAMD..."
+        cd CCOLAMD
+        mkdir build
+        cd build
+        cmake .. -G "$env:CMAKE_GENERATOR" -A $env:CMAKE_ARCH -DCMAKE_INSTALL_PREFIX="$env:INSTALL_DIR"
+        cmake --build . --config Release --target install
+        cd ../../
+        
+        # Build COLAMD
+        Write-Host "Building COLAMD..."
+        cd COLAMD
+        mkdir build
+        cd build
+        cmake .. -G "$env:CMAKE_GENERATOR" -A $env:CMAKE_ARCH -DCMAKE_INSTALL_PREFIX="$env:INSTALL_DIR"
+        cmake --build . --config Release --target install
+        cd ../../
+        
+        # Build CHOLMOD
+        Write-Host "Building CHOLMOD..."
+        cd CHOLMOD
+        mkdir build
+        cd build
+        
+        # Create a simple CMakeLists.txt for CHOLMOD
+        @"
+cmake_minimum_required(VERSION 3.10)
+project(CHOLMOD)
+
+# Find SuiteSparse_config
+find_package(SuiteSparse_config REQUIRED)
+
+# Include directories
+include_directories(
+    ../Include
+    ../../AMD/Include
+    ../../CAMD/Include
+    ../../CCOLAMD/Include
+    ../../COLAMD/Include
+    ../../SuiteSparse_config
+)
+
+# Source files
+file(GLOB CHOLMOD_SOURCES "../Core/*.c" "../Cholesky/*.c" "../Partition/*.c" "../MatrixOps/*.c" "../Modify/*.c" "../Supernodal/*.c")
+
+# Create library
+add_library(cholmod STATIC \${CHOLMOD_SOURCES})
+
+# Link dependencies
+target_link_libraries(cholmod 
+    suitesparseconfig
+    amd
+    camd
+    ccolamd
+    colamd
+    "\${OPENBLAS_DIR}/lib/libopenblas.lib"
+)
+
+# Install
+install(TARGETS cholmod
+    ARCHIVE DESTINATION lib
+    LIBRARY DESTINATION lib
+)
+
+install(DIRECTORY ../Include/ DESTINATION include)
+"@ | Out-File -FilePath ../CMakeLists.txt -Encoding UTF8
+
+        cmake .. -G "$env:CMAKE_GENERATOR" -A $env:CMAKE_ARCH `
+            -DCMAKE_INSTALL_PREFIX="$env:INSTALL_DIR" `
+            -DOPENBLAS_DIR="$env:OPENBLAS_DIR"
+        
+        cmake --build . --config Release --target install
+        cd ../../
+        
+        Write-Host "SuiteSparse build complete!"
+        
+    - name: Apply Windows patches for BFF
+      shell: powershell
+      run: |
+        Write-Host "Applying Windows compatibility patches..."
+        
+        # 1. Create custom FindSuiteSparse.cmake
+        $findSuiteSparseContent = @'
+# Custom FindSuiteSparse for Windows
+if(WIN32)
+    message(STATUS "Using custom SuiteSparse configuration for Windows")
     
-    - name: Build BFF GUI Application
+    set(SUITESPARSE_FOUND TRUE)
+    
+    # Set include directories
+    set(SUITESPARSE_INCLUDE_DIRS
+        "${CMAKE_SOURCE_DIR}/suitesparse-deps/include"
+        "${CMAKE_SOURCE_DIR}/SuiteSparse/AMD/Include"
+        "${CMAKE_SOURCE_DIR}/SuiteSparse/CAMD/Include"
+        "${CMAKE_SOURCE_DIR}/SuiteSparse/CCOLAMD/Include"
+        "${CMAKE_SOURCE_DIR}/SuiteSparse/COLAMD/Include"
+        "${CMAKE_SOURCE_DIR}/SuiteSparse/CHOLMOD/Include"
+    )
+    
+    # Set library directories
+    set(SUITESPARSE_LIBRARY_DIRS "${CMAKE_SOURCE_DIR}/suitesparse-deps/lib")
+    
+    # Set libraries
+    set(SUITESPARSE_LIBRARIES
+        "${CMAKE_SOURCE_DIR}/suitesparse-deps/lib/cholmod.lib"
+        "${CMAKE_SOURCE_DIR}/suitesparse-deps/lib/amd.lib"
+        "${CMAKE_SOURCE_DIR}/suitesparse-deps/lib/camd.lib"
+        "${CMAKE_SOURCE_DIR}/suitesparse-deps/lib/ccolamd.lib"
+        "${CMAKE_SOURCE_DIR}/suitesparse-deps/lib/colamd.lib"
+        "${CMAKE_SOURCE_DIR}/suitesparse-deps/lib/suitesparseconfig.lib"
+        "${CMAKE_SOURCE_DIR}/openblas-install/lib/libopenblas.lib"
+    )
+    
+    # Set BLAS/LAPACK libraries
+    set(BLAS_LIBRARIES "${CMAKE_SOURCE_DIR}/openblas-install/lib/libopenblas.lib")
+    set(LAPACK_LIBRARIES "${CMAKE_SOURCE_DIR}/openblas-install/lib/libopenblas.lib")
+    
+    # Mark as advanced
+    mark_as_advanced(SUITESPARSE_INCLUDE_DIRS SUITESPARSE_LIBRARIES)
+endif()
+'@
+        
+        New-Item -ItemType Directory -Force -Path "cmake"
+        $findSuiteSparseContent | Out-File -FilePath "cmake/FindSuiteSparse.cmake" -Encoding UTF8
+        
+        # 2. Patch CMakeLists.txt
+        $cmakeLists = Get-Content "CMakeLists.txt" -Raw
+        $cmakeLists = $cmakeLists -replace 'find_package\(SuiteSparse REQUIRED\)', '# find_package(SuiteSparse REQUIRED) - Using custom config
+include(cmake/FindSuiteSparse.cmake)'
+        $cmakeLists | Out-File -FilePath "CMakeLists.txt" -Encoding UTF8
+        
+        # 3. Add OpenBLAS include
+        $cmakeLists = Get-Content "CMakeLists.txt" -Raw
+        if ($cmakeLists -match 'include_directories\(') {
+            $cmakeLists = $cmakeLists -replace 'include_directories\(', 'include_directories(
+    ${CMAKE_SOURCE_DIR}/openblas-install/include'
+            $cmakeLists | Out-File -FilePath "CMakeLists.txt" -Encoding UTF8
+        }
+        
+        Write-Host "Patches applied successfully!"
+        
+    - name: Build BFF
       shell: cmd
       run: |
-        mkdir build_gui
-        cd build_gui
-        cmake .. -G "%CMAKE_GENERATOR%" -A %CMAKE_ARCH% ^
-          -DCMAKE_PREFIX_PATH="%INSTALL_DIR%;C:/Qt/6.5.0/msvc2019_64" ^
-          -DBUILD_GUI=ON ^
-          -DCMAKE_BUILD_TYPE=Release
-        cmake --build . --config Release --target bff-gui
-    
-    - name: Collect DLL Dependencies
-      shell: cmd
+        echo "Configuring BFF..."
+        
+        mkdir build
+        cd build
+        
+        cmake .. -G "Visual Studio 17 2022" -A x64 ^
+          -DCMAKE_BUILD_TYPE=Release ^
+          -DSUITESPARSE_INCLUDE_DIR="%CD%\..\suitesparse-deps\include" ^
+          -DSUITESPARSE_LIBRARY_DIR="%CD%\..\suitesparse-deps\lib" ^
+          -DBLAS_LIBRARIES="%CD%\..\openblas-install\lib\libopenblas.lib" ^
+          -DLAPACK_LIBRARIES="%CD%\..\openblas-install\lib\libopenblas.lib"
+        
+        echo "Building BFF..."
+        cmake --build . --config Release --parallel 4
+        
+    - name: Find and package binaries
+      shell: powershell
       run: |
-        # Copy required Qt DLLs
-        mkdir -p release_bin
-        copy build_gui\Release\bff-gui.exe release_bin\
+        Write-Host "Searching for built binaries..."
         
-        # Use windeployqt to gather Qt dependencies
-        call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
-        windeployqt release_bin\bff-gui.exe --release
+        # Create package directory
+        New-Item -ItemType Directory -Force -Path "bff-package"
         
-        # Copy SuiteSparse and other dependencies
-        copy "%INSTALL_DIR%\lib\*.lib" release_bin\
+        # Find and copy executables
+        $exeFiles = Get-ChildItem -Path "." -Recurse -Filter "*.exe" -File | Where-Object {
+            $_.DirectoryName -match "Release" -and (
+                $_.Name -match "bff" -or 
+                $_.Name -match "viewer" -or
+                $_.Name -match "gui"
+            )
+        }
         
-        # List contents for verification
-        dir release_bin\
-    
-    - name: Create Standalone Package
-      shell: cmd
-      run: |
-        cd release_bin
-        7z a -tzip bff-gui-windows.zip *
-    
-    - name: Upload Artifact
+        foreach ($exe in $exeFiles) {
+            Write-Host "Found: $($exe.FullName)"
+            Copy-Item -Path $exe.FullName -Destination "bff-package"
+        }
+        
+        # Find and copy DLLs
+        $dllFiles = Get-ChildItem -Path "." -Recurse -Filter "*.dll" -File | Where-Object {
+            $_.DirectoryName -match "Release"
+        }
+        
+        foreach ($dll in $dllFiles) {
+            Write-Host "Found DLL: $($dll.Name)"
+            Copy-Item -Path $dll.FullName -Destination "bff-package"
+        }
+        
+        # Copy OpenBLAS DLL
+        if (Test-Path "openblas-install/bin/libopenblas.dll") {
+            Copy-Item -Path "openblas-install/bin/libopenblas.dll" -Destination "bff-package"
+            Write-Host "Copied: libopenblas.dll"
+        }
+        
+        # Create a README file
+        @"
+BFF (Boundary First Flattening) Windows Build
+=============================================
+Build Date: $(Get-Date -Format "yyyy-MM-dd")
+Version: 1.6
+
+This package contains the Windows binaries for BFF.
+To run the application, execute the .exe file in this folder.
+
+Dependencies included:
+- OpenBLAS
+- SuiteSparse libraries
+- Required runtime DLLs
+"@ | Out-File -FilePath "bff-package/README.txt" -Encoding UTF8
+        
+        Write-Host "=== Package Contents ==="
+        Get-ChildItem -Path "bff-package"
+        
+    - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: bff-windows-gui
-        path: release_bin/bff-gui-windows.zip
-        retention-days: 30 
+        name: bff-windows-binaries
+        path: bff-package/
+        if-no-files-found: error
+        retention-days: 7
+        
+    - name: Create zip archive
+      shell: powershell
+      run: |
+        Write-Host "Creating zip archive..."
+        Compress-Archive -Path "bff-package/*" -DestinationPath "bff-windows.zip" -Force
+        
+    - name: Upload zip artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: bff-windows-zip
+        path: bff-windows.zip
+        retention-days: 7
