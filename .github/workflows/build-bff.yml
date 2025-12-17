@@ -121,68 +121,68 @@ jobs:
             }
         }
         
-        # 1. Create custom FindSuiteSparse.cmake
-        $findSuiteSparseContent = @"
-# Custom FindSuiteSparse for Windows/vcpkg
-if(WIN32)
-    message(STATUS "Using custom SuiteSparse configuration from vcpkg")
-    
-    set(SUITESPARSE_FOUND TRUE)
-    
-    # Set include directories
-    set(SUITESPARSE_INCLUDE_DIRS
-        "\${CMAKE_SOURCE_DIR}/suitesparse-deps/include"
-    )
-    
-    # Set library directories
-    set(SUITESPARSE_LIBRARY_DIRS "\${CMAKE_SOURCE_DIR}/suitesparse-deps/lib")
-    
-    # Try to find SuiteSparse libraries
-    set(SUITESPARSE_LIBRARIES)
-    
-    # Look for common SuiteSparse libraries
-    set(SUITESPARSE_LIB_NAMES suitesparseconfig amd camd ccolamd colamd cholmod metis)
-    
-    foreach(lib_name \${SUITESPARSE_LIB_NAMES})
-        find_library(SUITESPARSE_\${lib_name}_LIBRARY
-            NAMES \${lib_name}
-            HINTS "\${CMAKE_SOURCE_DIR}/suitesparse-deps/lib"
-            NO_DEFAULT_PATH
+        # 1. Create custom FindSuiteSparse.cmake - FIXED: Use array joining instead of heredoc
+        $findSuiteSparseLines = @(
+            "# Custom FindSuiteSparse for Windows/vcpkg",
+            "if(WIN32)",
+            "    message(STATUS `"Using custom SuiteSparse configuration from vcpkg`")",
+            "",
+            "    set(SUITESPARSE_FOUND TRUE)",
+            "",
+            "    # Set include directories",
+            "    set(SUITESPARSE_INCLUDE_DIRS",
+            "        `"\`${CMAKE_SOURCE_DIR}`/suitesparse-deps/include`"",
+            "    )",
+            "",
+            "    # Set library directories",
+            "    set(SUITESPARSE_LIBRARY_DIRS `"\`${CMAKE_SOURCE_DIR}`/suitesparse-deps/lib`")",
+            "",
+            "    # Try to find SuiteSparse libraries",
+            "    set(SUITESPARSE_LIBRARIES)",
+            "",
+            "    # Look for common SuiteSparse libraries",
+            "    set(SUITESPARSE_LIB_NAMES suitesparseconfig amd camd ccolamd colamd cholmod metis)",
+            "",
+            "    foreach(lib_name \`${SUITESPARSE_LIB_NAMES}`)",
+            "        find_library(SUITESPARSE_\`${lib_name}_LIBRARY",
+            "            NAMES \`${lib_name}",
+            "            HINTS `"\`${CMAKE_SOURCE_DIR}`/suitesparse-deps/lib`"",
+            "            NO_DEFAULT_PATH",
+            "        )",
+            "        if(SUITESPARSE_\`${lib_name}_LIBRARY)",
+            "            list(APPEND SUITESPARSE_LIBRARIES \`${SUITESPARSE_\`${lib_name}_LIBRARY}`)",
+            "            message(STATUS `"Found \`${lib_name}: \`${SUITESPARSE_\`${lib_name}_LIBRARY}`")",
+            "        else()",
+            "            message(STATUS `"NOT found: \`${lib_name}`")",
+            "        endif()",
+            "    endforeach()",
+            "",
+            "    # Look for OpenBLAS",
+            "    find_library(OPENBLAS_LIBRARY",
+            "        NAMES openblas libopenblas",
+            "        HINTS `"\`${CMAKE_SOURCE_DIR}`/suitesparse-deps/lib`"",
+            "        NO_DEFAULT_PATH",
+            "    )",
+            "    if(OPENBLAS_LIBRARY)",
+            "        list(APPEND SUITESPARSE_LIBRARIES \`${OPENBLAS_LIBRARY}`)",
+            "        set(BLAS_LIBRARIES \`${OPENBLAS_LIBRARY}`)",
+            "        set(LAPACK_LIBRARIES \`${OPENBLAS_LIBRARY}`)",
+            "        message(STATUS `"Found OpenBLAS: \`${OPENBLAS_LIBRARY}`")",
+            "    else()",
+            "        message(WARNING `"OpenBLAS not found in \`${CMAKE_SOURCE_DIR}`/suitesparse-deps/lib`")",
+            "    endif()",
+            "",
+            "    if(NOT SUITESPARSE_LIBRARIES)",
+            "        message(FATAL_ERROR `"No SuiteSparse libraries found!`")",
+            "    endif()",
+            "",
+            "    message(STATUS `"SuiteSparse libraries: \`${SUITESPARSE_LIBRARIES}`")",
+            "",
+            "endif()"
         )
-        if(SUITESPARSE_\${lib_name}_LIBRARY)
-            list(APPEND SUITESPARSE_LIBRARIES \${SUITESPARSE_\${lib_name}_LIBRARY})
-            message(STATUS "Found \${lib_name}: \${SUITESPARSE_\${lib_name}_LIBRARY}")
-        else()
-            message(STATUS "NOT found: \${lib_name}")
-        endif()
-    endforeach()
-    
-    # Look for OpenBLAS
-    find_library(OPENBLAS_LIBRARY
-        NAMES openblas libopenblas
-        HINTS "\${CMAKE_SOURCE_DIR}/suitesparse-deps/lib"
-        NO_DEFAULT_PATH
-    )
-    if(OPENBLAS_LIBRARY)
-        list(APPEND SUITESPARSE_LIBRARIES \${OPENBLAS_LIBRARY})
-        set(BLAS_LIBRARIES \${OPENBLAS_LIBRARY})
-        set(LAPACK_LIBRARIES \${OPENBLAS_LIBRARY})
-        message(STATUS "Found OpenBLAS: \${OPENBLAS_LIBRARY}")
-    else()
-        message(WARNING "OpenBLAS not found in \${CMAKE_SOURCE_DIR}/suitesparse-deps/lib")
-    endif()
-    
-    if(NOT SUITESPARSE_LIBRARIES)
-        message(FATAL_ERROR "No SuiteSparse libraries found!")
-    endif()
-    
-    message(STATUS "SuiteSparse libraries: \${SUITESPARSE_LIBRARIES}")
-    
-endif()
-"@
         
         New-Item -ItemType Directory -Force -Path "cmake"
-        $findSuiteSparseContent | Out-File -FilePath "cmake/FindSuiteSparse.cmake" -Encoding UTF8
+        ($findSuiteSparseLines -join "`n") | Out-File -FilePath "cmake/FindSuiteSparse.cmake" -Encoding UTF8
         
         # 2. Backup original CMakeLists.txt and create a patched version
         Copy-Item "CMakeLists.txt" "CMakeLists.txt.original" -Force
@@ -294,21 +294,22 @@ endif()
         }
         
         # Create a README file
-        $readmeContent = @"
-BFF (Boundary First Flattening) Windows Build
-=============================================
-Build Date: $(Get-Date -Format 'yyyy-MM-dd')
-Version: 1.6
-
-This package contains the Windows binaries for BFF.
-To run the application, execute the .exe file in this folder.
-
-Dependencies included:
-- OpenBLAS
-- SuiteSparse libraries (built via vcpkg)
-- Required runtime DLLs
-"@
+        $readmeLines = @(
+            "BFF (Boundary First Flattening) Windows Build",
+            "=============================================",
+            "Build Date: $(Get-Date -Format 'yyyy-MM-dd')",
+            "Version: 1.6",
+            "",
+            "This package contains the Windows binaries for BFF.",
+            "To run the application, execute the .exe file in this folder.",
+            "",
+            "Dependencies included:",
+            "- OpenBLAS",
+            "- SuiteSparse libraries (built via vcpkg)",
+            "- Required runtime DLLs"
+        )
         
+        $readmeContent = $readmeLines -join "`n"
         $readmeContent | Out-File -FilePath "bff-package\README.txt" -Encoding UTF8
         
         Write-Host "=== Package Contents ==="
