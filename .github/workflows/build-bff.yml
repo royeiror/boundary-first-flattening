@@ -259,7 +259,8 @@ jobs:
       with:
         name: bff-windows-gui
         path: release_bin/bff-gui-windows.zip
-        retention-days: 30name: Windows Build BFF v1.6 - Optimized
+        retention-days: 30 
+        name: Windows Build BFF v1.6 - Optimized
 
 on:
   push:
