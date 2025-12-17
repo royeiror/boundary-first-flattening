@@ -106,6 +106,27 @@ jobs:
             }
         }
         
+    - name: Fix BFF CMakeLists.txt
+      shell: powershell
+      run: |
+        Write-Host "Fixing BFF CMakeLists.txt for modern CMake..."
+        
+        # Read the original CMakeLists.txt
+        $cmakeContent = Get-Content "CMakeLists.txt" -Raw
+        
+        # Fix cmake_minimum_required version if it's too old
+        if ($cmakeContent -match 'cmake_minimum_required\s*\(\s*VERSION\s+([0-9.]+)\s*\)') {
+            $version = $matches[1]
+            Write-Host "Current cmake_minimum_required version: $version"
+            
+            if ([version]$version -lt [version]"3.5") {
+                Write-Host "Updating cmake_minimum_required from $version to 3.5..."
+                $cmakeContent = $cmakeContent -replace 'cmake_minimum_required\s*\(\s*VERSION\s+[0-9.]+\s*\)', 'cmake_minimum_required(VERSION 3.5)'
+                $cmakeContent | Out-File -FilePath "CMakeLists.txt" -Encoding UTF8
+                Write-Host "Updated cmake_minimum_required to 3.5"
+            }
+        }
+        
     - name: Patch BFF for Windows build
       shell: powershell
       run: |
@@ -178,7 +199,7 @@ jobs:
         $patchContent = $patchLines -join "`n"
         $patchContent | Out-File -FilePath "SuiteSparsePatch.cmake" -Encoding UTF8
         
-        # Read original CMakeLists.txt
+        # Read original CMakeLists.txt again (might have been modified by previous step)
         $cmakeContent = Get-Content "CMakeLists.txt" -Raw
         
         # Create the replacement text using array joining
@@ -230,18 +251,32 @@ jobs:
             Copy-Item "..\openblas-install\bin\libopenblas.dll" "..\suitesparse-deps\lib\" -Force
         }
         
-        # Configure CMake
+        # Configure CMake with policy version override
+        Write-Host "Configuring with CMake policy override..."
         cmake .. -G "$env:CMAKE_GENERATOR" -A $env:CMAKE_ARCH `
             -DCMAKE_BUILD_TYPE=Release `
             -DBLAS_LIBRARIES="$pwd\..\suitesparse-deps\lib\libopenblas.lib" `
-            -DLAPACK_LIBRARIES="$pwd\..\suitesparse-deps\lib\libopenblas.lib"
+            -DLAPACK_LIBRARIES="$pwd\..\suitesparse-deps\lib\libopenblas.lib" `
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5
         
         if ($LASTEXITCODE -eq 0) {
             Write-Host "Building BFF..."
             cmake --build . --config Release --parallel 4
         } else {
             Write-Host "CMake configuration failed with exit code: $LASTEXITCODE"
-            exit $LASTEXITCODE
+            # Try alternative configuration
+            Write-Host "Trying alternative CMake configuration..."
+            cmake .. -G "$env:CMAKE_GENERATOR" -A $env:CMAKE_ARCH `
+                -DCMAKE_BUILD_TYPE=Release `
+                -DBLAS_LIBRARIES="$pwd\..\suitesparse-deps\lib\libopenblas.lib" `
+                -DLAPACK_LIBRARIES="$pwd\..\suitesparse-deps\lib\libopenblas.lib"
+            
+            if ($LASTEXITCODE -eq 0) {
+                Write-Host "Building BFF..."
+                cmake --build . --config Release --parallel 4
+            else {
+                exit $LASTEXITCODE
+            }
         }
         
     - name: Find and package binaries
