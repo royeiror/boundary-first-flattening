@@ -110,60 +110,59 @@ jobs:
         cmake --build . --config Release --target install
         cd ../../
         
-        # Build CHOLMOD - REMOVED DUPLICATE "name:" HERE
+        # Build CHOLMOD
         Write-Host "Building CHOLMOD..."
         cd CHOLMOD
         mkdir build
         cd build
         
-        # Create a simple CMakeLists.txt for CHOLMOD using string concatenation
-        $cmakeContent = @"
-cmake_minimum_required(VERSION 3.10)
-project(CHOLMOD)
-
-# Find SuiteSparse_config
-find_package(SuiteSparse_config REQUIRED)
-
-# Include directories
-include_directories(
-    ../Include
-    ../../AMD/Include
-    ../../CAMD/Include
-    ../../CCOLAMD/Include
-    ../../COLAMD/Include
-    ../../SuiteSparse_config
-)
-
-# Source files
-file(GLOB CHOLMOD_SOURCES "../Core/*.c" "../Cholesky/*.c" "../Partition/*.c" "../MatrixOps/*.c" "../Modify/*.c" "../Supernodal/*.c")
-
-# Create library
-add_library(cholmod STATIC `$`{CHOLMOD_SOURCES`}`)
-
-# Link dependencies
-target_link_libraries(cholmod 
-    suitesparseconfig
-    amd
-    camd
-    ccolamd
-    colamd
-    "`$`{OPENBLAS_DIR`}`/lib/libopenblas.lib"
-)
-
-# Install
-install(TARGETS cholmod
-    ARCHIVE DESTINATION lib
-    LIBRARY DESTINATION lib
-)
-
-install(DIRECTORY ../Include/ DESTINATION include)
-"@
+        # Create CMakeLists.txt for CHOLMOD line by line
+        $cmakeLines = @(
+            "cmake_minimum_required(VERSION 3.10)",
+            "project(CHOLMOD)",
+            "",
+            "# Find SuiteSparse_config",
+            "find_package(SuiteSparse_config REQUIRED)",
+            "",
+            "# Include directories",
+            "include_directories(",
+            "    ../Include",
+            "    ../../AMD/Include",
+            "    ../../CAMD/Include", 
+            "    ../../CCOLAMD/Include",
+            "    ../../COLAMD/Include",
+            "    ../../SuiteSparse_config",
+            ")",
+            "",
+            "# Source files",
+            "file(GLOB CHOLMOD_SOURCES `"../Core/*.c`" `"../Cholesky/*.c`" `"../Partition/*.c`" `"../MatrixOps/*.c`" `"../Modify/*.c`" `"../Supernodal/*.c`")",
+            "",
+            "# Create library",
+            "add_library(cholmod STATIC `${CHOLMOD_SOURCES}`)",
+            "",
+            "# Link dependencies",
+            "target_link_libraries(cholmod",
+            "    suitesparseconfig",
+            "    amd",
+            "    camd", 
+            "    ccolamd",
+            "    colamd",
+            "    `"`${OPENBLAS_DIR}`/lib/libopenblas.lib`"",
+            ")",
+            "",
+            "# Install",
+            "install(TARGETS cholmod",
+            "    ARCHIVE DESTINATION lib",
+            "    LIBRARY DESTINATION lib",
+            ")",
+            "",
+            "install(DIRECTORY ../Include/ DESTINATION include)"
+        )
         
+        $cmakeContent = $cmakeLines -join "`n"
         $cmakeContent | Out-File -FilePath ../CMakeLists.txt -Encoding UTF8
         
-        # Use proper Windows path separators
-        $openblasPath = "$env:OPENBLAS_DIR\lib\libopenblas.lib"
-        
+        # Build CHOLMOD
         cmake .. -G "$env:CMAKE_GENERATOR" -A $env:CMAKE_ARCH `
             -DCMAKE_INSTALL_PREFIX="$env:INSTALL_DIR" `
             -DOPENBLAS_DIR="$env:OPENBLAS_DIR"
@@ -179,48 +178,48 @@ install(DIRECTORY ../Include/ DESTINATION include)
         Write-Host "Applying Windows compatibility patches..."
         
         # 1. Create custom FindSuiteSparse.cmake
-        $findSuiteSparseContent = @'
-# Custom FindSuiteSparse for Windows
-if(WIN32)
-    message(STATUS "Using custom SuiteSparse configuration for Windows")
-    
-    set(SUITESPARSE_FOUND TRUE)
-    
-    # Set include directories
-    set(SUITESPARSE_INCLUDE_DIRS
-        "${CMAKE_SOURCE_DIR}/suitesparse-deps/include"
-        "${CMAKE_SOURCE_DIR}/SuiteSparse/AMD/Include"
-        "${CMAKE_SOURCE_DIR}/SuiteSparse/CAMD/Include"
-        "${CMAKE_SOURCE_DIR}/SuiteSparse/CCOLAMD/Include"
-        "${CMAKE_SOURCE_DIR}/SuiteSparse/COLAMD/Include"
-        "${CMAKE_SOURCE_DIR}/SuiteSparse/CHOLMOD/Include"
-    )
-    
-    # Set library directories
-    set(SUITESPARSE_LIBRARY_DIRS "${CMAKE_SOURCE_DIR}/suitesparse-deps/lib")
-    
-    # Set libraries
-    set(SUITESPARSE_LIBRARIES
-        "${CMAKE_SOURCE_DIR}/suitesparse-deps/lib/cholmod.lib"
-        "${CMAKE_SOURCE_DIR}/suitesparse-deps/lib/amd.lib"
-        "${CMAKE_SOURCE_DIR}/suitesparse-deps/lib/camd.lib"
-        "${CMAKE_SOURCE_DIR}/suitesparse-deps/lib/ccolamd.lib"
-        "${CMAKE_SOURCE_DIR}/suitesparse-deps/lib/colamd.lib"
-        "${CMAKE_SOURCE_DIR}/suitesparse-deps/lib/suitesparseconfig.lib"
-        "${CMAKE_SOURCE_DIR}/openblas-install/lib/libopenblas.lib"
-    )
-    
-    # Set BLAS/LAPACK libraries
-    set(BLAS_LIBRARIES "${CMAKE_SOURCE_DIR}/openblas-install/lib/libopenblas.lib")
-    set(LAPACK_LIBRARIES "${CMAKE_SOURCE_DIR}/openblas-install/lib/libopenblas.lib")
-    
-    # Mark as advanced
-    mark_as_advanced(SUITESPARSE_INCLUDE_DIRS SUITESPARSE_LIBRARIES)
-endif()
-'@
+        $findSuiteSparseLines = @(
+            "# Custom FindSuiteSparse for Windows",
+            "if(WIN32)",
+            "    message(STATUS `"Using custom SuiteSparse configuration for Windows`")",
+            "",
+            "    set(SUITESPARSE_FOUND TRUE)",
+            "",
+            "    # Set include directories",
+            "    set(SUITESPARSE_INCLUDE_DIRS",
+            "        `"`${CMAKE_SOURCE_DIR}`/suitesparse-deps/include`"",
+            "        `"`${CMAKE_SOURCE_DIR}`/SuiteSparse/AMD/Include`"", 
+            "        `"`${CMAKE_SOURCE_DIR}`/SuiteSparse/CAMD/Include`"",
+            "        `"`${CMAKE_SOURCE_DIR}`/SuiteSparse/CCOLAMD/Include`"",
+            "        `"`${CMAKE_SOURCE_DIR}`/SuiteSparse/COLAMD/Include`"",
+            "        `"`${CMAKE_SOURCE_DIR}`/SuiteSparse/CHOLMOD/Include`"",
+            "    )",
+            "",
+            "    # Set library directories",
+            "    set(SUITESPARSE_LIBRARY_DIRS `"`${CMAKE_SOURCE_DIR}`/suitesparse-deps/lib`")",
+            "",
+            "    # Set libraries",
+            "    set(SUITESPARSE_LIBRARIES",
+            "        `"`${CMAKE_SOURCE_DIR}`/suitesparse-deps/lib/cholmod.lib`"",
+            "        `"`${CMAKE_SOURCE_DIR}`/suitesparse-deps/lib/amd.lib`"", 
+            "        `"`${CMAKE_SOURCE_DIR}`/suitesparse-deps/lib/camd.lib`"",
+            "        `"`${CMAKE_SOURCE_DIR}`/suitesparse-deps/lib/ccolamd.lib`"",
+            "        `"`${CMAKE_SOURCE_DIR}`/suitesparse-deps/lib/colamd.lib`"",
+            "        `"`${CMAKE_SOURCE_DIR}`/suitesparse-deps/lib/suitesparseconfig.lib`"",
+            "        `"`${CMAKE_SOURCE_DIR}`/openblas-install/lib/libopenblas.lib`"",
+            "    )",
+            "",
+            "    # Set BLAS/LAPACK libraries",
+            "    set(BLAS_LIBRARIES `"`${CMAKE_SOURCE_DIR}`/openblas-install/lib/libopenblas.lib`")",
+            "    set(LAPACK_LIBRARIES `"`${CMAKE_SOURCE_DIR}`/openblas-install/lib/libopenblas.lib`")",
+            "",
+            "    # Mark as advanced",
+            "    mark_as_advanced(SUITESPARSE_INCLUDE_DIRS SUITESPARSE_LIBRARIES)",
+            "endif()"
+        )
         
         New-Item -ItemType Directory -Force -Path "cmake"
-        $findSuiteSparseContent | Out-File -FilePath "cmake/FindSuiteSparse.cmake" -Encoding UTF8
+        ($findSuiteSparseLines -join "`n") | Out-File -FilePath "cmake/FindSuiteSparse.cmake" -Encoding UTF8
         
         # 2. Patch CMakeLists.txt
         $cmakeLists = Get-Content "CMakeLists.txt" -Raw
@@ -295,7 +294,7 @@ include(cmake/FindSuiteSparse.cmake)'
         }
         
         # Create a README file
-        @"
+        $readmeContent = @"
 BFF (Boundary First Flattening) Windows Build
 =============================================
 Build Date: $(Get-Date -Format "yyyy-MM-dd")
@@ -308,7 +307,9 @@ Dependencies included:
 - OpenBLAS
 - SuiteSparse libraries
 - Required runtime DLLs
-"@ | Out-File -FilePath "bff-package/README.txt" -Encoding UTF8
+"@
+        
+        $readmeContent | Out-File -FilePath "bff-package/README.txt" -Encoding UTF8
         
         Write-Host "=== Package Contents ==="
         Get-ChildItem -Path "bff-package"
