@@ -221,17 +221,17 @@ jobs:
         New-Item -ItemType Directory -Force -Path "cmake"
         ($findSuiteSparseLines -join "`n") | Out-File -FilePath "cmake/FindSuiteSparse.cmake" -Encoding UTF8
         
-        # 2. Patch CMakeLists.txt
+        # 2. Patch CMakeLists.txt - FIXED: Use PowerShell newline character
         $cmakeLists = Get-Content "CMakeLists.txt" -Raw
-        $cmakeLists = $cmakeLists -replace 'find_package\(SuiteSparse REQUIRED\)', '# find_package(SuiteSparse REQUIRED) - Using custom config
-include(cmake/FindSuiteSparse.cmake)'
+        $replacementText = '# find_package(SuiteSparse REQUIRED) - Using custom config' + [Environment]::NewLine + 'include(cmake/FindSuiteSparse.cmake)'
+        $cmakeLists = $cmakeLists -replace 'find_package\(SuiteSparse REQUIRED\)', $replacementText
         $cmakeLists | Out-File -FilePath "CMakeLists.txt" -Encoding UTF8
         
         # 3. Add OpenBLAS include
         $cmakeLists = Get-Content "CMakeLists.txt" -Raw
         if ($cmakeLists -match 'include_directories\(') {
-            $cmakeLists = $cmakeLists -replace 'include_directories\(', 'include_directories(
-    ${CMAKE_SOURCE_DIR}/openblas-install/include'
+            $openblasInclude = 'include_directories(' + [Environment]::NewLine + '    ${CMAKE_SOURCE_DIR}/openblas-install/include'
+            $cmakeLists = $cmakeLists -replace 'include_directories\(', $openblasInclude
             $cmakeLists | Out-File -FilePath "CMakeLists.txt" -Encoding UTF8
         }
         
