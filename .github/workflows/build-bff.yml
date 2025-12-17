@@ -18,7 +18,7 @@ env:
 jobs:
   build-windows:
     runs-on: windows-latest
-    timeout-minutes: 150
+    timeout-minutes: 180
     
     steps:
     - name: Checkout BFF repository
@@ -32,14 +32,13 @@ jobs:
       uses: microsoft/setup-msbuild@v2
 
     - name: Install build tools
-      shell: cmd
+      shell: powershell
       run: |
         choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y
         choco install wget -y
         choco install 7zip -y
         choco install git -y
         choco install ninja -y
-        REM Python is already available on the runner, no need to install
         
     - name: Download and setup vcpkg
       shell: powershell
@@ -53,22 +52,18 @@ jobs:
         # Bootstrap vcpkg
         .\bootstrap-vcpkg.bat
         
-        # Add vcpkg to PATH for this session
-        $env:PATH = "$env:VCPKG_DIR;$env:PATH"
-        
     - name: Build SuiteSparse with vcpkg
       shell: powershell
       run: |
         Write-Host "Building SuiteSparse with vcpkg..."
         
-        # Set up vcpkg in PATH
-        $env:PATH = "$env:VCPKG_DIR;$env:PATH"
+        cd $env:VCPKG_DIR
         
         # Install SuiteSparse dependencies via vcpkg
         Write-Host "Installing SuiteSparse via vcpkg..."
-        vcpkg install suitesparse --triplet x64-windows
+        .\vcpkg install suitesparse:x64-windows
         
-        # Copy the built libraries to our install directory
+        # Create install directory
         New-Item -ItemType Directory -Force -Path "$env:INSTALL_DIR\lib"
         New-Item -ItemType Directory -Force -Path "$env:INSTALL_DIR\include"
         
@@ -84,14 +79,19 @@ jobs:
         Copy-Item "$vcpkgInstalledDir\bin\*.dll" "$env:INSTALL_DIR\lib\" -ErrorAction SilentlyContinue
         
         # Copy headers
-        Copy-Item "$vcpkgInstalledDir\include\*" "$env:INSTALL_DIR\include\" -Recurse -ErrorAction SilentlyContinue
-        
-        # Also copy SuiteSparse specific headers
-        if (Test-Path "$vcpkgInstalledDir\include\suitesparse") {
-            Copy-Item "$vcpkgInstalledDir\include\suitesparse\*" "$env:INSTALL_DIR\include\" -Recurse -ErrorAction SilentlyContinue
+        if (Test-Path "$vcpkgInstalledDir\include") {
+            Get-ChildItem "$vcpkgInstalledDir\include" -Directory | ForEach-Object {
+                $destDir = "$env:INSTALL_DIR\include\$($_.Name)"
+                New-Item -ItemType Directory -Force -Path $destDir
+                Copy-Item "$($_.FullName)\*" "$destDir\" -Recurse -ErrorAction SilentlyContinue
+            }
+            Copy-Item "$vcpkgInstalledDir\include\*" "$env:INSTALL_DIR\include\" -ErrorAction SilentlyContinue
         }
         
-    - name: Download pre-built OpenBLAS (fallback)
+        Write-Host "Contents of install directory:"
+        Get-ChildItem "$env:INSTALL_DIR\lib" -File | Select-Object Name
+        
+    - name: Download pre-built OpenBLAS
       shell: powershell
       run: |
         Write-Host "Downloading pre-built OpenBLAS..."
@@ -102,106 +102,167 @@ jobs:
         # Copy OpenBLAS to install directory
         Copy-Item "$env:OPENBLAS_DIR\lib\*.lib" "$env:INSTALL_DIR\lib\" -ErrorAction SilentlyContinue
         Copy-Item "$env:OPENBLAS_DIR\bin\*.dll" "$env:INSTALL_DIR\lib\" -ErrorAction SilentlyContinue
-        if (Test-Path "$env:OPENBLAS_DIR\include") {
-            Copy-Item "$env:OPENBLAS_DIR\include\*" "$env:INSTALL_DIR\include\" -Recurse -ErrorAction SilentlyContinue
-        }
         
     - name: Apply Windows patches for BFF
       shell: powershell
       run: |
         Write-Host "Applying Windows compatibility patches..."
         
-        # 1. Create custom FindSuiteSparse.cmake that works with vcpkg installation
-        $findSuiteSparseLines = @(
-            "# Custom FindSuiteSparse for Windows/vcpkg",
-            "if(WIN32)",
-            "    message(STATUS `"Using custom SuiteSparse configuration from vcpkg`")",
-            "",
-            "    set(SUITESPARSE_FOUND TRUE)",
-            "",
-            "    # Set include directories",
-            "    set(SUITESPARSE_INCLUDE_DIRS",
-            "        `"`${CMAKE_SOURCE_DIR}`/suitesparse-deps/include`"",
-            "    )",
-            "",
-            "    # Set library directories",
-            "    set(SUITESPARSE_LIBRARY_DIRS `"`${CMAKE_SOURCE_DIR}`/suitesparse-deps/lib`")",
-            "",
-            "    # Find all SuiteSparse libraries",
-            "    set(SUITESPARSE_LIBRARIES)",
-            "",
-            "    # Common SuiteSparse libraries (add them if they exist)",
-            "    foreach(lib_name suitesparseconfig amd camd ccolamd colamd cholmod metis)",
-            "        find_library(`${lib_name}_LIBRARY",
-            "            NAMES `${lib_name}",
-            "            HINTS `"`${CMAKE_SOURCE_DIR}`/suitesparse-deps/lib`"",
-            "        )",
-            "        if(`${lib_name}_LIBRARY)",
-            "            list(APPEND SUITESPARSE_LIBRARIES `${`${lib_name}_LIBRARY}`)",
-            "        endif()",
-            "    endforeach()",
-            "",
-            "    # Add BLAS/LAPACK (OpenBLAS)",
-            "    find_library(OPENBLAS_LIBRARY",
-            "        NAMES openblas libopenblas",
-            "        HINTS `"`${CMAKE_SOURCE_DIR}`/suitesparse-deps/lib`"",
-            "    )",
-            "    if(OPENBLAS_LIBRARY)",
-            "        list(APPEND SUITESPARSE_LIBRARIES `${OPENBLAS_LIBRARY}`)",
-            "        set(BLAS_LIBRARIES `${OPENBLAS_LIBRARY}`)",
-            "        set(LAPACK_LIBRARIES `${OPENBLAS_LIBRARY}`)",
-            "    endif()",
-            "",
-            "    message(STATUS `"Found SuiteSparse libraries: `${SUITESPARSE_LIBRARIES}`")",
-            "    mark_as_advanced(SUITESPARSE_INCLUDE_DIRS SUITESPARSE_LIBRARIES)",
-            "endif()"
+        # First, check and fix the original CMakeLists.txt
+        $originalCmake = Get-Content "CMakeLists.txt" -Raw
+        
+        # Fix cmake_minimum_required if needed
+        if ($originalCmake -match 'cmake_minimum_required\s*\(\s*VERSION\s+([0-9.]+)\s*\)') {
+            $version = $matches[1]
+            if ([version]$version -lt [version]"3.5") {
+                Write-Host "Updating cmake_minimum_required from $version to 3.5..."
+                $originalCmake = $originalCmake -replace 'cmake_minimum_required\s*\(\s*VERSION\s+[0-9.]+\s*\)', 'cmake_minimum_required(VERSION 3.5)'
+                $originalCmake | Out-File -FilePath "CMakeLists.txt" -Encoding UTF8
+            }
+        }
+        
+        # 1. Create custom FindSuiteSparse.cmake
+        $findSuiteSparseContent = @"
+# Custom FindSuiteSparse for Windows/vcpkg
+if(WIN32)
+    message(STATUS "Using custom SuiteSparse configuration from vcpkg")
+    
+    set(SUITESPARSE_FOUND TRUE)
+    
+    # Set include directories
+    set(SUITESPARSE_INCLUDE_DIRS
+        "\${CMAKE_SOURCE_DIR}/suitesparse-deps/include"
+    )
+    
+    # Set library directories
+    set(SUITESPARSE_LIBRARY_DIRS "\${CMAKE_SOURCE_DIR}/suitesparse-deps/lib")
+    
+    # Try to find SuiteSparse libraries
+    set(SUITESPARSE_LIBRARIES)
+    
+    # Look for common SuiteSparse libraries
+    set(SUITESPARSE_LIB_NAMES suitesparseconfig amd camd ccolamd colamd cholmod metis)
+    
+    foreach(lib_name \${SUITESPARSE_LIB_NAMES})
+        find_library(SUITESPARSE_\${lib_name}_LIBRARY
+            NAMES \${lib_name}
+            HINTS "\${CMAKE_SOURCE_DIR}/suitesparse-deps/lib"
+            NO_DEFAULT_PATH
         )
+        if(SUITESPARSE_\${lib_name}_LIBRARY)
+            list(APPEND SUITESPARSE_LIBRARIES \${SUITESPARSE_\${lib_name}_LIBRARY})
+            message(STATUS "Found \${lib_name}: \${SUITESPARSE_\${lib_name}_LIBRARY}")
+        else()
+            message(STATUS "NOT found: \${lib_name}")
+        endif()
+    endforeach()
+    
+    # Look for OpenBLAS
+    find_library(OPENBLAS_LIBRARY
+        NAMES openblas libopenblas
+        HINTS "\${CMAKE_SOURCE_DIR}/suitesparse-deps/lib"
+        NO_DEFAULT_PATH
+    )
+    if(OPENBLAS_LIBRARY)
+        list(APPEND SUITESPARSE_LIBRARIES \${OPENBLAS_LIBRARY})
+        set(BLAS_LIBRARIES \${OPENBLAS_LIBRARY})
+        set(LAPACK_LIBRARIES \${OPENBLAS_LIBRARY})
+        message(STATUS "Found OpenBLAS: \${OPENBLAS_LIBRARY}")
+    else()
+        message(WARNING "OpenBLAS not found in \${CMAKE_SOURCE_DIR}/suitesparse-deps/lib")
+    endif()
+    
+    if(NOT SUITESPARSE_LIBRARIES)
+        message(FATAL_ERROR "No SuiteSparse libraries found!")
+    endif()
+    
+    message(STATUS "SuiteSparse libraries: \${SUITESPARSE_LIBRARIES}")
+    
+endif()
+"@
         
         New-Item -ItemType Directory -Force -Path "cmake"
-        ($findSuiteSparseLines -join "`n") | Out-File -FilePath "cmake/FindSuiteSparse.cmake" -Encoding UTF8
+        $findSuiteSparseContent | Out-File -FilePath "cmake/FindSuiteSparse.cmake" -Encoding UTF8
         
-        # 2. Patch CMakeLists.txt
-        $cmakeLists = Get-Content "CMakeLists.txt" -Raw
-        $replacementText = '# find_package(SuiteSparse REQUIRED) - Using custom config' + [Environment]::NewLine + 'include(cmake/FindSuiteSparse.cmake)'
-        $cmakeLists = $cmakeLists -replace 'find_package\(SuiteSparse REQUIRED\)', $replacementText
-        $cmakeLists | Out-File -FilePath "CMakeLists.txt" -Encoding UTF8
+        # 2. Backup original CMakeLists.txt and create a patched version
+        Copy-Item "CMakeLists.txt" "CMakeLists.txt.original" -Force
         
-        # 3. Add OpenBLAS include
-        $cmakeLists = Get-Content "CMakeLists.txt" -Raw
-        if ($cmakeLists -match 'include_directories\(') {
-            $openblasInclude = 'include_directories(' + [Environment]::NewLine + '    ${CMAKE_SOURCE_DIR}/suitesparse-deps/include'
-            $cmakeLists = $cmakeLists -replace 'include_directories\(', $openblasInclude
-            $cmakeLists | Out-File -FilePath "CMakeLists.txt" -Encoding UTF8
+        # Read the original file
+        $lines = Get-Content "CMakeLists.txt"
+        
+        # Find and replace the find_package line
+        $newLines = @()
+        foreach ($line in $lines) {
+            if ($line -match 'find_package\s*\(\s*SuiteSparse\s+REQUIRED\s*\)') {
+                # Replace with our custom find module
+                $newLines += "# find_package(SuiteSparse REQUIRED) - Replaced with custom find module"
+                $newLines += "include(cmake/FindSuiteSparse.cmake)"
+            } else {
+                $newLines += $line
+            }
         }
+        
+        # Write the modified CMakeLists.txt
+        $newLines | Out-File -FilePath "CMakeLists.txt" -Encoding UTF8
         
         Write-Host "Patches applied successfully!"
         
-    - name: Build BFF
-      shell: cmd
+    - name: Debug - Show what was built
+      shell: powershell
       run: |
-        echo "Configuring BFF..."
+        Write-Host "=== Debug Info ==="
+        Write-Host "Contents of suitesparse-deps/lib:"
+        if (Test-Path "suitesparse-deps/lib") {
+            Get-ChildItem "suitesparse-deps/lib" -File | Select-Object Name, Length, LastWriteTime
+        } else {
+            Write-Host "Directory not found: suitesparse-deps/lib"
+        }
         
-        mkdir build
+        Write-Host "Contents of suitesparse-deps/include:"
+        if (Test-Path "suitesparse-deps/include") {
+            Get-ChildItem "suitesparse-deps/include" -Recurse -Directory | Select-Object FullName | ForEach-Object { $_.FullName }
+        }
+        
+    - name: Build BFF
+      shell: powershell
+      run: |
+        Write-Host "Configuring BFF..."
+        
+        # Create build directory
+        New-Item -ItemType Directory -Force -Path "build"
         cd build
         
-        # Set environment variables for finding dependencies
-        set SuiteSparse_DIR=%CD%\..\suitesparse-deps
-        set OpenBLAS_DIR=%CD%\..\openblas-install
+        # Debug: Show what's in the install directory
+        Write-Host "Checking install directory contents..."
+        if (Test-Path "..\suitesparse-deps\lib") {
+            Write-Host "Libraries found:"
+            Get-ChildItem "..\suitesparse-deps\lib" -Filter "*.lib" | Select-Object -First 10 Name
+        }
         
-        echo "SuiteSparse directory: %SuiteSparse_DIR%"
-        echo "OpenBLAS directory: %OpenBLAS_DIR%"
+        # Configure with CMake
+        Write-Host "Running CMake configuration..."
         
-        # List available libraries for debugging
-        dir "%SuiteSparse_DIR%\lib"
+        $cmakeArgs = @(
+            "..",
+            "-G", "Visual Studio 17 2022",
+            "-A", "x64",
+            "-DCMAKE_BUILD_TYPE=Release",
+            "-DCMAKE_PREFIX_PATH=`"$pwd\..\suitesparse-deps`"",
+            "-DBLAS_LIBRARIES=`"$pwd\..\suitesparse-deps\lib\libopenblas.lib`"",
+            "-DLAPACK_LIBRARIES=`"$pwd\..\suitesparse-deps\lib\libopenblas.lib`"",
+            "-DCMAKE_FIND_DEBUG_MODE=ON"  # Enable debug output for find_package
+        )
         
-        cmake .. -G "Visual Studio 17 2022" -A x64 ^
-          -DCMAKE_BUILD_TYPE=Release ^
-          -DCMAKE_PREFIX_PATH="%SuiteSparse_DIR%" ^
-          -DBLAS_LIBRARIES="%SuiteSparse_DIR%/lib/libopenblas.lib" ^
-          -DLAPACK_LIBRARIES="%SuiteSparse_DIR%/lib/libopenblas.lib"
+        # Run CMake
+        cmake @cmakeArgs
         
-        echo "Building BFF..."
-        cmake --build . --config Release --parallel 4
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "Building BFF..."
+            cmake --build . --config Release --parallel 4
+        } else {
+            Write-Host "CMake configuration failed with exit code: $LASTEXITCODE"
+            exit $LASTEXITCODE
+        }
         
     - name: Find and package binaries
       shell: powershell
@@ -211,59 +272,44 @@ jobs:
         # Create package directory
         New-Item -ItemType Directory -Force -Path "bff-package"
         
-        # Find and copy executables
-        $exeFiles = Get-ChildItem -Path "." -Recurse -Filter "*.exe" -File | Where-Object {
-            $_.DirectoryName -match "Release" -and (
-                $_.Name -match "bff" -or 
-                $_.Name -match "viewer" -or
-                $_.Name -match "gui"
-            )
+        # Find and copy executables from Release directory
+        if (Test-Path "build\Release") {
+            $exeFiles = Get-ChildItem -Path "build\Release" -Filter "*.exe" -File
+            foreach ($exe in $exeFiles) {
+                Write-Host "Found: $($exe.FullName)"
+                Copy-Item -Path $exe.FullName -Destination "bff-package"
+            }
+            
+            # Copy DLLs from Release directory
+            $dllFiles = Get-ChildItem -Path "build\Release" -Filter "*.dll" -File
+            foreach ($dll in $dllFiles) {
+                Write-Host "Found DLL: $($dll.Name)"
+                Copy-Item -Path $dll.FullName -Destination "bff-package"
+            }
         }
         
-        foreach ($exe in $exeFiles) {
-            Write-Host "Found: $($exe.FullName)"
-            Copy-Item -Path $exe.FullName -Destination "bff-package"
-        }
-        
-        # Find and copy DLLs from build directory
-        $dllFiles = Get-ChildItem -Path "." -Recurse -Filter "*.dll" -File | Where-Object {
-            $_.DirectoryName -match "Release"
-        }
-        
-        foreach ($dll in $dllFiles) {
-            Write-Host "Found DLL: $($dll.Name)"
-            Copy-Item -Path $dll.FullName -Destination "bff-package"
-        }
-        
-        # Copy dependencies from SuiteSparse directory
-        if (Test-Path "suitesparse-deps/lib/*.dll") {
-            Copy-Item "suitesparse-deps/lib/*.dll" "bff-package/" -ErrorAction SilentlyContinue
-        }
-        
-        # Copy OpenBLAS DLL
-        if (Test-Path "openblas-install/bin/libopenblas.dll") {
-            Copy-Item -Path "openblas-install/bin/libopenblas.dll" -Destination "bff-package"
-            Write-Host "Copied: libopenblas.dll"
+        # Copy dependency DLLs
+        if (Test-Path "suitesparse-deps\lib\*.dll") {
+            Copy-Item "suitesparse-deps\lib\*.dll" "bff-package\" -ErrorAction SilentlyContinue
         }
         
         # Create a README file
-        $readmeLines = @(
-            "BFF (Boundary First Flattening) Windows Build",
-            "=============================================",
-            "Build Date: $(Get-Date -Format 'yyyy-MM-dd')",
-            "Version: 1.6",
-            "",
-            "This package contains the Windows binaries for BFF.",
-            "To run the application, execute the .exe file in this folder.",
-            "",
-            "Dependencies included:",
-            "- OpenBLAS",
-            "- SuiteSparse libraries (built via vcpkg)",
-            "- Required runtime DLLs"
-        )
+        $readmeContent = @"
+BFF (Boundary First Flattening) Windows Build
+=============================================
+Build Date: $(Get-Date -Format 'yyyy-MM-dd')
+Version: 1.6
+
+This package contains the Windows binaries for BFF.
+To run the application, execute the .exe file in this folder.
+
+Dependencies included:
+- OpenBLAS
+- SuiteSparse libraries (built via vcpkg)
+- Required runtime DLLs
+"@
         
-        $readmeContent = $readmeLines -join "`n"
-        $readmeContent | Out-File -FilePath "bff-package/README.txt" -Encoding UTF8
+        $readmeContent | Out-File -FilePath "bff-package\README.txt" -Encoding UTF8
         
         Write-Host "=== Package Contents ==="
         Get-ChildItem -Path "bff-package"
@@ -273,18 +319,5 @@ jobs:
       with:
         name: bff-windows-binaries
         path: bff-package/
-        if-no-files-found: error
-        retention-days: 7
-        
-    - name: Create zip archive
-      shell: powershell
-      run: |
-        Write-Host "Creating zip archive..."
-        Compress-Archive -Path "bff-package/*" -DestinationPath "bff-windows.zip" -Force
-        
-    - name: Upload zip artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: bff-windows-zip
-        path: bff-windows.zip
+        if-no-files-found: warn
         retention-days: 7
