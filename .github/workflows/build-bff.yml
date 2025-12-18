@@ -274,7 +274,7 @@ jobs:
             if ($LASTEXITCODE -eq 0) {
                 Write-Host "Building BFF..."
                 cmake --build . --config Release --parallel 4
-            else {
+            } else {
                 exit $LASTEXITCODE
             }
         }
