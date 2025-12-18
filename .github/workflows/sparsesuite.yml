@@ -1,28 +1,14 @@
-name: Build SuiteSparse for Windows
-
-on:
-  push:
-    branches: [master, main]
-  pull_request:
-    branches: [master, main]
-  workflow_dispatch:
-
-env:
-  BUILD_DIR: ${{ github.workspace }}/build
-  INSTALL_DIR: ${{ github.workspace }}/install
-  REPO_DIR: ${{ github.workspace }}/suitesparse-metis-for-windows
-
 jobs:
   build:
     runs-on: windows-latest
-
+    
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          submodules: "recursive"
-          path: suitesparse-metis-for-windows
-
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        submodules: 'recursive'
+        path: suitesparse-metis-for-windows
+      
     - name: Checkout for artifact storage
       uses: actions/checkout@v4
       with:
@@ -33,7 +19,7 @@ jobs:
           include
         sparse-checkout-cone-mode: false
         path: output-repo
-
+    
       - name: Setup Phase - Create directories
         shell: powershell
         run: |
