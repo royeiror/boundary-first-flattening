@@ -33,105 +33,176 @@ jobs:
       uses: lukka/get-cmake@latest
 
     - name: Download and extract SuiteSparse
-      shell: cmd
+      shell: powershell
       run: |
-        # Download SuiteSparse from the correct URL
-        curl -L -o suitesparse.zip https://github.com/royeiror/suitesparse-metis-for-windows/releases/download/7.6.1/suitesparse-metis-v7.6.1-windows-x64.zip
-        
-        # Check if download succeeded
-        if not exist suitesparse.zip (
-          echo "Failed to download suitesparse.zip"
-          exit 1
+        # Try different possible URLs for SuiteSparse
+        $urls = @(
+          "https://github.com/royeiror/suitesparse-metis-for-windows/releases/download/7.6.1/suitesparse-metis-v7.6.1-windows-x64.zip",
+          "https://github.com/royeiror/suitesparse-metis-for-windows/releases/download/v7.6.1/suitesparse-metis-v7.6.1-windows-x64.zip",
+          "https://github.com/royeiror/suitesparse-metis-for-windows/releases/latest/download/suitesparse-metis-windows-x64.zip"
         )
         
-        # Extract to C:\suitesparse
-        mkdir C:\suitesparse
-        7z x suitesparse.zip -o"C:\suitesparse" -y
+        $success = $false
+        foreach ($url in $urls) {
+          Write-Host "Trying URL: $url"
+          try {
+            Invoke-WebRequest -Uri $url -OutFile "suitesparse.zip" -ErrorAction Stop
+            
+            # Check if file is valid (more than just error page)
+            if ((Get-Item "suitesparse.zip").Length -gt 1000) {
+              Write-Host "Download successful from: $url"
+              $success = $true
+              break
+            } else {
+              Write-Host "Downloaded file too small, likely an error page"
+              Remove-Item "suitesparse.zip" -Force
+            }
+          } catch {
+            Write-Host "Failed to download from: $url"
+            Write-Host "Error: $_"
+          }
+        }
         
-        # Set environment variable
-        echo "SUITESPARSE_ROOT=C:\suitesparse" >> "%GITHUB_ENV%"
+        if (-not $success) {
+          # If download fails, we'll need to build SuiteSparse from source
+          Write-Host "SuiteSparse download failed. Building from source..."
+          
+          # Clone SuiteSparse source
+          git clone --depth 1 https://github.com/royeiror/suitesparse-metis-for-windows.git suitesparse-src
+          
+          # We'll need to implement building from source
+          # For now, exit with error
+          Write-Error "SuiteSparse build from source not yet implemented in this workflow"
+          exit 1
+        }
+        
+        # Extract SuiteSparse
+        New-Item -ItemType Directory -Force -Path "C:\suitesparse"
+        Expand-Archive -Path "suitesparse.zip" -DestinationPath "C:\suitesparse" -Force
+        
+        # Verify extraction
+        if (Test-Path "C:\suitesparse\lib") {
+          Write-Host "SuiteSparse extracted successfully"
+          Write-Host "##[set-output name=suite_sparse_root;]C:\suitesparse" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+        } else {
+          Write-Error "SuiteSparse extraction failed - lib directory not found"
+          Get-ChildItem "C:\suitesparse" -Recurse | Select-Object -First 10
+          exit 1
+        }
 
     - name: Build FLTK
-      shell: cmd
+      shell: powershell
       run: |
         # Download FLTK source
-        curl -L -o fltk-${{ env.FLTK_VERSION }}-source.tar.gz https://github.com/fltk/fltk/archive/refs/tags/release-${{ env.FLTK_VERSION }}.tar.gz
-        7z x fltk-${{ env.FLTK_VERSION }}-source.tar.gz
-        7z x fltk-${{ env.FLTK_VERSION }}-source.tar
+        $fltkUrl = "https://github.com/fltk/fltk/archive/refs/tags/release-${{ env.FLTK_VERSION }}.tar.gz"
+        Invoke-WebRequest -Uri $fltkUrl -OutFile "fltk-source.tar.gz"
+        
+        # Extract using tar (available on Windows GitHub runners)
+        tar -xzf fltk-source.tar.gz
         
         # Create build directory
-        mkdir fltk-build
-        cd fltk-build
+        New-Item -ItemType Directory -Force -Path "fltk-build"
+        Set-Location fltk-build
         
         # Configure FLTK
-        cmake ..\fltk-release-${{ env.FLTK_VERSION }} ^
-          -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} ^
-          -DCMAKE_INSTALL_PREFIX=C:\fltk ^
-          -DOPTION_BUILD_SHARED_LIBS=OFF ^
-          -DOPTION_USE_SYSTEM_LIBJPEG=OFF ^
-          -DOPTION_USE_SYSTEM_LIBPNG=OFF ^
-          -DOPTION_USE_SYSTEM_ZLIB=OFF
+        cmake ../fltk-release-${{ env.FLTK_VERSION }} `
+          -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} `
+          -DCMAKE_INSTALL_PREFIX="C:\fltk" `
+          -DOPTION_BUILD_SHARED_LIBS=OFF `
+          -DOPTION_USE_SYSTEM_LIBJPEG=OFF `
+          -DOPTION_USE_SYSTEM_LIBPNG=OFF `
+          -DOPTION_USE_SYSTEM_ZLIB=OFF `
+          -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL
         
         # Build and install FLTK
-        cmake --build . --config ${{ env.BUILD_TYPE }} --target install -- -m
+        cmake --build . --config ${{ env.BUILD_TYPE }} --target install -- /m
 
     - name: Configure BFF with CMake
-      shell: cmd
+      shell: powershell
       run: |
-        mkdir build
-        cd build
+        New-Item -ItemType Directory -Force -Path "build"
+        Set-Location build
         
-        # Configure BFF with correct paths
-        cmake .. ^
-          -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} ^
-          -DCMAKE_PREFIX_PATH="C:\fltk;C:\suitesparse" ^
-          -DSUITESPARSE_INCLUDE_DIR_HINTS="C:\suitesparse\include\suitesparse" ^
-          -DSUITESPARSE_LIBRARY_DIR_HINTS="C:\suitesparse\lib" ^
-          -DFLTK_DIR="C:\fltk\lib\cmake\fltk" ^
-          -DENABLE_BFF_CLI=ON ^
-          -DENABLE_BFF_GUI=ON ^
-          -DCMAKE_INSTALL_PREFIX="%CD%\install"
+        # Configure BFF
+        cmake .. `
+          -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} `
+          -DCMAKE_PREFIX_PATH="C:\fltk;C:\suitesparse" `
+          -DSUITESPARSE_INCLUDE_DIR_HINTS="C:\suitesparse\include\suitesparse" `
+          -DSUITESPARSE_LIBRARY_DIR_HINTS="C:\suitesparse\lib" `
+          -DFLTK_DIR="C:\fltk\lib\cmake\fltk" `
+          -DENABLE_BFF_CLI=ON `
+          -DENABLE_BFF_GUI=ON `
+          -DCMAKE_INSTALL_PREFIX="$pwd\install" `
+          -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL
 
     - name: Build BFF
-      shell: cmd
+      shell: powershell
       run: |
-        cd build
-        cmake --build . --config ${{ env.BUILD_TYPE }} --target install -- -m
+        Set-Location build
+        cmake --build . --config ${{ env.BUILD_TYPE }} --target install -- /m
+        
+        # Verify build
+        if (Test-Path "install\bin\bff-gui.exe") {
+          Write-Host "bff-gui.exe built successfully"
+        } else {
+          Write-Error "bff-gui.exe not found"
+          Get-ChildItem "install" -Recurse
+          exit 1
+        }
 
-    - name: Create standalone package
-      shell: cmd
+    - name: Collect dependencies
+      shell: powershell
       run: |
-        mkdir bff-dist
-        mkdir bff-dist\bin
+        # Create distribution directory
+        New-Item -ItemType Directory -Force -Path "bff-dist"
         
         # Copy executables
-        copy build\install\bin\*.exe bff-dist\bin\
+        Copy-Item "build\install\bin\*.exe" -Destination "bff-dist\" -Force
         
         # Copy SuiteSparse DLLs
-        copy C:\suitesparse\bin\*.dll bff-dist\bin\
+        if (Test-Path "C:\suitesparse\bin\*.dll") {
+          Copy-Item "C:\suitesparse\bin\*.dll" -Destination "bff-dist\" -Force
+        }
         
-        # Copy any FLTK DLLs (if built as shared)
-        if exist C:\fltk\bin\*.dll (
-          copy C:\fltk\bin\*.dll bff-dist\bin\
-        )
-        
-        # Copy runtime dependencies
-        powershell -Command "& {Get-ChildItem bff-dist\bin\*.exe | ForEach-Object {dumpbin /DEPENDENTS $_.FullName | Select-String '.dll'}}"
+        # Copy any required runtime DLLs
+        # First, check dependencies
+        Write-Host "Checking dependencies..."
+        $exes = Get-ChildItem "bff-dist\*.exe"
+        foreach ($exe in $exes) {
+          Write-Host "Dependencies for $($exe.Name):"
+          dumpbin /DEPENDENTS $exe.FullName | Select-String ".dll"
+        }
 
-    - name: Test executables
-      shell: cmd
+    - name: Package for distribution
+      shell: powershell
       run: |
-        cd bff-dist\bin
-        .\bff-gui.exe --help || echo "bff-gui help command executed"
-        .\bff.exe --help || echo "bff help command executed"
+        # Create README
+        @"
+# BFF (Boundary First Flattening) v1.6 - Windows Binary
 
-    - name: Create ZIP archive
-      uses: thedoctor0/zip-release@master
-      with:
-        type: 'zip'
-        filename: 'bff-windows-x64-v1.6.zip'
-        directory: 'bff-dist/'
-        path: 'bff-dist/**/*'
+## Included Files
+- bff-gui.exe: GUI application for mesh parameterization
+- bff.exe: Command-line interface
+
+## Requirements
+- Windows 10 or later
+- Visual C++ Redistributable (if not already installed)
+
+## Usage
+Double-click bff-gui.exe to launch the graphical interface.
+
+For command-line usage, run:
+  bff.exe --help
+
+## Build Information
+Built on GitHub Actions using:
+- SuiteSparse 7.6.1
+- FLTK 1.3.9
+- MSVC compiler
+"@ | Out-File -FilePath "bff-dist\README.txt" -Encoding UTF8
+        
+        # Create ZIP archive
+        Compress-Archive -Path "bff-dist\*" -DestinationPath "bff-windows-x64-v1.6.zip" -Force
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
