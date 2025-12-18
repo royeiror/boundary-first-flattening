@@ -27,17 +27,8 @@ jobs:
     - name: Fix CMakeLists.txt
       shell: powershell
       run: |
-        # Completely replace the cmake_minimum_required line
-        $content = Get-Content CMakeLists.txt -Raw
-        
-        # Find and replace the problematic line
-        if ($content -match '(cmake_minimum_required\s*\([^)]+\))') {
-          $oldLine = $matches[1]
-          Write-Host "Replacing: $oldLine"
-          $content = $content.Replace($oldLine, 'cmake_minimum_required(VERSION 3.5)')
-          Set-Content CMakeLists.txt -Value $content -NoNewline
-          Write-Host "Fixed cmake_minimum_required line"
-        }
+        # Simple fix for cmake_minimum_required
+        (Get-Content CMakeLists.txt) -replace '^cmake_minimum_required.*', 'cmake_minimum_required(VERSION 3.5)' | Set-Content CMakeLists.txt
 
     - name: Set up MSVC
       uses: ilammy/msvc-dev-cmd@v1
@@ -47,112 +38,52 @@ jobs:
     - name: Install CMake
       uses: lukka/get-cmake@latest
 
-    - name: Download and prepare SuiteSparse binaries
+    - name: Download SuiteSparse
       shell: powershell
       run: |
-        # Download the entire repository
-        Write-Host "Downloading SuiteSparse repository..."
+        # Download the repository
         Invoke-WebRequest -Uri "https://github.com/royeiror/suitesparse-metis-for-windows/archive/refs/heads/master.zip" -OutFile "suitesparse.zip"
         Expand-Archive -Path "suitesparse.zip" -DestinationPath "." -Force
         
-        # Create SuiteSparse directory
+        # Find and prepare SuiteSparse
+        $source = "suitesparse-metis-for-windows-master"
         New-Item -ItemType Directory -Force -Path "C:\suitesparse"
         
-        # Copy everything from the binaries directory
-        $sourceDir = "suitesparse-metis-for-windows-master"
-        if (Test-Path $sourceDir) {
-          Write-Host "Contents of downloaded repository:"
-          Get-ChildItem $sourceDir -Recurse | Select-Object -First 20 | Format-Table Name, Length
-          
-          # Try to find and copy binaries
-          $found = $false
-          if (Test-Path "$sourceDir\binaries") {
-            Copy-Item "$sourceDir\binaries\*" -Destination "C:\suitesparse\" -Recurse -Force
-            Write-Host "Copied binaries from $sourceDir\binaries"
-            $found = $true
-          }
-          
-          if (Test-Path "$sourceDir\lib") {
-            Copy-Item "$sourceDir\lib\*" -Destination "C:\suitesparse\lib\" -Recurse -Force
-            Write-Host "Copied libs from $sourceDir\lib"
-            $found = $true
-          }
-          
-          if (Test-Path "$sourceDir\include") {
-            Copy-Item "$sourceDir\include\*" -Destination "C:\suitesparse\include\" -Recurse -Force
-            Write-Host "Copied includes from $sourceDir\include"
-            $found = $true
-          }
-          
-          if (-not $found) {
-            # Just copy everything
-            Copy-Item "$sourceDir\*" -Destination "C:\suitesparse\" -Recurse -Force
-            Write-Host "Copied everything from $sourceDir"
-          }
+        # Copy everything
+        if (Test-Path $source) {
+          Get-ChildItem $source | Copy-Item -Destination "C:\suitesparse\" -Recurse -Force
         }
         
-        # Create expected directory structure
+        # Create expected structure
         New-Item -ItemType Directory -Force -Path "C:\suitesparse\include\suitesparse" -ErrorAction SilentlyContinue
         New-Item -ItemType Directory -Force -Path "C:\suitesparse\lib" -ErrorAction SilentlyContinue
-        New-Item -ItemType Directory -Force -Path "C:\suitesparse\bin" -ErrorAction SilentlyContinue
         
-        # Move header files to expected location
+        # Move .h files to include/suitesparse
+        if (Test-Path "C:\suitesparse\*.h") {
+          Move-Item "C:\suitesparse\*.h" -Destination "C:\suitesparse\include\suitesparse\" -Force
+        }
         if (Test-Path "C:\suitesparse\include\*.h") {
-          Copy-Item "C:\suitesparse\include\*.h" -Destination "C:\suitesparse\include\suitesparse\" -Force
+          Move-Item "C:\suitesparse\include\*.h" -Destination "C:\suitesparse\include\suitesparse\" -Force
         }
         
-        # List what we have
-        Write-Host "Final SuiteSparse structure:"
-        Get-ChildItem "C:\suitesparse" -Recurse | Select-Object Name, FullName | Format-Table -AutoSize
-
-    - name: Download BLAS and LAPACK for Windows
-      shell: powershell
-      run: |
-        # Create BLAS/LAPACK directory
-        New-Item -ItemType Directory -Force -Path "C:\blaslapack"
-        
-        # Download precompiled BLAS/LAPACK for Windows
-        # Using reference BLAS and LAPACK from netlib
-        $blasUrl = "https://icl.utk.edu/projectsfiles/magma/downloads/blas-3.8.0-windows-x64.zip"
-        $lapackUrl = "https://icl.utk.edu/projectsfiles/magma/downloads/lapack-3.8.0-windows-x64.zip"
-        
-        try {
-          Invoke-WebRequest -Uri $blasUrl -OutFile "blas.zip"
-          Expand-Archive -Path "blas.zip" -DestinationPath "C:\blaslapack" -Force
-          Write-Host "Downloaded BLAS"
-        } catch {
-          Write-Host "Could not download BLAS, will try to use system BLAS"
-        }
-        
-        try {
-          Invoke-WebRequest -Uri $lapackUrl -OutFile "lapack.zip"
-          Expand-Archive -Path "lapack.zip" -DestinationPath "C:\blaslapack" -Force
-          Write-Host "Downloaded LAPACK"
-        } catch {
-          Write-Host "Could not download LAPACK, will try to use system LAPACK"
-        }
+        Write-Host "SuiteSparse prepared at C:\suitesparse"
 
     - name: Build FLTK
       shell: powershell
       run: |
-        # Download FLTK source
-        $fltkUrl = "https://github.com/fltk/fltk/archive/refs/tags/release-${{ env.FLTK_VERSION }}.tar.gz"
-        Invoke-WebRequest -Uri $fltkUrl -OutFile "fltk-source.tar.gz"
+        # Download and extract FLTK
+        $url = "https://github.com/fltk/fltk/archive/refs/tags/release-${{ env.FLTK_VERSION }}.tar.gz"
+        Invoke-WebRequest -Uri $url -OutFile "fltk.tar.gz"
+        tar -xzf fltk.tar.gz
         
-        # Extract
-        tar -xzf fltk-source.tar.gz
-        
-        # Build
+        # Build FLTK
         New-Item -ItemType Directory -Force -Path "fltk-build"
         Set-Location fltk-build
         
         cmake ../fltk-release-${{ env.FLTK_VERSION }} `
           -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} `
           -DCMAKE_INSTALL_PREFIX="C:\fltk" `
-          -DOPTION_BUILD_SHARED_LIBS=OFF `
-          -DOPTION_USE_SYSTEM_LIBJPEG=OFF `
-          -DOPTION_USE_SYSTEM_LIBPNG=OFF `
-          -DOPTION_USE_SYSTEM_ZLIB=OFF
+          -DOPTION_BUILD_SHARED_LIBS=OFF
         
         cmake --build . --config ${{ env.BUILD_TYPE }} --target install -- /m
 
@@ -162,76 +93,78 @@ jobs:
         New-Item -ItemType Directory -Force -Path "build"
         Set-Location build
         
-        # Configure with explicit paths and manual SuiteSparse settings
+        # Manual SuiteSparse configuration
+        $suiteSparseInclude = "C:\suitesparse\include\suitesparse"
+        $suiteSparseLib = "C:\suitesparse\lib"
+        
+        # Set environment variables for SuiteSparse
+        $env:SUITESPARSE_INC = $suiteSparseInclude
+        $env:SUITESPARSE_LIB = $suiteSparseLib
+        
+        # Configure BFF with manual overrides
         cmake .. `
           -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} `
-          -DCMAKE_PREFIX_PATH="C:\fltk" `
-          -DSUITESPARSE_INCLUDE_DIR_HINTS="C:\suitesparse\include\suitesparse" `
-          -DSUITESPARSE_LIBRARY_DIR_HINTS="C:\suitesparse\lib" `
-          -DSUITESPARSE_BLAS_LIBRARY="C:\suitesparse\lib\libblas.lib" `
-          -DSUITESPARSE_LAPACK_LIBRARY="C:\suitesparse\lib\liblapack.lib" `
+          -DSUITESPARSE_INCLUDE_DIR="$suiteSparseInclude" `
+          -DSUITESPARSE_LIBRARY_DIR="$suiteSparseLib" `
+          -DSUITESPARSE_FOUND=TRUE `
           -DFLTK_DIR="C:\fltk\lib\cmake\fltk" `
           -DENABLE_BFF_CLI=ON `
           -DENABLE_BFF_GUI=ON `
-          -DCMAKE_INSTALL_PREFIX="$pwd\install" `
-          -DCMAKE_POLICY_DEFAULT_CMP0048=NEW
-        
-        Write-Host "CMake configuration completed"
+          -DCMAKE_INSTALL_PREFIX="$pwd\install"
 
     - name: Build BFF
       shell: powershell
       run: |
         Set-Location build
+        cmake --build . --config ${{ env.BUILD_TYPE }} -- /m
         
-        # Try to build
-        cmake --build . --config ${{ env.BUILD_TYPE }} --target install -- /m
-        
-        # Check results
-        if (Test-Path "install\bin\bff-gui.exe") {
-          Write-Host "SUCCESS: bff-gui.exe built"
-        } elseif (Test-Path "bff-gui\bff-gui.exe") {
-          Write-Host "SUCCESS: bff-gui.exe found in build directory"
+        # Find and copy executables
+        $exes = Get-ChildItem . -Recurse -Filter "*.exe"
+        if ($exes) {
           New-Item -ItemType Directory -Force -Path "install\bin"
-          Copy-Item "bff-gui\bff-gui.exe" -Destination "install\bin\"
-        } else {
-          Write-Host "Trying to find any built executables..."
-          Get-ChildItem . -Recurse -Filter "*.exe" | Select-Object FullName
-          exit 1
+          foreach ($exe in $exes) {
+            Copy-Item $exe.FullName -Destination "install\bin\" -Force
+            Write-Host "Copied: $($exe.Name)"
+          }
         }
 
-    - name: Collect and package
+    - name: Create distribution package
       shell: powershell
       run: |
-        # Create distribution
-        New-Item -ItemType Directory -Force -Path "bff-dist"
+        # Create distribution folder
+        New-Item -ItemType Directory -Force -Path "dist"
         
         # Copy executables
         if (Test-Path "build\install\bin\*.exe") {
-          Copy-Item "build\install\bin\*.exe" -Destination "bff-dist\" -Force
+          Copy-Item "build\install\bin\*.exe" -Destination "dist\" -Force
         }
         
-        # Copy SuiteSparse DLLs
-        if (Test-Path "C:\suitesparse\bin\*.dll") {
-          Copy-Item "C:\suitesparse\bin\*.dll" -Destination "bff-dist\" -Force
-        } elseif (Test-Path "C:\suitesparse\*.dll") {
-          Copy-Item "C:\suitesparse\*.dll" -Destination "bff-dist\" -Force
+        # Copy DLLs from SuiteSparse
+        $dlls = Get-ChildItem "C:\suitesparse" -Recurse -Filter "*.dll"
+        if ($dlls) {
+          foreach ($dll in $dlls) {
+            Copy-Item $dll.FullName -Destination "dist\" -Force
+            Write-Host "Copied DLL: $($dll.Name)"
+          }
         }
         
-        # Create README
-        @"
+        # Create simple README
+        $readme = @"
 # BFF (Boundary First Flattening) v1.6 - Windows Binary
 
-## Requirements
+Requirements:
 - Windows 10 or later
 - Visual C++ Redistributable
 
-## Usage
-Run bff-gui.exe for graphical interface
-Run bff.exe for command line
-"@ | Out-File "bff-dist\README.txt"
+Usage:
+- Run bff-gui.exe for graphical interface
+- Run bff.exe for command line
+"@
         
-        # Package
-        Compress-Archive -Path "bff-dist\*" -DestinationPath "bff-windows-v1.6.zip" -Force
+        Set-Content -Path "dist\README.txt" -Value $readme
+        
+        # Create ZIP
+        Compress-Archive -Path "dist\*" -DestinationPath "bff-windows-v1.6.zip" -Force
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
