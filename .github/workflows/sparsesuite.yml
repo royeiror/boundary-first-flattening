@@ -298,49 +298,49 @@ jobs:
             }
           }
           
-          # Create a README file - SIMPLIFIED to avoid YAML parsing issues
+          # Create a README file using a simple approach
           $buildDate = Get-Date -Format "yyyy-MM-dd"
-          $readmeText = @"
-# SuiteSparse for Windows
-
-This directory contains pre-built SuiteSparse libraries for Windows x64.
-
-## Contents
-
-- \`lib/\` - Compiled libraries (.lib) and DLLs
-- \`include/\` - Header files
-- \`SuiteSparse/\` - Source code for all components
-
-## Built Components
-
-1. GraphBLAS
-2. METIS
-3. SuiteSparse_config
-4. AMD
-5. COLAMD
-6. BTF
-7. KLU
-8. LDL
-9. CCOLAMD
-10. CAMD
-11. CHOLMOD
-12. UMFPACK
-13. RBio
-14. SPQR
-
-## Build Information
-
-- Built on: $buildDate
-- Build System: Visual Studio 2022
-- Architecture: x64
-- Configuration: Release
-
-## Usage
-
-Add the \`lib/\` directory to your library path and \`include/\` to your include path.
-"@
+          $readmeLines = @(
+            "# SuiteSparse for Windows",
+            "",
+            "This directory contains pre-built SuiteSparse libraries for Windows x64.",
+            "",
+            "## Contents",
+            "",
+            "- `lib/` - Compiled libraries (.lib) and DLLs",
+            "- `include/` - Header files",
+            "- `SuiteSparse/` - Source code for all components",
+            "",
+            "## Built Components",
+            "",
+            "1. GraphBLAS",
+            "2. METIS",
+            "3. SuiteSparse_config",
+            "4. AMD",
+            "5. COLAMD",
+            "6. BTF",
+            "7. KLU",
+            "8. LDL",
+            "9. CCOLAMD",
+            "10. CAMD",
+            "11. CHOLMOD",
+            "12. UMFPACK",
+            "13. RBio",
+            "14. SPQR",
+            "",
+            "## Build Information",
+            "",
+            "- Built on: $buildDate",
+            "- Build System: Visual Studio 2022",
+            "- Architecture: x64",
+            "- Configuration: Release",
+            "",
+            "## Usage",
+            "",
+            "Add the `lib/` directory to your library path and `include/` to your include path."
+          )
           
-          $readmeText | Out-File -FilePath "${{ github.workspace }}/output-repo/README.md" -Encoding UTF8
+          $readmeLines -join "`n" | Out-File -FilePath "${{ github.workspace }}/output-repo/README.md" -Encoding UTF8
           
           Write-Host "Packaging completed"
 
