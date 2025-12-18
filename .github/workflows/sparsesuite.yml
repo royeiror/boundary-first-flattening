@@ -1,22 +1,19 @@
 name: Build SuiteSparse for Windows
 
 on:
-  workflow_dispatch: # Manual trigger for control
+  workflow_dispatch:
   push:
     branches: [ main, master ]
     paths:
-      - 'build_suitesparse.yml'
       - '.github/workflows/build_suitesparse.yml'
-      - 'CMakeLists.txt'
-      - '**/*.cmake'
   pull_request:
     branches: [ main, master ]
 
 env:
   BUILD_TYPE: 'Release'
   INSTALL_PREFIX: 'build/install'
-  SUITESPARSE_VERSION: '7.2.0' # Latest stable version as of 2024
-  
+  SUITESPARSE_VERSION: '7.2.0'
+
 jobs:
   build:
     runs-on: windows-latest
@@ -36,21 +33,12 @@ jobs:
       run: |
         Write-Host "Validating workspace structure..."
         
-        # Check for essential files
         if (-not (Test-Path "CMakeLists.txt")) {
-          Write-Error "CMakeLists.txt not found! This repository might not have the correct structure."
+          Write-Error "CMakeLists.txt not found!"
           exit 1
         }
         Write-Host "CMakeLists.txt found"
         
-        # Check if this is the suitesparse-metis-for-windows repository structure
-        $hasSuiteSparseDir = Test-Path "SuiteSparse"
-        $hasMetisDir = Test-Path "metis"
-        
-        Write-Host "SuiteSparse directory exists: $hasSuiteSparseDir"
-        Write-Host "metis directory exists: $hasMetisDir"
-        
-        # Create necessary directories
         New-Item -ItemType Directory -Force -Path build | Out-Null
         Write-Host "Created build directory"
         
@@ -61,92 +49,37 @@ jobs:
       run: |
         Write-Host "Downloading SuiteSparse sources..."
         
-        # Check if SuiteSparse sources already exist
         if (Test-Path "SuiteSparse") {
-          Write-Host "SuiteSparse directory already exists, checking contents..."
           $itemCount = (Get-ChildItem -Path "SuiteSparse" -Recurse -File | Measure-Object).Count
           if ($itemCount -gt 0) {
-            Write-Host "SuiteSparse directory has $itemCount files, assuming sources are already downloaded"
+            Write-Host "SuiteSparse sources already exist"
             exit 0
           }
         }
         
-        # Create directories
         New-Item -ItemType Directory -Force -Path "SuiteSparse" | Out-Null
         New-Item -ItemType Directory -Force -Path "metis" | Out-Null
         
-        # Download SuiteSparse
         $suitesparseUrl = "https://github.com/DrTimothyAldenDavis/SuiteSparse/archive/refs/tags/v$env:SUITESPARSE_VERSION.tar.gz"
         $suitesparseTar = "SuiteSparse-$env:SUITESPARSE_VERSION.tar.gz"
         
         Write-Host "Downloading SuiteSparse from: $suitesparseUrl"
-        
-        # Download using Invoke-WebRequest with progress
-        Invoke-WebRequest -Uri $suitesparseUrl -OutFile $suitesparseTar
-        
-        if (-not (Test-Path $suitesparseTar)) {
-          Write-Error "Failed to download SuiteSparse"
-          exit 1
-        }
+        Invoke-WebRequest -Uri $suitesparseUrl -OutFile $suitesparseTar -ErrorAction Stop
         
         Write-Host "Extracting SuiteSparse..."
-        # Extract using 7zip (available on windows-latest)
         & "7z" x $suitesparseTar -o"temp_suitesparse" -y
         & "7z" x "temp_suitesparse\SuiteSparse-$env:SUITESPARSE_VERSION.tar" -o"temp_suitesparse_inner" -y
         
-        # Copy contents to SuiteSparse directory
-        Write-Host "Copying SuiteSparse files..."
         $sourceDir = "temp_suitesparse_inner\SuiteSparse-$env:SUITESPARSE_VERSION"
         if (Test-Path $sourceDir) {
           Get-ChildItem -Path $sourceDir | ForEach-Object {
             Copy-Item -Path $_.FullName -Destination "SuiteSparse\" -Recurse -Force
           }
           Write-Host "Copied SuiteSparse sources"
-        } else {
-          Write-Error "Extracted SuiteSparse directory not found at: $sourceDir"
-          exit 1
         }
         
-        # Download METIS (optional but recommended)
-        Write-Host "Downloading METIS..."
-        $metisUrl = "https://github.com/KarypisLab/METIS/archive/refs/tags/v5.1.0.tar.gz"
-        $metisTar = "metis-5.1.0.tar.gz"
-        
-        Invoke-WebRequest -Uri $metisUrl -OutFile $metisTar
-        
-        if (Test-Path $metisTar) {
-          Write-Host "Extracting METIS..."
-          & "7z" x $metisTar -o"temp_metis" -y
-          & "7z" x "temp_metis\metis-5.1.0.tar" -o"temp_metis_inner" -y
-          
-          # Copy contents to metis directory
-          $metisSourceDir = "temp_metis_inner\metis-5.1.0"
-          if (Test-Path $metisSourceDir) {
-            Get-ChildItem -Path $metisSourceDir | ForEach-Object {
-              Copy-Item -Path $_.FullName -Destination "metis\" -Recurse -Force
-            }
-            Write-Host "Copied METIS sources"
-            
-            # Apply the patch mentioned in README
-            $metisCMakeFile = "metis\CMakeLists.txt"
-            if (Test-Path $metisCMakeFile) {
-              $content = Get-Content $metisCMakeFile -Raw
-              if ($content -match "project\(METIS\)") {
-                $patchedContent = $content -replace "project\(METIS\)", "project(METIS)`ncmake_policy(SET CMP0022 NEW)"
-                Set-Content -Path $metisCMakeFile -Value $patchedContent
-                Write-Host "Applied METIS CMake patch"
-              }
-            }
-          }
-        } else {
-          Write-Warning "METIS download failed, continuing without METIS"
-        }
-        
-        # Clean up temporary files
         Remove-Item -Path $suitesparseTar -Force -ErrorAction SilentlyContinue
-        Remove-Item -Path $metisTar -Force -ErrorAction SilentlyContinue
         Remove-Item -Path "temp_suitesparse", "temp_suitesparse_inner" -Recurse -Force -ErrorAction SilentlyContinue
-        Remove-Item -Path "temp_metis", "temp_metis_inner" -Recurse -Force -ErrorAction SilentlyContinue
         
         Write-Host "Source download completed"
         
@@ -157,7 +90,7 @@ jobs:
       with:
         cmake-version: '3.25.x'
         
-    - name: Phase 3 - Install Python (for build scripts)
+    - name: Phase 3 - Install Python
       id: install_python
       uses: actions/setup-python@v4
       with:
@@ -170,74 +103,53 @@ jobs:
       run: |
         Write-Host "Configuring CMake for SuiteSparse build..."
         
-        # Change to build directory
         Set-Location build
         
-        # IMPORTANT: We need to tell CMake to BUILD SuiteSparse, not FIND it
-        # The key is that we're in the suitesparse-metis-for-windows repository root
-        
         Write-Host "Current directory: $(Get-Location)"
-        Write-Host "Parent directory contents:"
-        Get-ChildItem .. | Select-Object Name
         
-        # Configure for building SuiteSparse
-        $cmakeCmd = @"
-cmake .. `
-  -G "Visual Studio 17 2022" `
-  -A "x64" `
-  -DCMAKE_BUILD_TYPE:STRING=$env:BUILD_TYPE `
-  -DCMAKE_INSTALL_PREFIX:STRING="../$env:INSTALL_PREFIX" `
-  -DHAVE_COMPLEX:BOOL=OFF `
-  -DBUILD_METIS:BOOL=ON `
-  -DCMAKE_POLICY_DEFAULT_CMP0022:STRING=NEW `
-  -DSuiteSparse_AMD_DIR:PATH="$(Get-Location)\..\SuiteSparse\AMD" `
-  -DSuiteSparse_CAMD_DIR:PATH="$(Get-Location)\..\SuiteSparse\CAMD" `
-  -DSuiteSparse_COLAMD_DIR:PATH="$(Get-Location)\..\SuiteSparse\COLAMD" `
-  -DSuiteSparse_CCOLAMD_DIR:PATH="$(Get-Location)\..\SuiteSparse\CCOLAMD"
-"@
+        # Using simple CMake command without complex string formatting
+        $cmakeArgs = @(
+          "..",
+          "-G", "Visual Studio 17 2022",
+          "-A", "x64",
+          "-DCMAKE_BUILD_TYPE:STRING=$env:BUILD_TYPE",
+          "-DCMAKE_INSTALL_PREFIX:STRING=../$env:INSTALL_PREFIX",
+          "-DHAVE_COMPLEX:BOOL=OFF",
+          "-DBUILD_METIS:BOOL=ON",
+          "-DCMAKE_POLICY_DEFAULT_CMP0022:STRING=NEW"
+        )
         
-        Write-Host "Running CMake configuration..."
-        Write-Host "Command: $cmakeCmd"
+        Write-Host "Running CMake with arguments:"
+        Write-Host $cmakeArgs
         
-        Invoke-Expression $cmakeCmd
+        & cmake @cmakeArgs
         
         if ($LASTEXITCODE -ne 0) {
           Write-Error "CMake configuration failed!"
           
-          # Try alternative approach - check if we need to disable auto-download
           Write-Host "Trying alternative configuration..."
           
-          $cmakeCmd2 = @"
-cmake .. `
-  -G "Visual Studio 17 2022" `
-  -A "x64" `
-  -DCMAKE_BUILD_TYPE:STRING=$env:BUILD_TYPE `
-  -DCMAKE_INSTALL_PREFIX:STRING="../$env:INSTALL_PREFIX" `
-  -DHAVE_COMPLEX:BOOL=OFF `
-  -DBUILD_METIS:BOOL=ON `
-  -DDOWNLOAD_SUITESPARSE:BOOL=OFF `
-  -DDOWNLOAD_METIS:BOOL=OFF `
-  -DSUITESPARSE_INCLUDE_DIR_HINTS:PATH="$(Get-Location)\..\SuiteSparse" `
-  -DMETIS_INCLUDE_DIR_HINTS:PATH="$(Get-Location)\..\metis"
-"@
+          $cmakeArgs2 = @(
+            "..",
+            "-G", "Visual Studio 17 2022",
+            "-A", "x64",
+            "-DCMAKE_BUILD_TYPE:STRING=$env:BUILD_TYPE",
+            "-DCMAKE_INSTALL_PREFIX:STRING=../$env:INSTALL_PREFIX",
+            "-DHAVE_COMPLEX:BOOL=OFF",
+            "-DBUILD_METIS:BOOL=ON",
+            "-DDOWNLOAD_SUITESPARSE:BOOL=OFF",
+            "-DDOWNLOAD_METIS:BOOL=OFF"
+          )
           
-          Write-Host "Alternative command: $cmakeCmd2"
-          Invoke-Expression $cmakeCmd2
+          & cmake @cmakeArgs2
           
           if ($LASTEXITCODE -ne 0) {
             Write-Error "Alternative CMake configuration also failed!"
-            
-            # Show more debug info
-            Write-Host "SuiteSparse directory structure:"
-            if (Test-Path "..\SuiteSparse") {
-              Get-ChildItem -Path "..\SuiteSparse" -Directory | Select-Object Name
-            }
-            
             exit 1
           }
         }
         
-        Write-Host "CMake configuration completed successfully"
+        Write-Host "CMake configuration completed"
         
     # ========== PHASE 5: Build SuiteSparse ==========
     - name: Phase 5 - Build SuiteSparse
@@ -245,44 +157,21 @@ cmake .. `
       shell: powershell
       run: |
         Write-Host "Building SuiteSparse..."
-        Write-Host "Build type: $env:BUILD_TYPE"
         
-        # Build all targets
         $buildCmd = "cmake --build . --config $env:BUILD_TYPE --parallel 4"
         Write-Host "Running: $buildCmd"
+        
         Invoke-Expression $buildCmd
         
         if ($LASTEXITCODE -ne 0) {
           Write-Error "Build failed!"
-          
-          # Try building just the main targets
-          Write-Host "Trying to build individual targets..."
-          
-          $targets = @("SuiteSparseProject", "cholmod", "umfpack", "spqr", "amd", "camd", "colamd", "ccolamd")
-          foreach ($target in $targets) {
-            Write-Host "Building target: $target"
-            $cmd = "cmake --build . --config $env:BUILD_TYPE --target $target"
-            Invoke-Expression $cmd
-            if ($LASTEXITCODE -ne 0) {
-              Write-Warning "Failed to build target: $target"
-            }
-          }
-          
-          # Check if we built anything
-          $libs = Get-ChildItem -Path . -Recurse -Filter "*.lib" -File
-          if ($libs.Count -eq 0) {
-            Write-Error "No libraries were built!"
-            exit 1
-          } else {
-            Write-Host "Built $($libs.Count) libraries despite some errors"
-          }
-        } else {
-          Write-Host "SuiteSparse build completed successfully"
+          exit 1
         }
         
-        # List built libraries
+        Write-Host "SuiteSparse build completed"
+        
         Write-Host "Built libraries:"
-        Get-ChildItem -Path . -Recurse -Filter "*.lib" -File | Select-Object -First 20 FullName
+        Get-ChildItem -Path . -Recurse -Filter "*.lib" -File | Select-Object -First 10 FullName
         
     # ========== PHASE 6: Install Libraries ==========
     - name: Phase 6 - Install Libraries
@@ -291,66 +180,34 @@ cmake .. `
       run: |
         Write-Host "Installing libraries..."
         
-        # Run install target
         $installCmd = "cmake --build . --config $env:BUILD_TYPE --target INSTALL"
         Write-Host "Running: $installCmd"
+        
         Invoke-Expression $installCmd
         
         if ($LASTEXITCODE -ne 0) {
           Write-Error "Install failed!"
           
-          # Try manual copy if install target fails
-          Write-Host "Attempting manual copy of libraries..."
+          Write-Host "Attempting manual copy..."
           $installPath = "../$env:INSTALL_PREFIX"
-          New-Item -ItemType Directory -Force -Path "$installPath\lib" | Out-Null
-          New-Item -ItemType Directory -Force -Path "$installPath\include" | Out-Null
+          New-Item -ItemType Directory -Force -Path "$installPath/lib" | Out-Null
+          New-Item -ItemType Directory -Force -Path "$installPath/include" | Out-Null
           
-          # Copy libraries
           $libs = Get-ChildItem -Path . -Recurse -Filter "*.lib" -File
           foreach ($lib in $libs) {
-            Copy-Item -Path $lib.FullName -Destination "$installPath\lib\" -Force
-            Write-Host "Copied: $($lib.Name)"
+            Copy-Item -Path $lib.FullName -Destination "$installPath/lib/" -Force
           }
           
-          # Copy DLLs
-          $dlls = Get-ChildItem -Path . -Recurse -Filter "*.dll" -File
-          foreach ($dll in $dlls) {
-            Copy-Item -Path $dll.FullName -Destination "$installPath\lib\" -Force
-            Write-Host "Copied: $($dll.Name)"
-          }
-          
-          # Try to copy headers
-          if (Test-Path "..\SuiteSparse") {
-            $includeDirs = @("AMD", "CAMD", "COLAMD", "CCOLAMD", "CHOLMOD", "Include", "UMFPACK", "SPQR", "SuiteSparse_config")
-            foreach ($dir in $includeDirs) {
-              $sourcePath = "..\SuiteSparse\$dir"
-              if (Test-Path $sourcePath) {
-                Get-ChildItem -Path $sourcePath -Filter "*.h" -File | ForEach-Object {
-                  Copy-Item -Path $_.FullName -Destination "$installPath\include\" -Force
-                }
-              }
-            }
-          }
+          Write-Host "Copied $($libs.Count) libraries"
         }
         
         Write-Host "Installation completed"
         
-        # Verify installation
         $installPath = "../$env:INSTALL_PREFIX"
         if (Test-Path $installPath) {
           Write-Host "Installation summary:"
-          $libCount = (Get-ChildItem -Path "$installPath\lib" -Filter "*.lib" -File -ErrorAction SilentlyContinue | Measure-Object).Count
-          $dllCount = (Get-ChildItem -Path "$installPath\lib" -Filter "*.dll" -File -ErrorAction SilentlyContinue | Measure-Object).Count
-          $headerCount = (Get-ChildItem -Path "$installPath\include" -Filter "*.h" -File -ErrorAction SilentlyContinue | Measure-Object).Count
-          
-          Write-Host "  Libraries (.lib): $libCount"
-          Write-Host "  DLLs (.dll): $dllCount"
-          Write-Host "  Headers (.h): $headerCount"
-          
-          # List key files
-          Write-Host "Key files found:"
-          Get-ChildItem -Path "$installPath\lib" -Filter "*cholmod*" -File | Select-Object -First 5 Name
-          Get-ChildItem -Path "$installPath\lib" -Filter "*umfpack*" -File | Select-Object -First 5 Name
+          $libCount = (Get-ChildItem -Path "$installPath/lib" -Filter "*.lib" -File -ErrorAction SilentlyContinue | Measure-Object).Count
+          Write-Host "  Libraries: $libCount"
         }
         
     # ========== PHASE 7: Package and Upload Artifacts ==========
@@ -363,40 +220,33 @@ cmake .. `
         $installPath = "../$env:INSTALL_PREFIX"
         
         if (-not (Test-Path $installPath)) {
-          Write-Error "Installation path does not exist: $installPath"
+          Write-Error "Installation path does not exist"
           exit 1
         }
         
-        # Create timestamped archive
         $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
-        $archiveName = "suitesparse-windows-$env:BUILD_TYPE-$env:SUITESPARSE_VERSION-$timestamp"
+        $archiveName = "suitesparse-windows-$env:BUILD_TYPE-$env:SUITESPARSE_VERSION-$timestamp.zip"
         
-        Write-Host "Creating archive: $archiveName.zip"
+        Write-Host "Creating archive: $archiveName"
         
-        # Change to install directory to create cleaner archive
         $originalDir = Get-Location
         Set-Location ..
         
-        Compress-Archive -Path "$env:INSTALL_PREFIX\*" -DestinationPath "build\$archiveName.zip" -CompressionLevel Optimal
+        Compress-Archive -Path "$env:INSTALL_PREFIX/*" -DestinationPath "build/$archiveName" -CompressionLevel Optimal
         
         Set-Location $originalDir
         
-        if (Test-Path "$archiveName.zip") {
-          $archiveSize = (Get-Item "$archiveName.zip").Length / 1MB
-          Write-Host "Created archive: $archiveName.zip (Size: {0:N2} MB)" -f $archiveSize
-          
-          echo "ARCHIVE_NAME=$archiveName.zip" | Out-File -FilePath $env:GITHUB_ENV -Append
-          echo "INSTALL_PATH=$installPath" | Out-File -FilePath $env:GITHUB_ENV -Append
-        else {
-          Write-Error "Failed to create archive!"
-          exit 1
+        if (Test-Path $archiveName) {
+          $archiveSize = (Get-Item $archiveName).Length / 1MB
+          Write-Host "Created archive: $archiveName (Size: {0:N2} MB)" -f $archiveSize
+          echo "ARCHIVE_NAME=$archiveName" | Out-File -FilePath $env:GITHUB_ENV -Append
         }
         
     - name: Phase 7 - Upload Build Artifacts
       id: upload_artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: suitesparse-windows-${{ env.BUILD_TYPE }}-${{ env.SUITESPARSE_VERSION }}
+        name: suitesparse-windows-${{ env.BUILD_TYPE }}
         path: |
           build/*.zip
           ${{ env.INSTALL_PREFIX }}
