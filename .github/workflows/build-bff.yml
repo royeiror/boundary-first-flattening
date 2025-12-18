@@ -175,32 +175,28 @@ jobs:
     - name: Package for distribution
       shell: powershell
       run: |
-        # Create README
-        $readmeContent = @"
-# BFF (Boundary First Flattening) v1.6 - Windows Binary
-
-## Included Files
-- bff-gui.exe: GUI application for mesh parameterization
-- bff.exe: Command-line interface
-
-## Requirements
-- Windows 10 or later
-- Visual C++ Redistributable (if not already installed)
-
-## Usage
-Double-click bff-gui.exe to launch the graphical interface.
-
-For command-line usage, run:
-  bff.exe --help
-
-## Build Information
-Built on GitHub Actions using:
-- SuiteSparse 7.6.1
-- FLTK 1.3.9
-- MSVC compiler
-"@
-        
-        $readmeContent | Out-File -FilePath "bff-dist\README.txt" -Encoding UTF8
+        # Create README using individual lines
+        Set-Content -Path "bff-dist\README.txt" -Value "# BFF (Boundary First Flattening) v1.6 - Windows Binary" -Encoding UTF8
+        Add-Content -Path "bff-dist\README.txt" -Value "" -Encoding UTF8
+        Add-Content -Path "bff-dist\README.txt" -Value "## Included Files" -Encoding UTF8
+        Add-Content -Path "bff-dist\README.txt" -Value "- bff-gui.exe: GUI application for mesh parameterization" -Encoding UTF8
+        Add-Content -Path "bff-dist\README.txt" -Value "- bff.exe: Command-line interface" -Encoding UTF8
+        Add-Content -Path "bff-dist\README.txt" -Value "" -Encoding UTF8
+        Add-Content -Path "bff-dist\README.txt" -Value "## Requirements" -Encoding UTF8
+        Add-Content -Path "bff-dist\README.txt" -Value "- Windows 10 or later" -Encoding UTF8
+        Add-Content -Path "bff-dist\README.txt" -Value "- Visual C++ Redistributable (if not already installed)" -Encoding UTF8
+        Add-Content -Path "bff-dist\README.txt" -Value "" -Encoding UTF8
+        Add-Content -Path "bff-dist\README.txt" -Value "## Usage" -Encoding UTF8
+        Add-Content -Path "bff-dist\README.txt" -Value "Double-click bff-gui.exe to launch the graphical interface." -Encoding UTF8
+        Add-Content -Path "bff-dist\README.txt" -Value "" -Encoding UTF8
+        Add-Content -Path "bff-dist\README.txt" -Value "For command-line usage, run:" -Encoding UTF8
+        Add-Content -Path "bff-dist\README.txt" -Value "  bff.exe --help" -Encoding UTF8
+        Add-Content -Path "bff-dist\README.txt" -Value "" -Encoding UTF8
+        Add-Content -Path "bff-dist\README.txt" -Value "## Build Information" -Encoding UTF8
+        Add-Content -Path "bff-dist\README.txt" -Value "Built on GitHub Actions using:" -Encoding UTF8
+        Add-Content -Path "bff-dist\README.txt" -Value "- SuiteSparse 7.6.1" -Encoding UTF8
+        Add-Content -Path "bff-dist\README.txt" -Value "- FLTK 1.3.9" -Encoding UTF8
+        Add-Content -Path "bff-dist\README.txt" -Value "- MSVC compiler" -Encoding UTF8
         
         # Create ZIP archive
         Compress-Archive -Path "bff-dist\*" -DestinationPath "bff-windows-x64-v1.6.zip" -Force
