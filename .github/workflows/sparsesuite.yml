@@ -34,20 +34,22 @@ jobs:
       shell: powershell
       run: |
         Write-Host "Validating workspace structure..."
+        
+        # Check for essential files
         if (-not (Test-Path "CMakeLists.txt")) {
           Write-Error "CMakeLists.txt not found! This repository might not have the correct structure."
           exit 1
         }
-        Write-Host "✓ CMakeLists.txt found"
+        Write-Host "CMakeLists.txt found"
         
         # Create necessary directories
         New-Item -ItemType Directory -Force -Path build | Out-Null
-        Write-Host "✓ Created build directory"
+        Write-Host "Created build directory"
         
         # Set environment variable for the source path
         $SP_ROOT = (Get-Location).Path
-        echo "SP_ROOT=$SP_ROOT" >> $env:GITHUB_ENV
-        Write-Host "✓ Set SP_ROOT to: $SP_ROOT"
+        echo "SP_ROOT=$SP_ROOT" | Out-File -FilePath $env:GITHUB_ENV -Append
+        Write-Host "Set SP_ROOT to: $SP_ROOT"
         
     # ========== PHASE 2: Install Dependencies ==========
     - name: Phase 2 - Install CMake
@@ -62,16 +64,22 @@ jobs:
       run: |
         Write-Host "Installing build tools..."
         
-        # Check for Visual Studio (comes with windows-latest runner)
-        $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
-        if ($vsPath) {
-          Write-Host "✓ Visual Studio found at: $vsPath"
+        # Check for Visual Studio
+        if (Test-Path "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe") {
+          $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          if ($vsPath) {
+            Write-Host "Visual Studio found at: $vsPath"
+          } else {
+            Write-Error "Visual Studio installation not found by vswhere!"
+            exit 1
+          }
         } else {
-          Write-Error "Visual Studio not found!"
-          exit 1
+          Write-Host "vswhere.exe not found, checking for alternative VS installation..."
+          # Windows-latest runner should have VS installed
+          Write-Host "Assuming Visual Studio is available on windows-latest runner"
         }
         
-        Write-Host "✓ Build tools are available"
+        Write-Host "Build tools are available"
         
     # ========== PHASE 3: Configure with CMake ==========
     - name: Phase 3 - Configure CMake
@@ -83,28 +91,25 @@ jobs:
         # Change to build directory
         Set-Location build
         
-        # Run CMake configuration with specific settings for Windows
-        # Using Ninja generator for faster builds (comes with windows-latest)
-        cmake .. `
-          -G "Ninja" `
-          -DCMAKE_BUILD_TYPE:STRING=$env:BUILD_TYPE `
-          -DCMAKE_INSTALL_PREFIX:STRING="../$env:INSTALL_PREFIX" `
-          -DCMAKE_POLICY_DEFAULT_CMP0022:STRING=NEW `
-          -DCMAKE_MAKE_PROGRAM:STRING=ninja `
-          -DHAVE_COMPLEX:BOOL=OFF `
-          -A x64
+        # Run CMake configuration
+        # Note: Using Visual Studio generator since SuiteSparse may need specific VS settings
+        $cmakeCmd = "cmake .. "
+        $cmakeCmd += "-G `"Visual Studio 17 2022`" "
+        $cmakeCmd += "-A `"x64`" "
+        $cmakeCmd += "-DCMAKE_BUILD_TYPE:STRING=$env:BUILD_TYPE "
+        $cmakeCmd += "-DCMAKE_INSTALL_PREFIX:STRING=`"../$env:INSTALL_PREFIX`" "
+        $cmakeCmd += "-DHAVE_COMPLEX:BOOL=OFF "
+        $cmakeCmd += "-DCMAKE_POLICY_DEFAULT_CMP0022:STRING=NEW"
         
-        # Check if configuration succeeded
+        Write-Host "Running: $cmakeCmd"
+        Invoke-Expression $cmakeCmd
+        
         if ($LASTEXITCODE -ne 0) {
           Write-Error "CMake configuration failed!"
           exit 1
         }
         
-        Write-Host "✓ CMake configuration completed"
-        
-        # List generated files for debugging
-        Write-Host "Generated files in build directory:"
-        Get-ChildItem -File | Select-Object -First 10 Name
+        Write-Host "CMake configuration completed"
         
     # ========== PHASE 4: Build SuiteSparse ==========
     - name: Phase 4 - Build SuiteSparse
@@ -112,16 +117,24 @@ jobs:
       shell: powershell
       run: |
         Write-Host "Building SuiteSparse..."
+        Write-Host "Build type: $env:BUILD_TYPE"
         
-        # Build with Ninja
-        cmake --build . --config $env:BUILD_TYPE --target ALL_BUILD
+        # Build with MSBuild (Visual Studio)
+        $buildCmd = "cmake --build . --config $env:BUILD_TYPE"
+        Write-Host "Running: $buildCmd"
+        Invoke-Expression $buildCmd
         
         if ($LASTEXITCODE -ne 0) {
           Write-Error "Build failed!"
           exit 1
         }
         
-        Write-Host "✓ SuiteSparse build completed"
+        Write-Host "SuiteSparse build completed"
+        
+        # List important built files
+        Write-Host "Looking for built libraries..."
+        Get-ChildItem -Path . -Recurse -Filter "*.lib" -File | Select-Object -First 10 FullName
+        Get-ChildItem -Path . -Recurse -Filter "*.dll" -File | Select-Object -First 10 FullName
         
     # ========== PHASE 5: Install Libraries ==========
     - name: Phase 5 - Install Libraries
@@ -131,22 +144,35 @@ jobs:
         Write-Host "Installing libraries..."
         
         # Run install target
-        cmake --build . --config $env:BUILD_TYPE --target INSTALL
+        $installCmd = "cmake --build . --config $env:BUILD_TYPE --target INSTALL"
+        Write-Host "Running: $installCmd"
+        Invoke-Expression $installCmd
         
         if ($LASTEXITCODE -ne 0) {
           Write-Error "Install failed!"
           exit 1
         }
         
-        Write-Host "✓ Installation completed"
+        Write-Host "Installation completed"
         
-        # Show installed files structure
-        Write-Host "Installed files structure:"
+        # Verify installation
         $installPath = "../$env:INSTALL_PREFIX"
         if (Test-Path $installPath) {
+          Write-Host "Installation directory contents:"
           Get-ChildItem -Path $installPath -Recurse | 
             Where-Object { $_.PSIsContainer -eq $false } | 
-            Select-Object -First 20 FullName
+            Select-Object -First 30 FullName, Length
+          
+          # Check for essential files
+          $configFile = Join-Path $installPath "SuiteSparseConfig.cmake"
+          if (Test-Path $configFile) {
+            Write-Host "Found SuiteSparseConfig.cmake"
+          } else {
+            Write-Warning "SuiteSparseConfig.cmake not found!"
+          }
+        } else {
+          Write-Error "Installation directory not created!"
+          exit 1
         }
         
     # ========== PHASE 6: Package and Upload Artifacts ==========
@@ -158,68 +184,101 @@ jobs:
         
         $installPath = "../$env:INSTALL_PREFIX"
         
+        # Verify installation exists
+        if (-not (Test-Path $installPath)) {
+          Write-Error "Installation path does not exist: $installPath"
+          exit 1
+        }
+        
         # Create a timestamp for the archive
         $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
         $archiveName = "suitesparse-windows-$env:BUILD_TYPE-$timestamp"
         
-        # Create zip archive of the installed files
-        Compress-Archive -Path "$installPath/*" -DestinationPath "$archiveName.zip" -CompressionLevel Optimal
+        # Create zip archive
+        Write-Host "Creating archive: $archiveName.zip"
+        $sourcePath = Resolve-Path $installPath
+        Compress-Archive -Path "$sourcePath\*" -DestinationPath "$archiveName.zip" -CompressionLevel Optimal
         
-        # Set output variables
-        echo "ARCHIVE_NAME=$archiveName.zip" >> $env:GITHUB_ENV
-        echo "INSTALL_PATH=$installPath" >> $env:GITHUB_ENV
-        
-        Write-Host "✓ Created archive: $archiveName.zip"
+        # Verify archive was created
+        if (Test-Path "$archiveName.zip") {
+          $archiveSize = (Get-Item "$archiveName.zip").Length / 1MB
+          Write-Host "Created archive: $archiveName.zip (Size: {0:N2} MB)" -f $archiveSize
+          
+          # Set output variables
+          echo "ARCHIVE_NAME=$archiveName.zip" | Out-File -FilePath $env:GITHUB_ENV -Append
+          echo "INSTALL_PATH=$installPath" | Out-File -FilePath $env:GITHUB_ENV -Append
+        } else {
+          Write-Error "Failed to create archive!"
+          exit 1
+        }
         
     - name: Phase 6 - Upload Build Artifacts
       id: upload_artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: suitesparse-windows-build
+        name: suitesparse-windows-${{ env.BUILD_TYPE }}-${{ github.run_number }}
         path: |
-          build/${{ env.ARCHIVE_NAME }}
+          build/*.zip
           build/CMakeCache.txt
-          build/CMakeFiles/CMakeOutput.log
+          ${{ env.INSTALL_PREFIX }}
         retention-days: 7
         
-    # ========== PHASE 7: Commit to Repository ==========
-    - name: Phase 7 - Commit Built Files to Repo
+    # ========== PHASE 7: Commit to Repository (Optional) ==========
+    - name: Phase 7 - Commit Built Files to Repo (Optional)
       id: commit_to_repo
+      if: success() && github.event_name == 'workflow_dispatch'  # Only on manual runs
       shell: powershell
       run: |
-        Write-Host "Committing built files to repository..."
+        Write-Host "Preparing to commit built files to repository..."
         
         # Configure git
         git config --local user.email "github-actions[bot]@users.noreply.github.com"
         git config --local user.name "github-actions[bot]"
         
-        # Create a branch for the build artifacts
+        # Check if there are changes to commit
+        $artifactsDir = "built_artifacts"
+        New-Item -ItemType Directory -Force -Path $artifactsDir | Out-Null
+        
+        # Copy the installed files
+        $installPath = "$env:INSTALL_PREFIX"
+        $targetDir = "$artifactsDir/windows/$env:BUILD_TYPE/${{ github.run_number }}"
+        New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
+        
+        Copy-Item -Path "$installPath\*" -Destination $targetDir -Recurse -Force
+        
+        # Also copy the archive if it exists
+        if (Test-Path "build\$env:ARCHIVE_NAME") {
+          Copy-Item -Path "build\$env:ARCHIVE_NAME" -Destination $targetDir -Force
+        }
+        
+        # Check if there are any files to commit
+        $filesToCommit = Get-ChildItem -Path $artifactsDir -Recurse -File
+        if ($filesToCommit.Count -eq 0) {
+          Write-Host "No files to commit"
+          exit 0
+        }
+        
+        Write-Host "Files to commit:"
+        $filesToCommit | ForEach-Object { Write-Host "  $($_.FullName)" }
+        
+        # Create a branch for the artifacts
         $branchName = "build/artifacts/windows-${{ github.run_number }}"
         git checkout -b $branchName
         
-        # Copy the installed files to a specific directory in the repo
-        $artifactsDir = "built_artifacts/windows/${{ github.run_number }}"
-        New-Item -ItemType Directory -Force -Path $artifactsDir | Out-Null
-        
-        # Copy all installed files
-        Copy-Item -Path "${{ env.INSTALL_PATH }}/*" -Destination $artifactsDir -Recurse -Force
-        
-        # Also copy the archive
-        Copy-Item -Path "build/${{ env.ARCHIVE_NAME }}" -Destination "$artifactsDir/" -Force
-        
         # Add and commit
         git add $artifactsDir
-        git commit -m "Add Windows build artifacts - Run ${{ github.run_number }} (${{ env.BUILD_TYPE }})
+        git commit -m "Add Windows build artifacts - Run ${{ github.run_number }} ($env:BUILD_TYPE)
         
         Built on: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
-        Commit: ${{ github.sha }}
-        Runner: ${{ runner.os }}"
+        Source commit: ${{ github.sha }}
+        Build type: $env:BUILD_TYPE"
         
         # Push to repository
+        Write-Host "Pushing to branch: $branchName"
         git push origin $branchName
         
-        Write-Host "✓ Build artifacts committed to branch: $branchName"
+        Write-Host "Build artifacts committed to branch: $branchName"
         
-        # Set output for potential pull request creation
-        echo "ARTIFACTS_BRANCH=$branchName" >> $env:GITHUB_ENV
-        echo "ARTIFACTS_PATH=$artifactsDir" >> $env:GITHUB_ENV
+        # Create output for potential use
+        echo "ARTIFACTS_BRANCH=$branchName" | Out-File -FilePath $env:GITHUB_ENV -Append
+        echo "ARTIFACTS_PATH=$targetDir" | Out-File -FilePath $env:GITHUB_ENV -Append
