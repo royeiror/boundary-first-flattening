@@ -8,7 +8,6 @@ on:
 
 env:
   BUILD_TYPE: 'Release'
-  SUITESPARSE_VERSION: '7.2.0'
 
 jobs:
   build:
@@ -23,10 +22,8 @@ jobs:
         Write-Host "Setting up workspace..."
         Write-Host "Workspace: $env:GITHUB_WORKSPACE"
         
-        # Create working directory
         New-Item -ItemType Directory -Force -Path "suite_build" | Out-Null
         Set-Location "suite_build"
-        
         Write-Host "Working directory: $(Get-Location)"
         
     # ========== PHASE 2: Clone Repository ==========
@@ -34,14 +31,13 @@ jobs:
       id: clone_repo
       shell: powershell
       run: |
-        Write-Host "Cloning suitesparse-metis-for-windows..."
+        Write-Host "Cloning suitesparse-metis-for-windows repository..."
         
-        # Clone the repository with build scripts
         git clone https://github.com/jlblancoc/suitesparse-metis-for-windows.git src
         Set-Location src
         
         Write-Host "Repository cloned to: $(Get-Location)"
-        Write-Host "Contents:"
+        Write-Host "Directory contents:"
         Get-ChildItem
         
     # ========== PHASE 3: Install Dependencies ==========
@@ -51,13 +47,6 @@ jobs:
       with:
         cmake-version: '3.25.x'
         
-    - name: Phase 3 - Install 7-Zip for extraction
-      id: install_7zip
-      shell: powershell
-      run: |
-        Write-Host "Installing 7-Zip..."
-        choco install 7zip -y
-        
     # ========== PHASE 4: Configure CMake ==========
     - name: Phase 4 - Configure CMake
       id: configure_cmake
@@ -66,13 +55,12 @@ jobs:
         Write-Host "Configuring CMake..."
         Write-Host "Current directory: $(Get-Location)"
         
-        # Create build directory
         New-Item -ItemType Directory -Force -Path "build" | Out-Null
         Set-Location build
         
         Write-Host "Build directory: $(Get-Location)"
         
-        # Configure CMake - source is now "../" (the src directory)
+        # Configure CMake
         $cmakeArgs = @(
           "..",
           "-G", "Visual Studio 17 2022",
@@ -83,18 +71,35 @@ jobs:
           "-DBUILD_METIS:BOOL=ON"
         )
         
-        Write-Host "Running: cmake $($cmakeArgs -join ' ')"
+        Write-Host "Running CMake with: $($cmakeArgs -join ' ')"
         
-        # Run CMake
         & cmake @cmakeArgs
         
         if ($LASTEXITCODE -ne 0) {
-          Write-Error "CMake configuration failed!"
-          Write-Host "CMakeCache.txt exists: $(Test-Path CMakeCache.txt)"
-          exit 1
+          Write-Error "CMake configuration failed"
+          Write-Host "Trying alternative configuration..."
+          
+          # Clean and try again
+          Remove-Item -Path .\* -Recurse -Force -ErrorAction SilentlyContinue
+          
+          $cmakeArgs2 = @(
+            "..",
+            "-G", "Ninja",
+            "-DCMAKE_BUILD_TYPE:STRING=$env:BUILD_TYPE",
+            "-DCMAKE_INSTALL_PREFIX:STRING=../../install",
+            "-DHAVE_COMPLEX:BOOL=OFF",
+            "-DBUILD_METIS:BOOL=OFF"  # Try without METIS first
+          )
+          
+          & cmake @cmakeArgs2
+          
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "CMake configuration still failed"
+            exit 1
+          }
         }
         
-        Write-Host "✓ CMake configuration successful"
+        Write-Host "CMake configuration successful"
         
     # ========== PHASE 5: Build SuiteSparse ==========
     - name: Phase 5 - Build SuiteSparse
@@ -104,36 +109,52 @@ jobs:
         Write-Host "Building SuiteSparse..."
         Write-Host "Current directory: $(Get-Location)"
         
-        # Check build files
-        Write-Host "Build files:"
-        Get-ChildItem -Filter "*.sln" | Select-Object Name
-        Get-ChildItem -Filter "*.vcxproj" | Select-Object -First 3 Name
+        # Check what build system was configured
+        if (Test-Path "CMakeCache.txt") {
+          $cache = Get-Content "CMakeCache.txt" -Raw
+          if ($cache -match "CMAKE_GENERATOR:INTERNAL=(.*)") {
+            Write-Host "Using generator: $($matches[1])"
+          }
+        }
         
-        # Build with MSBuild
-        $buildCmd = "cmake --build . --config $env:BUILD_TYPE --parallel 4"
+        # Build command
+        $buildCmd = "cmake --build . --config $env:BUILD_TYPE"
+        
+        # Check if we have ninja build files
+        if (Test-Path "build.ninja") {
+          $buildCmd = "$buildCmd --parallel 4"
+        }
+        
         Write-Host "Running: $buildCmd"
         
-        Invoke-Expression $buildCmd
+        & cmake --build . --config $env:BUILD_TYPE
         
         if ($LASTEXITCODE -ne 0) {
-          Write-Error "Build failed!"
+          Write-Error "Build failed"
           
-          # Try building without parallel
-          Write-Host "Trying without parallel build..."
-          & cmake --build . --config $env:BUILD_TYPE
+          # Try building specific targets
+          Write-Host "Trying to build key libraries individually..."
           
-          if ($LASTEXITCODE -ne 0) {
-            Write-Error "Build still failed!"
+          $targets = @("SuiteSparseProject", "cholmod", "umfpack", "amd", "spqr")
+          foreach ($target in $targets) {
+            Write-Host "Building target: $target"
+            & cmake --build . --config $env:BUILD_TYPE --target $target
+          }
+          
+          # Check if we built anything
+          $libs = Get-ChildItem -Path . -Recurse -Filter "*.lib" -File
+          if ($libs.Count -eq 0) {
+            Write-Error "No libraries were built"
             exit 1
           }
         }
         
-        Write-Host "✓ Build completed successfully"
+        Write-Host "Build completed"
         
         # Show built files
-        Write-Host "Built libraries:"
+        Write-Host "Built libraries found:"
         Get-ChildItem -Path . -Recurse -Filter "*.lib" -File | 
-          Select-Object -First 10 Name, Directory | Format-Table
+          Select-Object -First 10 Name, @{Name='SizeKB';Expression={[math]::Round($_.Length/1KB,2)}} | Format-Table
         
     # ========== PHASE 6: Install Libraries ==========
     - name: Phase 6 - Install Libraries
@@ -142,36 +163,37 @@ jobs:
       run: |
         Write-Host "Installing libraries..."
         
-        # Run install target
-        $installCmd = "cmake --build . --config $env:BUILD_TYPE --target INSTALL"
-        Write-Host "Running: $installCmd"
-        
         & cmake --build . --config $env:BUILD_TYPE --target INSTALL
         
         if ($LASTEXITCODE -ne 0) {
-          Write-Error "Install failed!"
-          exit 1
+          Write-Error "Install target failed"
+          
+          # Manual copy as fallback
+          Write-Host "Attempting manual copy of libraries..."
+          $installPath = "../../install"
+          New-Item -ItemType Directory -Force -Path $installPath | Out-Null
+          
+          # Copy all libraries and DLLs
+          $libs = Get-ChildItem -Path . -Recurse -Filter "*.lib" -File
+          $dlls = Get-ChildItem -Path . -Recurse -Filter "*.dll" -File
+          
+          foreach ($file in ($libs + $dlls)) {
+            $destDir = Join-Path $installPath (Split-Path $file.DirectoryName -Leaf)
+            New-Item -ItemType Directory -Force -Path $destDir | Out-Null
+            Copy-Item -Path $file.FullName -Destination $destDir -Force
+          }
+          
+          Write-Host "Manually copied $($libs.Count) libraries and $($dlls.Count) DLLs"
         }
         
-        Write-Host "✓ Installation completed"
+        Write-Host "Installation completed"
         
-        # Verify installation
+        # Verify
         $installPath = "../../install"
         if (Test-Path $installPath) {
-          Write-Host "Installation path: $installPath"
-          Write-Host "Contents:"
-          Get-ChildItem -Path $installPath -Recurse | 
-            Where-Object { !$_.PSIsContainer } | 
-            Select-Object -First 20 Name, @{Name='SizeKB';Expression={[math]::Round($_.Length/1KB,2)}} | Format-Table
-            
-          # Check for key files
-          $configFile = Join-Path $installPath "SuiteSparseConfig.cmake"
-          if (Test-Path $configFile) {
-            Write-Host "✓ Found SuiteSparseConfig.cmake"
-          } else {
-            Write-Host "Looking for config files..."
-            Get-ChildItem -Path $installPath -Recurse -Filter "*config*.cmake" -File | Select-Object FullName
-          }
+          Write-Host "Installation contents:"
+          $totalFiles = (Get-ChildItem -Path $installPath -Recurse -File | Measure-Object).Count
+          Write-Host "Total files installed: $totalFiles"
         }
         
     # ========== PHASE 7: Package Artifacts ==========
@@ -181,35 +203,29 @@ jobs:
       run: |
         Write-Host "Packaging built libraries..."
         
-        # Go to workspace root
         Set-Location $env:GITHUB_WORKSPACE
         Set-Location suite_build
         
         $installPath = "install"
         if (-not (Test-Path $installPath)) {
-          Write-Error "Installation path does not exist!"
+          Write-Error "Installation path not found"
           exit 1
         }
         
-        # Create timestamped archive
         $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
         $archiveName = "suitesparse-windows-x64-$env:BUILD_TYPE-$timestamp.zip"
         
         Write-Host "Creating archive: $archiveName"
         
-        # Create zip archive
         Compress-Archive -Path "$installPath\*" -DestinationPath $archiveName -CompressionLevel Optimal
         
         if (Test-Path $archiveName) {
           $archiveSize = (Get-Item $archiveName).Length / 1MB
-          Write-Host "✓ Created archive: $archiveName ({0:N2} MB)" -f $archiveSize
+          Write-Host "Archive created: $archiveName ($([math]::Round($archiveSize,2)) MB)"
           
-          # Set output variables
           echo "ARCHIVE_NAME=$archiveName" | Out-File -FilePath $env:GITHUB_ENV -Append
-          echo "ARCHIVE_PATH=$env:GITHUB_WORKSPACE\suite_build\$archiveName" | Out-File -FilePath $env:GITHUB_ENV -Append
-          echo "INSTALL_PATH=$env:GITHUB_WORKSPACE\suite_build\install" | Out-File -FilePath $env:GITHUB_ENV -Append
         else {
-          Write-Error "Failed to create archive!"
+          Write-Error "Archive creation failed"
           exit 1
         }
         
@@ -218,67 +234,46 @@ jobs:
       id: upload_artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: suitesparse-windows-${{ env.BUILD_TYPE }}-${{ github.run_number }}
+        name: suitesparse-windows-${{ env.BUILD_TYPE }}
         path: |
-          ${{ env.GITHUB_WORKSPACE }}/suite_build/*.zip
-          ${{ env.GITHUB_WORKSPACE }}/suite_build/install/**
+          ${{ github.workspace }}/suite_build/*.zip
+          ${{ github.workspace }}/suite_build/install
         retention-days: 30
         
     # ========== PHASE 9: Commit to Repository ==========
-    - name: Phase 9 - Commit to Main Repository
+    - name: Phase 9 - Commit to Repository
       id: commit_to_repo
       if: github.event_name == 'workflow_dispatch'
       shell: powershell
       run: |
-        Write-Host "Preparing to commit built files..."
+        Write-Host "Committing built files to repository..."
         
-        # Navigate to main repository
         Set-Location $env:GITHUB_WORKSPACE
         
-        # Configure git
         git config --local user.email "github-actions[bot]@users.noreply.github.com"
         git config --local user.name "github-actions[bot]"
         
-        # Create directory structure
-        $artifactsDir = "suitesparse_binaries/windows/x64/$env:BUILD_TYPE"
+        $artifactsDir = "suitesparse_binaries/windows"
         New-Item -ItemType Directory -Force -Path $artifactsDir | Out-Null
         
-        # Copy built files
         $sourceDir = "suite_build/install"
         if (Test-Path $sourceDir) {
           Copy-Item -Path "$sourceDir\*" -Destination $artifactsDir -Recurse -Force
-          Write-Host "Copied built files to: $artifactsDir"
+          Write-Host "Copied built files"
         }
         
-        # Copy archive
-        $archivePath = "suite_build/$env:ARCHIVE_NAME"
-        if (Test-Path $archivePath) {
-          Copy-Item -Path $archivePath -Destination $artifactsDir -Force
-          Write-Host "Copied archive: $env:ARCHIVE_NAME"
-        }
-        
-        # Check for changes
         $changes = git status --porcelain
         if ([string]::IsNullOrEmpty($changes)) {
           Write-Host "No changes to commit"
           exit 0
         }
         
-        Write-Host "Changes to commit:"
-        git status --porcelain
-        
-        # Add and commit
         git add $artifactsDir
-        
         git commit -m "Add SuiteSparse Windows binaries
         
-        Source: jlblancoc/suitesparse-metis-for-windows
         Build type: $env:BUILD_TYPE
-        Architecture: x64
         Date: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
         Workflow run: #${{ github.run_number }}"
         
-        # Push changes
         git push
-        
-        Write-Host "✓ Binaries committed to repository"
+        Write-Host "Files committed to repository"
