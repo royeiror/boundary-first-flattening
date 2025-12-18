@@ -23,18 +23,16 @@ jobs:
           submodules: "recursive"
           path: suitesparse-metis-for-windows
 
-      - name: Checkout for artifact storage
-        uses: actions/checkout@v4
-        with:
-          sparse-checkout: |
-            !*
-            SuiteSparse
-            SuiteSparse/**
-            lib
-            lib/**
-            include
-            include/**
-          path: output-repo
+    - name: Checkout for artifact storage
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        sparse-checkout: |
+          SuiteSparse
+          lib
+          include
+        sparse-checkout-cone-mode: false
+        path: output-repo
 
       - name: Setup Phase - Create directories
         shell: powershell
