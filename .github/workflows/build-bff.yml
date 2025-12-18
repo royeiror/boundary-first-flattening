@@ -79,15 +79,15 @@ jobs:
         
         # Also look for common OpenBLAS file patterns
         $patterns = @("*.lib", "*.dll", "*.h")
-        foreach ($pattern in $patterns) {
-            Get-ChildItem "$env:OPENBLAS_DIR" -Recurse -Filter $pattern -File | ForEach-Object {
+        foreach ($pat in $patterns) {
+            Get-ChildItem "$env:OPENBLAS_DIR" -Recurse -Filter $pat -File | ForEach-Object {
                 $destPath = if ($_.Extension -eq ".h") { 
                     "$env:INSTALL_DIR\include\" 
                 } else { 
                     "$env:INSTALL_DIR\lib\" 
                 }
                 Copy-Item $_.FullName $destPath -Force
-                Write-Host "Copied $pattern: $($_.Name)"
+                Write-Host "Copied $($pat): $($_.Name)"
             }
         }
         
