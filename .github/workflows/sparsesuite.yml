@@ -300,7 +300,7 @@ jobs:
         
         # Create a README file
         $readmeContent = '# SuiteSparse for Windows
-
+        
 This directory contains pre-built SuiteSparse libraries for Windows x64.
 
 ## Contents
@@ -328,7 +328,7 @@ This directory contains pre-built SuiteSparse libraries for Windows x64.
 
 ## Build Information
 
-- Built on: ' + (Get-Date -Format "yyyy-MM-dd") + '
+- Built on: ' + (Get-Date -Format 'yyyy-MM-dd') + '
 - Build System: Visual Studio 2022
 - Architecture: x64
 - Configuration: Release
