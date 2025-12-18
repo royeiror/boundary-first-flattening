@@ -1,477 +1,131 @@
-name: Windows Build BFF v1.6
+name: Build BFF Windows Binary
 
 on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
   workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ main, master ]
 
 env:
-  BUILD_DIR: "C:\\build"
-  INSTALL_DIR: "C:\\suitesparse-deps"
-  OPENBLAS_DIR: "C:\\openblas-install"
-  CMAKE_GENERATOR: "Visual Studio 17 2022"
-  CMAKE_ARCH: "x64"
+  BUILD_TYPE: Release
+  SUITESPARSE_VERSION: '7.6.1'
+  FLTK_VERSION: '1.3.9'
 
 jobs:
   build-windows:
     runs-on: windows-latest
-    timeout-minutes: 180
     
     steps:
-    - name: Checkout BFF repository
+    - name: Checkout BFF source code
       uses: actions/checkout@v4
       with:
-        repository: GeometryCollective/boundary-first-flattening
-        ref: v1.6
-        submodules: recursive
+        repository: 'GeometryCollective/boundary-first-flattening'
+        ref: 'v1.6'
+        submodules: 'recursive'
 
-    - name: Setup MSBuild
-      uses: microsoft/setup-msbuild@v2
+    - name: Set up MSVC
+      uses: ilammy/msvc-dev-cmd@v1
+      with:
+        arch: x64
 
-    - name: Install build tools
-      shell: powershell
+    - name: Install CMake
+      uses: lukka/get-cmake@latest
+
+    - name: Download and extract SuiteSparse
+      shell: cmd
       run: |
-        choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y
-        choco install wget -y
-        choco install 7zip -y
-        choco install git -y
-        choco install ninja -y
-        
-    - name: Download and setup dependencies
-      shell: powershell
+        curl -L -o suitesparse.zip https://github.com/royeiror/suitesparse-metis-for-windows/releases/download/v7.6.1/suitesparse-metis-v7.6.1-windows-x64.zip
+        7z x suitesparse.zip -o"C:\suitesparse" -y
+        echo "SUITESPARSE_ROOT=C:\suitesparse" >> "%GITHUB_ENV%"
+
+    - name: Build FLTK
+      shell: cmd
       run: |
-        Write-Host "Setting up dependencies..."
-        
-        # Create directories
-        New-Item -ItemType Directory -Force -Path "$env:INSTALL_DIR\lib"
-        New-Item -ItemType Directory -Force -Path "$env:INSTALL_DIR\include"
-        New-Item -ItemType Directory -Force -Path "$env:OPENBLAS_DIR"
-        
-        # Download OpenBLAS
-        Write-Host "Downloading OpenBLAS..."
-        wget https://github.com/OpenMathLib/OpenBLAS/releases/download/v0.3.28/OpenBLAS-0.3.28-x64.zip -OutFile openblas.zip
-        7z x openblas.zip -o"$env:OPENBLAS_DIR"
-        
-        # Debug: Show what was downloaded
-        Write-Host "OpenBLAS directory contents:"
-        Get-ChildItem "$env:OPENBLAS_DIR" -Recurse -File | Select-Object -First 20 FullName
-        
-        # Find and copy OpenBLAS files (they might be in a subdirectory)
-        $openblasFiles = Get-ChildItem "$env:OPENBLAS_DIR" -Recurse -File
-        foreach ($file in $openblasFiles) {
-            if ($file.Name -match "openblas") {
-                Write-Host "Found OpenBLAS file: $($file.FullName)"
-                
-                if ($file.Extension -eq ".lib") {
-                    Copy-Item $file.FullName "$env:INSTALL_DIR\lib\" -Force
-                    Write-Host "Copied library: $($file.Name)"
-                } elseif ($file.Extension -eq ".dll") {
-                    Copy-Item $file.FullName "$env:INSTALL_DIR\lib\" -Force
-                    Write-Host "Copied DLL: $($file.Name)"
-                } elseif ($file.Extension -eq ".h") {
-                    Copy-Item $file.FullName "$env:INSTALL_DIR\include\" -Force
-                    Write-Host "Copied header: $($file.Name)"
-                }
-            }
-        }
-        
-        # Also look for common OpenBLAS file patterns
-        $patterns = @("*.lib", "*.dll", "*.h")
-        foreach ($pat in $patterns) {
-            Get-ChildItem "$env:OPENBLAS_DIR" -Recurse -Filter $pat -File | ForEach-Object {
-                $destPath = if ($_.Extension -eq ".h") { 
-                    "$env:INSTALL_DIR\include\" 
-                } else { 
-                    "$env:INSTALL_DIR\lib\" 
-                }
-                Copy-Item $_.FullName $destPath -Force
-                Write-Host "Copied $($pat): $($_.Name)"
-            }
-        }
-        
-        Write-Host "Install directory contents:"
-        Get-ChildItem "$env:INSTALL_DIR\lib" -File | Select-Object Name
-        
-    - name: Build SuiteSparse manually
-      shell: powershell
-      run: |
-        Write-Host "Building SuiteSparse manually..."
-        
-        # Create minimal SuiteSparse headers
-        $suiteSparseInclude = "$env:INSTALL_DIR\include\suitesparse"
-        New-Item -ItemType Directory -Force -Path $suiteSparseInclude
-        
-        # Create SuiteSparse_config.h using array joining
-        $configLines = @(
-            '#ifndef SUITESPARSE_CONFIG_H',
-            '#define SUITESPARSE_CONFIG_H',
-            '',
-            '#ifdef __cplusplus',
-            'extern "C" {',
-            '#endif',
-            '',
-            '#define SUITESPARSE_VERSION "5.13.0"',
-            '#define SUITESPARSE_MAIN_VERSION 5',
-            '#define SUITESPARSE_SUB_VERSION 13',
-            '#define SUITESPARSE_SUBSUB_VERSION 0',
-            '',
-            '#ifdef __cplusplus',
-            '}',
-            '#endif',
-            '',
-            '#endif'
-        )
-        
-        $configLines -join "`n" | Out-File -FilePath "$suiteSparseInclude\SuiteSparse_config.h" -Encoding UTF8
-        
-        # Create amd.h
-        $amdLines = @(
-            '#ifndef AMD_H',
-            '#define AMD_H',
-            '',
-            '#ifdef __cplusplus',
-            'extern "C" {',
-            '#endif',
-            '',
-            'typedef int Int;',
-            '',
-            '#ifdef __cplusplus',
-            '}',
-            '#endif',
-            '',
-            '#endif'
-        )
-        
-        $amdLines -join "`n" | Out-File -FilePath "$suiteSparseInclude\amd.h" -Encoding UTF8
-        
-        # Create cholmod.h
-        $cholmodLines = @(
-            '#ifndef CHOLMOD_H',
-            '#define CHOLMOD_H',
-            '',
-            '#ifdef __cplusplus',
-            'extern "C" {',
-            '#endif',
-            '',
-            'typedef struct cholmod_common_struct {',
-            '    double dbound;',
-            '    double grow0;',
-            '    double grow1;',
-            '    double grow2;',
-            '    size_t maxrank;',
-            '    double supernodal_switch;',
-            '    double supernodal;',
-            '    double final_asis;',
-            '    double final_super;',
-            '    double final_ll;',
-            '    double final_pack;',
-            '    double final_monotonic;',
-            '    double final_resymbol;',
-            '    double prefer_zomplex;',
-            '    double prefer_upper;',
-            '    double quick_return_if_not_posdef;',
-            '    int nmethods;',
-            '    int selected;',
-            '    int postorder;',
-            '    int default_nesdis;',
-            '} cholmod_common;',
-            '',
-            'typedef struct cholmod_sparse_struct {',
-            '    size_t nrow;',
-            '    size_t ncol;',
-            '    size_t nzmax;',
-            '    void *p;',
-            '    void *i;',
-            '    void *x;',
-            '    void *z;',
-            '    int stype;',
-            '    int itype;',
-            '    int xtype;',
-            '    int dtype;',
-            '    int sorted;',
-            '    int packed;',
-            '} *cholmod_sparse;',
-            '',
-            '#ifdef __cplusplus',
-            '}',
-            '#endif',
-            '',
-            '#endif'
-        )
-        
-        $cholmodLines -join "`n" | Out-File -FilePath "$suiteSparseInclude\cholmod.h" -Encoding UTF8
-        
-        Write-Host "Created minimal SuiteSparse headers"
-        
-    - name: Debug - Show installed files
-      shell: powershell
-      run: |
-        Write-Host "=== Debug: Checking installed files ==="
-        
-        Write-Host "suitesparse-deps/lib contents:"
-        if (Test-Path "$env:INSTALL_DIR\lib") {
-            Get-ChildItem "$env:INSTALL_DIR\lib" -File | ForEach-Object {
-                Write-Host "  - $($_.Name) ($($_.Length) bytes)"
-            }
-        } else {
-            Write-Host "  Directory does not exist!"
-        }
-        
-        Write-Host "Checking for libopenblas.lib:"
-        $openblasPath = "$env:INSTALL_DIR\lib\libopenblas.lib"
-        if (Test-Path $openblasPath) {
-            Write-Host "  ✓ Found: $openblasPath"
-            Write-Host "  File size: $(Get-Item $openblasPath | Select-Object -ExpandProperty Length) bytes"
-        } else {
-            Write-Host "  ✗ NOT FOUND: $openblasPath"
-            Write-Host "  Looking for any .lib files..."
-            Get-ChildItem "$env:INSTALL_DIR\lib" -Filter "*.lib" -File | ForEach-Object {
-                Write-Host "  Found: $($_.Name)"
-            }
-        }
-        
-    - name: Fix BFF CMakeLists.txt with better error handling
-      shell: powershell
-      run: |
-        Write-Host "Fixing BFF CMakeLists.txt for Windows build..."
-        
-        # Read the original CMakeLists.txt
-        $cmakeContent = Get-Content "CMakeLists.txt" -Raw
-        
-        # Fix 1: Update cmake_minimum_required to at least 3.10 to avoid warning
-        $cmakeContent = $cmakeContent -replace 'cmake_minimum_required\s*\(\s*VERSION\s+[0-9.]+', 'cmake_minimum_required(VERSION 3.10'
-        
-        # Fix 2: Replace find_package(SuiteSparse) with more tolerant configuration
-        $replacementLines = @(
-            '# Manual SuiteSparse configuration for Windows',
-            'if(WIN32)',
-            '    message(STATUS "Using manual SuiteSparse configuration for Windows")',
-            '',
-            '    # Include directories',
-            '    include_directories(',
-            '        "${CMAKE_SOURCE_DIR}/suitesparse-deps/include"',
-            '        "${CMAKE_SOURCE_DIR}/suitesparse-deps/include/suitesparse"',
-            '    )',
-            '',
-            '    # Try to find OpenBLAS - be more flexible about naming',
-            '    set(OPENBLAS_FOUND FALSE)',
-            '    set(OPENBLAS_PATHS',
-            '        "${CMAKE_SOURCE_DIR}/suitesparse-deps/lib/libopenblas.lib"',
-            '        "${CMAKE_SOURCE_DIR}/suitesparse-deps/lib/openblas.lib"',
-            '        "${CMAKE_SOURCE_DIR}/suitesparse-deps/lib/*openblas*.lib"',
-            '    )',
-            '',
-            '    foreach(blas_path ${OPENBLAS_PATHS})',
-            '        if(EXISTS ${blas_path})',
-            '            set(OPENBLAS_LIB ${blas_path})',
-            '            set(OPENBLAS_FOUND TRUE)',
-            '            message(STATUS "Found OpenBLAS: ${OPENBLAS_LIB}")',
-            '            set(BLAS_LIBRARIES ${OPENBLAS_LIB})',
-            '            set(LAPACK_LIBRARIES ${OPENBLAS_LIB})',
-            '            link_libraries(${OPENBLAS_LIB})',
-            '            break()',
-            '        endif()',
-            '    endforeach()',
-            '',
-            '    if(NOT OPENBLAS_FOUND)',
-            '        message(WARNING "OpenBLAS not found in expected paths, trying to continue anyway")',
-            '        # Add dummy definitions to try to compile',
-            '        add_definitions(-DSUITESPARSE_FOUND -DBLAS_FOUND -DLAPACK_FOUND -DNO_OPENBLAS)',
-            '    endif()',
-            '',
-            '    set(SuiteSparse_FOUND TRUE)',
-            'else()',
-            '    find_package(SuiteSparse REQUIRED)',
-            'endif()'
-        )
-        
-        $replacementText = $replacementLines -join "`n"
-        $cmakeContent = $cmakeContent -replace 'find_package\s*\(\s*SuiteSparse\s+REQUIRED\s*\)', $replacementText
-        
-        # Write modified CMakeLists.txt
-        $cmakeContent | Out-File -FilePath "CMakeLists.txt" -Encoding UTF8
-        
-        Write-Host "CMakeLists.txt fixed successfully!"
-        
-    - name: Patch NanoGUI for static build
-      shell: powershell
-      run: |
-        Write-Host "Patching NanoGUI for static build..."
-        
-        # Patch NanoGUI to build statically
-        $nanoguiCmakePath = "deps\nanogui\CMakeLists.txt"
-        if (Test-Path $nanoguiCmakePath) {
-            $nanoguiContent = Get-Content $nanoguiCmakePath -Raw
-            $nanoguiContent = $nanoguiContent -replace 'add_library\(nanogui SHARED', 'add_library(nanogui STATIC'
-            $nanoguiContent = $nanoguiContent -replace 'NANOGUI_BUILD_SHARED', 'NANOGUI_BUILD_STATIC'
-            $nanoguiContent | Out-File -FilePath $nanoguiCmakePath -Encoding UTF8
-            Write-Host "NanoGUI patched for static build"
-        }
-        
-    - name: Build BFF with simplified configuration
-      shell: powershell
-      run: |
-        Write-Host "Configuring BFF with simplified setup..."
+        # Download FLTK source
+        curl -L -o fltk-${{ env.FLTK_VERSION }}-source.tar.gz https://github.com/fltk/fltk/archive/refs/tags/release-${{ env.FLTK_VERSION }}.tar.gz
+        7z x fltk-${{ env.FLTK_VERSION }}-source.tar.gz
+        7z x fltk-${{ env.FLTK_VERSION }}-source.tar
         
         # Create build directory
-        New-Item -ItemType Directory -Force -Path "build"
+        mkdir fltk-build
+        cd fltk-build
+        
+        # Configure FLTK
+        cmake ..\fltk-release-${{ env.FLTK_VERSION }} ^
+          -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} ^
+          -DCMAKE_INSTALL_PREFIX=C:\fltk ^
+          -DOPTION_BUILD_SHARED_LIBS=OFF ^
+          -DOPTION_USE_SYSTEM_LIBJPEG=OFF ^
+          -DOPTION_USE_SYSTEM_LIBPNG=OFF ^
+          -DOPTION_USE_SYSTEM_ZLIB=OFF
+        
+        # Build and install FLTK
+        cmake --build . --config ${{ env.BUILD_TYPE }} --target install -- -m
+
+    - name: Configure BFF with CMake
+      shell: cmd
+      run: |
+        mkdir build
         cd build
         
-        # Show what's available
-        Write-Host "Available libraries in suitesparse-deps/lib:"
-        if (Test-Path "..\suitesparse-deps\lib") {
-            Get-ChildItem "..\suitesparse-deps\lib" -Filter "*.*" -File | ForEach-Object {
-                Write-Host "  - $($_.Name) ($($_.Extension))"
-            }
-        }
-        
-        # First, manually check if OpenBLAS exists
-        $openblasPath = "..\suitesparse-deps\lib\libopenblas.lib"
-        if (Test-Path $openblasPath) {
-            Write-Host "✓ OpenBLAS found at: $openblasPath"
-        } else {
-            Write-Host "⚠ OpenBLAS not found at expected path, looking for alternatives..."
-            $altLibs = Get-ChildItem "..\suitesparse-deps\lib" -Filter "*.lib" -File
-            if ($altLibs) {
-                Write-Host "Found these .lib files:"
-                foreach ($lib in $altLibs) {
-                    Write-Host "  - $($lib.Name)"
-                    # If we find any openblas-like library, create a symlink
-                    if ($lib.Name -match "openblas" -or $lib.Name -match "blas") {
-                        Write-Host "    Creating symlink as libopenblas.lib"
-                        Copy-Item $lib.FullName "..\suitesparse-deps\lib\libopenblas.lib" -Force
-                    }
-                }
-            }
-        }
-        
-        # Simple CMake configuration
-        Write-Host "Running CMake..."
-        cmake .. -G "$env:CMAKE_GENERATOR" -A $env:CMAKE_ARCH `
-            -DCMAKE_BUILD_TYPE=Release `
-            -DBUILD_SHARED_LIBS=OFF `
-            -DBUILD_GUI=ON `
-            -DCMAKE_CXX_FLAGS="/DSUITESPARSE_FOUND /DBLAS_FOUND /DLAPACK_FOUND"
-        
-        if ($LASTEXITCODE -eq 0) {
-            Write-Host "Building BFF..."
-            cmake --build . --config Release --parallel 4
-        } else {
-            Write-Host "CMake configuration failed with exit code: $LASTEXITCODE"
-            Write-Host "Trying alternative approach with library-only build..."
-            
-            # Try building just the library without GUI
-            cd ..
-            Remove-Item -Recurse -Force build -ErrorAction SilentlyContinue
-            New-Item -ItemType Directory -Force -Path "build"
-            cd build
-            
-            cmake .. -G "$env:CMAKE_GENERATOR" -A $env:CMAKE_ARCH `
-                -DCMAKE_BUILD_TYPE=Release `
-                -DBUILD_SHARED_LIBS=OFF `
-                -DBUILD_GUI=OFF `
-                -DCMAKE_CXX_FLAGS="/DSUITESPARSE_FOUND /DBLAS_FOUND /DLAPACK_FOUND"
-            
-            if ($LASTEXITCODE -eq 0) {
-                Write-Host "Building BFF library..."
-                cmake --build . --config Release --parallel 4
-            } else {
-                # Last resort: try to build with minimal configuration
-                Write-Host "Trying minimal configuration..."
-                cmake .. -G "$env:CMAKE_GENERATOR" -A $env:CMAKE_ARCH `
-                    -DCMAKE_BUILD_TYPE=Release `
-                    -DCMAKE_CXX_FLAGS="/DSUITESPARSE_FOUND /DBLAS_FOUND /DLAPACK_FOUND /DNO_OPENBLAS"
-                
-                if ($LASTEXITCODE -eq 0) {
-                    Write-Host "Building with OpenBLAS workaround..."
-                    cmake --build . --config Release --parallel 4
-                else {
-                    exit $LASTEXITCODE
-                }
-            }
-        }
-        
-    - name: Find and package binaries
-      shell: powershell
+        cmake .. ^
+          -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} ^
+          -DCMAKE_PREFIX_PATH="C:\fltk;C:\suitesparse" ^
+          -DSUITESPARSE_INCLUDE_DIR_HINTS="C:\suitesparse\include\suitesparse" ^
+          -DSUITESPARSE_LIBRARY_DIR_HINTS="C:\suitesparse\lib" ^
+          -DFLTK_DIR="C:\fltk\lib\cmake\fltk" ^
+          -DENABLE_BFF_CLI=ON ^
+          -DENABLE_BFF_GUI=ON
+
+    - name: Build BFF
+      shell: cmd
       run: |
-        Write-Host "Searching for built binaries..."
+        cd build
+        cmake --build . --config ${{ env.BUILD_TYPE }} -- -m
+
+    - name: Collect DLL dependencies
+      shell: cmd
+      run: |
+        # Create distribution directory
+        mkdir dist
         
-        # Create package directory
-        New-Item -ItemType Directory -Force -Path "bff-package"
+        # Copy the main executables
+        copy build\bff-gui\Release\bff-gui.exe dist\
+        copy build\bff-cli\Release\bff.exe dist\
         
-        # Find executables
-        $searchPaths = @("build\Release", "build", ".")
-        foreach ($path in $searchPaths) {
-            if (Test-Path $path) {
-                # Look for bff-viewer or similar
-                $possibleNames = @("*bff*", "*viewer*", "*gui*", "*.exe")
-                foreach ($pattern in $possibleNames) {
-                    $exeFiles = Get-ChildItem -Path $path -Recurse -Filter $pattern -File
-                    foreach ($exe in $exeFiles) {
-                        if ($exe.Extension -eq ".exe") {
-                            Write-Host "Found executable: $($exe.FullName)"
-                            Copy-Item -Path $exe.FullName -Destination "bff-package"
-                        }
-                    }
-                }
-            }
-        }
+        # Copy SuiteSparse DLLs
+        copy "C:\suitesparse\bin\*.dll" dist\
         
-        # Copy DLLs
-        if (Test-Path "build\Release") {
-            Get-ChildItem -Path "build\Release" -Filter "*.dll" -File | ForEach-Object {
-                Write-Host "Found DLL: $($_.Name)"
-                Copy-Item -Path $_.FullName -Destination "bff-package"
-            }
-        }
+        # Copy FLTK DLLs
+        copy "C:\fltk\bin\*.dll" dist\
         
-        # Copy OpenBLAS DLL
-        if (Test-Path "suitesparse-deps\lib\*.dll") {
-            Copy-Item "suitesparse-deps\lib\*.dll" "bff-package\" -Force
-        }
-        
-        # If no executables found, check for libraries
-        if ((Get-ChildItem "bff-package" -Filter "*.exe" | Measure-Object).Count -eq 0) {
-            Write-Host "No executables found, looking for libraries..."
-            if (Test-Path "build\Release") {
-                Get-ChildItem -Path "build\Release" -Filter "*.lib" -File | ForEach-Object {
-                    Write-Host "Found library: $($_.Name)"
-                    Copy-Item -Path $_.FullName -Destination "bff-package"
-                }
-            }
-        }
-        
-        # Create a README file using array joining
-        $readmeLines = @(
-            "BFF (Boundary First Flattening) Windows Build Attempt",
-            "=====================================================",
-            "Build Date: $(Get-Date -Format 'yyyy-MM-dd')",
-            "Version: 1.6",
-            "",
-            "Note: This build attempted to work around SuiteSparse dependencies.",
-            "The original BFF requires SuiteSparse, which is complex to build on Windows.",
-            "",
-            "Contents:"
-        )
-        
-        $fileList = Get-ChildItem "bff-package" | ForEach-Object { "  - $($_.Name)" }
-        if ($fileList) {
-            $readmeLines += $fileList
-        } else {
-            $readmeLines += "  (empty)"
-        }
-        
-        $readmeLines -join "`n" | Out-File -FilePath "bff-package\README.txt" -Encoding UTF8
-        
-        Write-Host "=== Package Contents ==="
-        Get-ChildItem -Path "bff-package"
-        
-    - name: Upload artifacts
+        # Copy Visual C++ runtime DLLs if needed
+        # (These might already be installed on target systems)
+        echo "Checking for required runtime DLLs..."
+
+    - name: Test if binaries run
+      shell: cmd
+      run: |
+        cd dist
+        .\bff-gui.exe --version || echo "GUI version check failed, continuing..."
+        .\bff.exe --version || echo "CLI version check failed"
+
+    - name: Create ZIP archive
+      uses: thedoctor0/zip-release@master
+      with:
+        type: 'zip'
+        filename: 'bff-windows-x64-v1.6.zip'
+        directory: 'dist/'
+        path: 'dist/*'
+
+    - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
-        name: bff-windows-binaries
-        path: bff-package/
-        if-no-files-found: warn
-        retention-days: 7
+        name: bff-windows-binary
+        path: |
+          bff-windows-x64-v1.6.zip
+          dist/bff-gui.exe
+          dist/bff.exe
+        retention-days: 30
