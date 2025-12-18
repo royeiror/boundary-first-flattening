@@ -1,365 +1,225 @@
+name: Build SuiteSparse for Windows
+
+on:
+  workflow_dispatch: # Manual trigger for control
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'build_suitesparse.yml'
+      - '.github/workflows/build_suitesparse.yml'
+      - 'CMakeLists.txt'
+      - '**/*.cmake'
+  pull_request:
+    branches: [ main, master ]
+
+env:
+  BUILD_TYPE: 'Release'
+  INSTALL_PREFIX: 'build/install'
+  
 jobs:
   build:
     runs-on: windows-latest
     
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-      with:
-        submodules: 'recursive'
-        path: suitesparse-metis-for-windows
-      
-    - name: Checkout for artifact storage
+    # ========== PHASE 1: Setup and Source Preparation ==========
+    - name: Phase 1 - Checkout Repository
+      id: checkout
       uses: actions/checkout@v4
       with:
         fetch-depth: 0
-        sparse-checkout: |
-          SuiteSparse
-          lib
-          include
-        sparse-checkout-cone-mode: false
-        path: output-repo
-    
-      - name: Setup Phase - Create directories
-        shell: powershell
-        run: |
-          Write-Host "=== SETUP PHASE ==="
-          New-Item -ItemType Directory -Force -Path ${{ env.BUILD_DIR }}
-          New-Item -ItemType Directory -Force -Path ${{ env.INSTALL_DIR }}
-          Write-Host "Directories created successfully"
-
-      - name: Setup Phase - Install dependencies
-        shell: powershell
-        run: |
-          Write-Host "=== INSTALLING DEPENDENCIES ==="
-          choco install -y cmake --installargs 'ADD_CMAKE_TO_PATH=System'
-          choco install -y visualstudio2022buildtools --package-parameters "--add Microsoft.VisualStudio.Workload.VCTools --includeRecommended --includeOptional"
-          Write-Host "Dependencies installed"
-
-      - name: Build Phase 1 - METIS/GraphBLAS dependencies
-        shell: cmd
-        run: |
-          echo === BUILD PHASE 1: METIS/GraphBLAS ===
-          cd "%REPO_DIR%"
-          
-          echo Building GraphBLAS...
-          cd GraphBLAS
-          if not exist build mkdir build
-          cd build
-          cmake .. -G "Visual Studio 17 2022" -A x64 -DCMAKE_INSTALL_PREFIX="%INSTALL_DIR%" -DCMAKE_BUILD_TYPE=Release
-          cmake --build . --config Release --target install
-          if %errorlevel% neq 0 exit /b %errorlevel%
-          cd ..\..
-          
-          echo Building METIS...
-          cd metis
-          if not exist build mkdir build
-          cd build
-          cmake .. -G "Visual Studio 17 2022" -A x64 -DCMAKE_INSTALL_PREFIX="%INSTALL_DIR%" -DCMAKE_BUILD_TYPE=Release -DGKLIB_PATH="..\GKlib"
-          cmake --build . --config Release --target install
-          if %errorlevel% neq 0 exit /b %errorlevel%
-          cd ..\..
-          
-          echo "Phase 1 completed successfully"
-
-      - name: Build Phase 2 - SuiteSparse Core Libraries
-        shell: cmd
-        run: |
-          echo === BUILD PHASE 2: SuiteSparse Core ===
-          cd "%REPO_DIR%"
-          
-          echo Building SuiteSparse_config...
-          cd SuiteSparse_config
-          if not exist build mkdir build
-          cd build
-          cmake .. -G "Visual Studio 17 2022" -A x64 ^
-            -DCMAKE_INSTALL_PREFIX="%INSTALL_DIR%" ^
-            -DCMAKE_BUILD_TYPE=Release
-          cmake --build . --config Release --target install
-          if %errorlevel% neq 0 exit /b %errorlevel%
-          cd ..\..
-          
-          echo Building AMD...
-          cd AMD
-          if not exist build mkdir build
-          cd build
-          cmake .. -G "Visual Studio 17 2022" -A x64 ^
-            -DCMAKE_INSTALL_PREFIX="%INSTALL_DIR%" ^
-            -DCMAKE_BUILD_TYPE=Release ^
-            -DSUITESPARSE_CONFIG_DIR="%INSTALL_DIR%"
-          cmake --build . --config Release --target install
-          if %errorlevel% neq 0 exit /b %errorlevel%
-          cd ..\..
-          
-          echo Building COLAMD...
-          cd COLAMD
-          if not exist build mkdir build
-          cd build
-          cmake .. -G "Visual Studio 17 2022" -A x64 ^
-            -DCMAKE_INSTALL_PREFIX="%INSTALL_DIR%" ^
-            -DCMAKE_BUILD_TYPE=Release ^
-            -DSUITESPARSE_CONFIG_DIR="%INSTALL_DIR%"
-          cmake --build . --config Release --target install
-          if %errorlevel% neq 0 exit /b %errorlevel%
-          cd ..\..
-          
-          echo "Phase 2 completed successfully"
-
-      - name: Build Phase 3 - SuiteSparse Advanced Libraries
-        shell: cmd
-        run: |
-          echo === BUILD PHASE 3: Advanced Libraries ===
-          cd "%REPO_DIR%"
-          
-          echo Building BTF...
-          cd BTF
-          if not exist build mkdir build
-          cd build
-          cmake .. -G "Visual Studio 17 2022" -A x64 ^
-            -DCMAKE_INSTALL_PREFIX="%INSTALL_DIR%" ^
-            -DCMAKE_BUILD_TYPE=Release ^
-            -DSUITESPARSE_CONFIG_DIR="%INSTALL_DIR%"
-          cmake --build . --config Release --target install
-          if %errorlevel% neq 0 exit /b %errorlevel%
-          cd ..\..
-          
-          echo Building KLU...
-          cd KLU
-          if not exist build mkdir build
-          cd build
-          cmake .. -G "Visual Studio 17 2022" -A x64 ^
-            -DCMAKE_INSTALL_PREFIX="%INSTALL_DIR%" ^
-            -DCMAKE_BUILD_TYPE=Release ^
-            -DSUITESPARSE_CONFIG_DIR="%INSTALL_DIR%"
-          cmake --build . --config Release --target install
-          if %errorlevel% neq 0 exit /b %errorlevel%
-          cd ..\..
-          
-          echo Building LDL...
-          cd LDL
-          if not exist build mkdir build
-          cd build
-          cmake .. -G "Visual Studio 17 2022" -A x64 ^
-            -DCMAKE_INSTALL_PREFIX="%INSTALL_DIR%" ^
-            -DCMAKE_BUILD_TYPE=Release ^
-            -DSUITESPARSE_CONFIG_DIR="%INSTALL_DIR%"
-          cmake --build . --config Release --target install
-          if %errorlevel% neq 0 exit /b %errorlevel%
-          cd ..\..
-          
-          echo "Phase 3 completed successfully"
-
-      - name: Build Phase 4 - CHOLMOD and Complex Libraries
-        shell: cmd
-        run: |
-          echo === BUILD PHASE 4: CHOLMOD and Complex ===
-          cd "%REPO_DIR%"
-          
-          echo Building CCOLAMD...
-          cd CCOLAMD
-          if not exist build mkdir build
-          cd build
-          cmake .. -G "Visual Studio 17 2022" -A x64 ^
-            -DCMAKE_INSTALL_PREFIX="%INSTALL_DIR%" ^
-            -DCMAKE_BUILD_TYPE=Release ^
-            -DSUITESPARSE_CONFIG_DIR="%INSTALL_DIR%"
-          cmake --build . --config Release --target install
-          if %errorlevel% neq 0 exit /b %errorlevel%
-          cd ..\..
-          
-          echo Building CAMD...
-          cd CAMD
-          if not exist build mkdir build
-          cd build
-          cmake .. -G "Visual Studio 17 2022" -A x64 ^
-            -DCMAKE_INSTALL_PREFIX="%INSTALL_DIR%" ^
-            -DCMAKE_BUILD_TYPE=Release ^
-            -DSUITESPARSE_CONFIG_DIR="%INSTALL_DIR%"
-          cmake --build . --config Release --target install
-          if %errorlevel% neq 0 exit /b %errorlevel%
-          cd ..\..
-          
-          echo Building CHOLMOD...
-          cd CHOLMOD
-          if not exist build mkdir build
-          cd build
-          cmake .. -G "Visual Studio 17 2022" -A x64 ^
-            -DCMAKE_INSTALL_PREFIX="%INSTALL_DIR%" ^
-            -DCMAKE_BUILD_TYPE=Release ^
-            -DSUITESPARSE_CONFIG_DIR="%INSTALL_DIR%" ^
-            -DCMAKE_PREFIX_PATH="%INSTALL_DIR%"
-          cmake --build . --config Release --target install
-          if %errorlevel% neq 0 exit /b %errorlevel%
-          cd ..\..
-          
-          echo "Phase 4 completed successfully"
-
-      - name: Build Phase 5 - UMFPACK and Other Libraries
-        shell: cmd
-        run: |
-          echo === BUILD PHASE 5: UMFPACK and Others ===
-          cd "%REPO_DIR%"
-          
-          echo Building UMFPACK...
-          cd UMFPACK
-          if not exist build mkdir build
-          cd build
-          cmake .. -G "Visual Studio 17 2022" -A x64 ^
-            -DCMAKE_INSTALL_PREFIX="%INSTALL_DIR%" ^
-            -DCMAKE_BUILD_TYPE=Release ^
-            -DSUITESPARSE_CONFIG_DIR="%INSTALL_DIR%" ^
-            -DCMAKE_PREFIX_PATH="%INSTALL_DIR%"
-          cmake --build . --config Release --target install
-          if %errorlevel% neq 0 exit /b %errorlevel%
-          cd ..\..
-          
-          echo Building RBio...
-          cd RBio
-          if not exist build mkdir build
-          cd build
-          cmake .. -G "Visual Studio 17 2022" -A x64 ^
-            -DCMAKE_INSTALL_PREFIX="%INSTALL_DIR%" ^
-            -DCMAKE_BUILD_TYPE=Release ^
-            -DSUITESPARSE_CONFIG_DIR="%INSTALL_DIR%"
-          cmake --build . --config Release --target install
-          if %errorlevel% neq 0 exit /b %errorlevel%
-          cd ..\..
-          
-          echo Building SPQR...
-          cd SPQR
-          if not exist build mkdir build
-          cd build
-          cmake .. -G "Visual Studio 17 2022" -A x64 ^
-            -DCMAKE_INSTALL_PREFIX="%INSTALL_DIR%" ^
-            -DCMAKE_BUILD_TYPE=Release ^
-            -DSUITESPARSE_CONFIG_DIR="%INSTALL_DIR%" ^
-            -DCMAKE_PREFIX_PATH="%INSTALL_DIR%"
-          cmake --build . --config Release --target install
-          if %errorlevel% neq 0 exit /b %errorlevel%
-          cd ..\..
-          
-          echo "Phase 5 completed successfully"
-
-      - name: Packaging Phase - Organize built files
-        shell: powershell
-        run: |
-          Write-Host "=== PACKAGING PHASE ==="
-          
-          # Create directory structure
-          $libDir = "${{ github.workspace }}/output-repo/lib"
-          $includeDir = "${{ github.workspace }}/output-repo/include"
-          $suiteSparseDir = "${{ github.workspace }}/output-repo/SuiteSparse"
-          
-          New-Item -ItemType Directory -Force -Path $libDir
-          New-Item -ItemType Directory -Force -Path $includeDir
-          New-Item -ItemType Directory -Force -Path $suiteSparseDir
-          
-          # Copy libraries
-          Write-Host "Copying libraries..."
-          Copy-Item -Path "${{ env.INSTALL_DIR }}/lib/*.lib" -Destination $libDir -Force
-          Copy-Item -Path "${{ env.INSTALL_DIR }}/lib/*.dll" -Destination $libDir -Force 2>$null
-          
-          # Copy headers
-          Write-Host "Copying headers..."
-          Copy-Item -Path "${{ env.INSTALL_DIR }}/include/*" -Destination $includeDir -Recurse -Force
-          
-          # Copy SuiteSparse components
-          Write-Host "Copying SuiteSparse components..."
-          $components = @(
-            "AMD", "BTF", "CAMD", "CCOLAMD", "CHOLMOD",
-            "COLAMD", "KLU", "LDL", "RBio", "SPQR",
-            "UMFPACK", "SuiteSparse_config", "GraphBLAS", "metis"
-          )
-          
-          foreach ($comp in $components) {
-            $sourcePath = "${{ env.REPO_DIR }}/$comp"
-            $destPath = "$suiteSparseDir/$comp"
-            if (Test-Path $sourcePath) {
-              New-Item -ItemType Directory -Force -Path $destPath
-              # Copy source files (excluding build directories)
-              Get-ChildItem -Path $sourcePath -Exclude "build", "*.build*" |
-                Copy-Item -Destination $destPath -Recurse -Force
-            }
-          }
-          
-          # Create a README file using a simple approach
-          $buildDate = Get-Date -Format "yyyy-MM-dd"
-          $readmeLines = @(
-            "# SuiteSparse for Windows",
-            "",
-            "This directory contains pre-built SuiteSparse libraries for Windows x64.",
-            "",
-            "## Contents",
-            "",
-            "- `lib/` - Compiled libraries (.lib) and DLLs",
-            "- `include/` - Header files",
-            "- `SuiteSparse/` - Source code for all components",
-            "",
-            "## Built Components",
-            "",
-            "1. GraphBLAS",
-            "2. METIS",
-            "3. SuiteSparse_config",
-            "4. AMD",
-            "5. COLAMD",
-            "6. BTF",
-            "7. KLU",
-            "8. LDL",
-            "9. CCOLAMD",
-            "10. CAMD",
-            "11. CHOLMOD",
-            "12. UMFPACK",
-            "13. RBio",
-            "14. SPQR",
-            "",
-            "## Build Information",
-            "",
-            "- Built on: $buildDate",
-            "- Build System: Visual Studio 2022",
-            "- Architecture: x64",
-            "- Configuration: Release",
-            "",
-            "## Usage",
-            "",
-            "Add the `lib/` directory to your library path and `include/` to your include path."
-          )
-          
-          $readmeLines -join "`n" | Out-File -FilePath "${{ github.workspace }}/output-repo/README.md" -Encoding UTF8
-          
-          Write-Host "Packaging completed"
-
-      - name: Commit and Push Phase
-        shell: powershell
-        run: |
-          Write-Host "=== COMMIT AND PUSH PHASE ==="
-          
-          cd "${{ github.workspace }}/output-repo"
-          
-          # Configure git
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
-          
-          # Add all files
-          git add -A
-          
-          # Check if there are changes
-          $status = git status --porcelain
-          if ($status) {
-            Write-Host "Changes detected, committing..."
-            git commit -m "Build SuiteSparse for Windows - $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
-            
-            # Push to repository
-            Write-Host "Pushing to repository..."
-            git push
-          } else {
-            Write-Host "No changes to commit"
-          }
-
-      - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: SuiteSparse-Windows-Build
-          path: |
-            ${{ github.workspace }}/install/
-            ${{ github.workspace }}/output-repo/
-          retention-days: 7
+        submodules: recursive
+        
+    - name: Phase 1 - Validate Workspace Structure
+      id: validate_structure
+      shell: powershell
+      run: |
+        Write-Host "Validating workspace structure..."
+        if (-not (Test-Path "CMakeLists.txt")) {
+          Write-Error "CMakeLists.txt not found! This repository might not have the correct structure."
+          exit 1
+        }
+        Write-Host "✓ CMakeLists.txt found"
+        
+        # Create necessary directories
+        New-Item -ItemType Directory -Force -Path build | Out-Null
+        Write-Host "✓ Created build directory"
+        
+        # Set environment variable for the source path
+        $SP_ROOT = (Get-Location).Path
+        echo "SP_ROOT=$SP_ROOT" >> $env:GITHUB_ENV
+        Write-Host "✓ Set SP_ROOT to: $SP_ROOT"
+        
+    # ========== PHASE 2: Install Dependencies ==========
+    - name: Phase 2 - Install CMake
+      id: install_cmake
+      uses: jwlawson/actions-setup-cmake@v1.14
+      with:
+        cmake-version: '3.25.x'
+        
+    - name: Phase 2 - Install Build Tools
+      id: install_tools
+      shell: powershell
+      run: |
+        Write-Host "Installing build tools..."
+        
+        # Check for Visual Studio (comes with windows-latest runner)
+        $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+        if ($vsPath) {
+          Write-Host "✓ Visual Studio found at: $vsPath"
+        } else {
+          Write-Error "Visual Studio not found!"
+          exit 1
+        }
+        
+        Write-Host "✓ Build tools are available"
+        
+    # ========== PHASE 3: Configure with CMake ==========
+    - name: Phase 3 - Configure CMake
+      id: configure_cmake
+      shell: powershell
+      run: |
+        Write-Host "Configuring CMake..."
+        
+        # Change to build directory
+        Set-Location build
+        
+        # Run CMake configuration with specific settings for Windows
+        # Using Ninja generator for faster builds (comes with windows-latest)
+        cmake .. `
+          -G "Ninja" `
+          -DCMAKE_BUILD_TYPE:STRING=$env:BUILD_TYPE `
+          -DCMAKE_INSTALL_PREFIX:STRING="../$env:INSTALL_PREFIX" `
+          -DCMAKE_POLICY_DEFAULT_CMP0022:STRING=NEW `
+          -DCMAKE_MAKE_PROGRAM:STRING=ninja `
+          -DHAVE_COMPLEX:BOOL=OFF `
+          -A x64
+        
+        # Check if configuration succeeded
+        if ($LASTEXITCODE -ne 0) {
+          Write-Error "CMake configuration failed!"
+          exit 1
+        }
+        
+        Write-Host "✓ CMake configuration completed"
+        
+        # List generated files for debugging
+        Write-Host "Generated files in build directory:"
+        Get-ChildItem -File | Select-Object -First 10 Name
+        
+    # ========== PHASE 4: Build SuiteSparse ==========
+    - name: Phase 4 - Build SuiteSparse
+      id: build_suitesparse
+      shell: powershell
+      run: |
+        Write-Host "Building SuiteSparse..."
+        
+        # Build with Ninja
+        cmake --build . --config $env:BUILD_TYPE --target ALL_BUILD
+        
+        if ($LASTEXITCODE -ne 0) {
+          Write-Error "Build failed!"
+          exit 1
+        }
+        
+        Write-Host "✓ SuiteSparse build completed"
+        
+    # ========== PHASE 5: Install Libraries ==========
+    - name: Phase 5 - Install Libraries
+      id: install_libraries
+      shell: powershell
+      run: |
+        Write-Host "Installing libraries..."
+        
+        # Run install target
+        cmake --build . --config $env:BUILD_TYPE --target INSTALL
+        
+        if ($LASTEXITCODE -ne 0) {
+          Write-Error "Install failed!"
+          exit 1
+        }
+        
+        Write-Host "✓ Installation completed"
+        
+        # Show installed files structure
+        Write-Host "Installed files structure:"
+        $installPath = "../$env:INSTALL_PREFIX"
+        if (Test-Path $installPath) {
+          Get-ChildItem -Path $installPath -Recurse | 
+            Where-Object { $_.PSIsContainer -eq $false } | 
+            Select-Object -First 20 FullName
+        }
+        
+    # ========== PHASE 6: Package and Upload Artifacts ==========
+    - name: Phase 6 - Package Built Libraries
+      id: package_artifacts
+      shell: powershell
+      run: |
+        Write-Host "Packaging built libraries..."
+        
+        $installPath = "../$env:INSTALL_PREFIX"
+        
+        # Create a timestamp for the archive
+        $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
+        $archiveName = "suitesparse-windows-$env:BUILD_TYPE-$timestamp"
+        
+        # Create zip archive of the installed files
+        Compress-Archive -Path "$installPath/*" -DestinationPath "$archiveName.zip" -CompressionLevel Optimal
+        
+        # Set output variables
+        echo "ARCHIVE_NAME=$archiveName.zip" >> $env:GITHUB_ENV
+        echo "INSTALL_PATH=$installPath" >> $env:GITHUB_ENV
+        
+        Write-Host "✓ Created archive: $archiveName.zip"
+        
+    - name: Phase 6 - Upload Build Artifacts
+      id: upload_artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: suitesparse-windows-build
+        path: |
+          build/${{ env.ARCHIVE_NAME }}
+          build/CMakeCache.txt
+          build/CMakeFiles/CMakeOutput.log
+        retention-days: 7
+        
+    # ========== PHASE 7: Commit to Repository ==========
+    - name: Phase 7 - Commit Built Files to Repo
+      id: commit_to_repo
+      shell: powershell
+      run: |
+        Write-Host "Committing built files to repository..."
+        
+        # Configure git
+        git config --local user.email "github-actions[bot]@users.noreply.github.com"
+        git config --local user.name "github-actions[bot]"
+        
+        # Create a branch for the build artifacts
+        $branchName = "build/artifacts/windows-${{ github.run_number }}"
+        git checkout -b $branchName
+        
+        # Copy the installed files to a specific directory in the repo
+        $artifactsDir = "built_artifacts/windows/${{ github.run_number }}"
+        New-Item -ItemType Directory -Force -Path $artifactsDir | Out-Null
+        
+        # Copy all installed files
+        Copy-Item -Path "${{ env.INSTALL_PATH }}/*" -Destination $artifactsDir -Recurse -Force
+        
+        # Also copy the archive
+        Copy-Item -Path "build/${{ env.ARCHIVE_NAME }}" -Destination "$artifactsDir/" -Force
+        
+        # Add and commit
+        git add $artifactsDir
+        git commit -m "Add Windows build artifacts - Run ${{ github.run_number }} (${{ env.BUILD_TYPE }})
+        
+        Built on: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+        Commit: ${{ github.sha }}
+        Runner: ${{ runner.os }}"
+        
+        # Push to repository
+        git push origin $branchName
+        
+        Write-Host "✓ Build artifacts committed to branch: $branchName"
+        
+        # Set output for potential pull request creation
+        echo "ARTIFACTS_BRANCH=$branchName" >> $env:GITHUB_ENV
+        echo "ARTIFACTS_PATH=$artifactsDir" >> $env:GITHUB_ENV
