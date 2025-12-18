@@ -66,109 +66,109 @@ jobs:
       run: |
         Write-Host "Building SuiteSparse manually..."
         
-        # Instead of trying to build from suitesparse-metis-for-windows,
-        # let's download pre-built SuiteSparse libraries
-        
-        Write-Host "Downloading pre-built SuiteSparse for Windows..."
-        
-        # Create a dummy SuiteSparse implementation with minimal files
-        # This is a workaround since building SuiteSparse is complex
-        
         # Create minimal SuiteSparse headers
         $suiteSparseInclude = "$env:INSTALL_DIR\include\suitesparse"
         New-Item -ItemType Directory -Force -Path $suiteSparseInclude
         
-        # Create minimal header files
-        @"
-#ifndef SUITESPARSE_CONFIG_H
-#define SUITESPARSE_CONFIG_H
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-#define SUITESPARSE_VERSION "5.13.0"
-#define SUITESPARSE_MAIN_VERSION 5
-#define SUITESPARSE_SUB_VERSION 13
-#define SUITESPARSE_SUBSUB_VERSION 0
-
-#ifdef __cplusplus
-}
-#endif
-
-#endif
-"@ | Out-File -FilePath "$suiteSparseInclude\SuiteSparse_config.h" -Encoding UTF8
+        # Create SuiteSparse_config.h using array joining
+        $configLines = @(
+            '#ifndef SUITESPARSE_CONFIG_H',
+            '#define SUITESPARSE_CONFIG_H',
+            '',
+            '#ifdef __cplusplus',
+            'extern "C" {',
+            '#endif',
+            '',
+            '#define SUITESPARSE_VERSION "5.13.0"',
+            '#define SUITESPARSE_MAIN_VERSION 5',
+            '#define SUITESPARSE_SUB_VERSION 13',
+            '#define SUITESPARSE_SUBSUB_VERSION 0',
+            '',
+            '#ifdef __cplusplus',
+            '}',
+            '#endif',
+            '',
+            '#endif'
+        )
         
-        @"
-#ifndef AMD_H
-#define AMD_H
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-typedef int Int;
-
-#ifdef __cplusplus
-}
-#endif
-
-#endif
-"@ | Out-File -FilePath "$suiteSparseInclude\amd.h" -Encoding UTF8
+        $configLines -join "`n" | Out-File -FilePath "$suiteSparseInclude\SuiteSparse_config.h" -Encoding UTF8
         
-        @"
-#ifndef CHOLMOD_H
-#define CHOLMOD_H
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-typedef struct cholmod_common_struct {
-    double dbound;
-    double grow0;
-    double grow1;
-    double grow2;
-    size_t maxrank;
-    double supernodal_switch;
-    double supernodal;
-    double final_asis;
-    double final_super;
-    double final_ll;
-    double final_pack;
-    double final_monotonic;
-    double final_resymbol;
-    double prefer_zomplex;
-    double prefer_upper;
-    double quick_return_if_not_posdef;
-    int nmethods;
-    int selected;
-    int postorder;
-    int default_nesdis;
-} cholmod_common;
-
-typedef struct cholmod_sparse_struct {
-    size_t nrow;
-    size_t ncol;
-    size_t nzmax;
-    void *p;
-    void *i;
-    void *x;
-    void *z;
-    int stype;
-    int itype;
-    int xtype;
-    int dtype;
-    int sorted;
-    int packed;
-} *cholmod_sparse;
-
-#ifdef __cplusplus
-}
-#endif
-
-#endif
-"@ | Out-File -FilePath "$suiteSparseInclude\cholmod.h" -Encoding UTF8
+        # Create amd.h
+        $amdLines = @(
+            '#ifndef AMD_H',
+            '#define AMD_H',
+            '',
+            '#ifdef __cplusplus',
+            'extern "C" {',
+            '#endif',
+            '',
+            'typedef int Int;',
+            '',
+            '#ifdef __cplusplus',
+            '}',
+            '#endif',
+            '',
+            '#endif'
+        )
+        
+        $amdLines -join "`n" | Out-File -FilePath "$suiteSparseInclude\amd.h" -Encoding UTF8
+        
+        # Create cholmod.h
+        $cholmodLines = @(
+            '#ifndef CHOLMOD_H',
+            '#define CHOLMOD_H',
+            '',
+            '#ifdef __cplusplus',
+            'extern "C" {',
+            '#endif',
+            '',
+            'typedef struct cholmod_common_struct {',
+            '    double dbound;',
+            '    double grow0;',
+            '    double grow1;',
+            '    double grow2;',
+            '    size_t maxrank;',
+            '    double supernodal_switch;',
+            '    double supernodal;',
+            '    double final_asis;',
+            '    double final_super;',
+            '    double final_ll;',
+            '    double final_pack;',
+            '    double final_monotonic;',
+            '    double final_resymbol;',
+            '    double prefer_zomplex;',
+            '    double prefer_upper;',
+            '    double quick_return_if_not_posdef;',
+            '    int nmethods;',
+            '    int selected;',
+            '    int postorder;',
+            '    int default_nesdis;',
+            '} cholmod_common;',
+            '',
+            'typedef struct cholmod_sparse_struct {',
+            '    size_t nrow;',
+            '    size_t ncol;',
+            '    size_t nzmax;',
+            '    void *p;',
+            '    void *i;',
+            '    void *x;',
+            '    void *z;',
+            '    int stype;',
+            '    int itype;',
+            '    int xtype;',
+            '    int dtype;',
+            '    int sorted;',
+            '    int packed;',
+            '} *cholmod_sparse;',
+            '',
+            '#ifdef __cplusplus',
+            '}',
+            '#endif',
+            '',
+            '#endif'
+        )
+        
+        $cholmodLines -join "`n" | Out-File -FilePath "$suiteSparseInclude\cholmod.h" -Encoding UTF8
         
         Write-Host "Created minimal SuiteSparse headers"
         
@@ -184,35 +184,36 @@ typedef struct cholmod_sparse_struct {
         $cmakeContent = $cmakeContent -replace 'cmake_minimum_required\s*\(\s*VERSION\s+[0-9.]+', 'cmake_minimum_required(VERSION 3.5'
         
         # Fix 2: Replace find_package(SuiteSparse) with direct linking
-        $replacement = @'
-# Manual SuiteSparse configuration for Windows
-if(WIN32)
-    message(STATUS "Using manual SuiteSparse configuration for Windows")
-    
-    # Include directories
-    include_directories(
-        "${CMAKE_SOURCE_DIR}/suitesparse-deps/include"
-        "${CMAKE_SOURCE_DIR}/suitesparse-deps/include/suitesparse"
-    )
-    
-    # Link OpenBLAS
-    set(OPENBLAS_LIB "${CMAKE_SOURCE_DIR}/suitesparse-deps/lib/libopenblas.lib")
-    if(EXISTS ${OPENBLAS_LIB})
-        message(STATUS "Found OpenBLAS: ${OPENBLAS_LIB}")
-        set(BLAS_LIBRARIES ${OPENBLAS_LIB})
-        set(LAPACK_LIBRARIES ${OPENBLAS_LIB})
-        link_libraries(${OPENBLAS_LIB})
-    else()
-        message(FATAL_ERROR "OpenBLAS not found: ${OPENBLAS_LIB}")
-    endif()
-    
-    set(SuiteSparse_FOUND TRUE)
-else()
-    find_package(SuiteSparse REQUIRED)
-endif()
-'@
+        $replacementLines = @(
+            '# Manual SuiteSparse configuration for Windows',
+            'if(WIN32)',
+            '    message(STATUS "Using manual SuiteSparse configuration for Windows")',
+            '',
+            '    # Include directories',
+            '    include_directories(',
+            '        "${CMAKE_SOURCE_DIR}/suitesparse-deps/include"',
+            '        "${CMAKE_SOURCE_DIR}/suitesparse-deps/include/suitesparse"',
+            '    )',
+            '',
+            '    # Link OpenBLAS',
+            '    set(OPENBLAS_LIB "${CMAKE_SOURCE_DIR}/suitesparse-deps/lib/libopenblas.lib")',
+            '    if(EXISTS ${OPENBLAS_LIB})',
+            '        message(STATUS "Found OpenBLAS: ${OPENBLAS_LIB}")',
+            '        set(BLAS_LIBRARIES ${OPENBLAS_LIB})',
+            '        set(LAPACK_LIBRARIES ${OPENBLAS_LIB})',
+            '        link_libraries(${OPENBLAS_LIB})',
+            '    else()',
+            '        message(FATAL_ERROR "OpenBLAS not found: ${OPENBLAS_LIB}")',
+            '    endif()',
+            '',
+            '    set(SuiteSparse_FOUND TRUE)',
+            'else()',
+            '    find_package(SuiteSparse REQUIRED)',
+            'endif()'
+        )
         
-        $cmakeContent = $cmakeContent -replace 'find_package\s*\(\s*SuiteSparse\s+REQUIRED\s*\)', $replacement
+        $replacementText = $replacementLines -join "`n"
+        $cmakeContent = $cmakeContent -replace 'find_package\s*\(\s*SuiteSparse\s+REQUIRED\s*\)', $replacementText
         
         # Write modified CMakeLists.txt
         $cmakeContent | Out-File -FilePath "CMakeLists.txt" -Encoding UTF8
@@ -281,7 +282,7 @@ endif()
             if ($LASTEXITCODE -eq 0) {
                 Write-Host "Building BFF library..."
                 cmake --build . --config Release --parallel 4
-            else {
+            } else {
                 exit $LASTEXITCODE
             }
         }
@@ -336,21 +337,27 @@ endif()
             }
         }
         
-        # Create a README file
-        $readmeContent = @"
-BFF (Boundary First Flattening) Windows Build Attempt
-=====================================================
-Build Date: $(Get-Date -Format 'yyyy-MM-dd')
-Version: 1.6
-
-Note: This build attempted to work around SuiteSparse dependencies.
-The original BFF requires SuiteSparse, which is complex to build on Windows.
-
-Contents:
-$(Get-ChildItem "bff-package" | ForEach-Object { "  - $($_.Name)" })
-"@
+        # Create a README file using array joining
+        $readmeLines = @(
+            "BFF (Boundary First Flattening) Windows Build Attempt",
+            "=====================================================",
+            "Build Date: $(Get-Date -Format 'yyyy-MM-dd')",
+            "Version: 1.6",
+            "",
+            "Note: This build attempted to work around SuiteSparse dependencies.",
+            "The original BFF requires SuiteSparse, which is complex to build on Windows.",
+            "",
+            "Contents:"
+        )
         
-        $readmeContent | Out-File -FilePath "bff-package\README.txt" -Encoding UTF8
+        $fileList = Get-ChildItem "bff-package" | ForEach-Object { "  - $($_.Name)" }
+        if ($fileList) {
+            $readmeLines += $fileList
+        } else {
+            $readmeLines += "  (empty)"
+        }
+        
+        $readmeLines -join "`n" | Out-File -FilePath "bff-package\README.txt" -Encoding UTF8
         
         Write-Host "=== Package Contents ==="
         Get-ChildItem -Path "bff-package"
