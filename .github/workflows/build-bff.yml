@@ -53,24 +53,6 @@ jobs:
         $vcpkgToolchain = "$pwd\vcpkg\scripts\buildsystems\vcpkg.cmake"
         echo "VCPKG_TOOLCHAIN=$vcpkgToolchain" >> $env:GITHUB_ENV
 
-    - name: Build FLTK (optional, if vcpkg version doesn't work)
-      shell: powershell
-      run: |
-        # Only build FLTK if needed
-        $fltkUrl = "https://github.com/fltk/fltk/archive/refs/tags/release-${{ env.FLTK_VERSION }}.tar.gz"
-        Invoke-WebRequest -Uri $fltkUrl -OutFile "fltk.tar.gz"
-        tar -xzf fltk.tar.gz
-        
-        New-Item -ItemType Directory -Force -Path "fltk-build"
-        Set-Location fltk-build
-        
-        cmake ../fltk-release-${{ env.FLTK_VERSION }} `
-          -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} `
-          -DCMAKE_INSTALL_PREFIX="C:\fltk" `
-          -DOPTION_BUILD_SHARED_LIBS=OFF
-        
-        cmake --build . --config ${{ env.BUILD_TYPE }} --target install -- /m
-
     - name: Configure BFF with vcpkg
       shell: powershell
       run: |
@@ -118,15 +100,7 @@ jobs:
           Write-Host "Copied executables"
         }
         
-        # Find and copy required DLLs
-        Write-Host "Checking dependencies..."
-        $exes = Get-ChildItem "dist\*.exe"
-        foreach ($exe in $exes) {
-          Write-Host "Dependencies for $($exe.Name):"
-          dumpbin /DEPENDENTS $exe.FullName | Select-String ".dll"
-        }
-        
-        # Copy vcpkg installed DLLs
+        # Copy vcpkg DLLs
         if (Test-Path "vcpkg\installed\x64-windows\bin\*.dll") {
           Copy-Item "vcpkg\installed\x64-windows\bin\*.dll" -Destination "dist\" -Force
           Write-Host "Copied vcpkg DLLs"
@@ -135,26 +109,25 @@ jobs:
     - name: Create distribution package
       shell: powershell
       run: |
-        # Create README
-        $readmeContent = @'
-# BFF (Boundary First Flattening) v1.6 - Windows Binary
-
-Requirements:
-- Windows 10 or later
-- Visual C++ Redistributable
-
-Usage:
-- Run bff-gui.exe for graphical interface
-- Run bff.exe for command line
-
-Built using:
-- vcpkg for dependency management
-- SuiteSparse from vcpkg
-- FLTK from vcpkg
-- MSVC compiler
-'@
+        # Create README using array approach
+        $readmeLines = @()
+        $readmeLines += "# BFF (Boundary First Flattening) v1.6 - Windows Binary"
+        $readmeLines += ""
+        $readmeLines += "Requirements:"
+        $readmeLines += "- Windows 10 or later"
+        $readmeLines += "- Visual C++ Redistributable"
+        $readmeLines += ""
+        $readmeLines += "Usage:"
+        $readmeLines += "- Run bff-gui.exe for graphical interface"
+        $readmeLines += "- Run bff.exe for command line"
+        $readmeLines += ""
+        $readmeLines += "Built using:"
+        $readmeLines += "- vcpkg for dependency management"
+        $readmeLines += "- SuiteSparse from vcpkg"
+        $readmeLines += "- FLTK from vcpkg"
+        $readmeLines += "- MSVC compiler"
         
-        Set-Content -Path "dist\README.txt" -Value $readmeContent
+        $readmeLines | Out-File -FilePath "dist\README.txt" -Encoding UTF8
         
         # Create ZIP
         Compress-Archive -Path "dist\*" -DestinationPath "bff-windows-v1.6.zip" -Force
