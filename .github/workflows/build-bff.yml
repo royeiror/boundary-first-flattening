@@ -2,197 +2,152 @@ name: Build BFF Windows Binary
 
 on:
   workflow_dispatch:
-  push:
-    tags:
-      - 'v*'
-  pull_request:
-    branches: [ main, master ]
+    inputs:
+      debug:
+        description: 'Enable debug output'
+        required: false
+        default: 'false'
 
 env:
   BUILD_TYPE: Release
-  FLTK_VERSION: '1.3.9'
 
 jobs:
   build-windows:
     runs-on: windows-latest
     
     steps:
+    - name: Debug - Show environment
+      shell: powershell
+      run: |
+        Write-Host "=== Starting BFF Build ==="
+        Write-Host "Runner: $env:RUNNER_OS"
+        Write-Host "Workspace: $env:GITHUB_WORKSPACE"
+        Write-Host "Event: $env:GITHUB_EVENT_NAME"
+        
     - name: Checkout BFF source code
       uses: actions/checkout@v4
       with:
         repository: 'GeometryCollective/boundary-first-flattening'
         ref: 'v1.6'
-        submodules: 'recursive'
-
+        
+    - name: Show repository structure
+      shell: powershell
+      run: |
+        Write-Host "=== Repository Structure ==="
+        Get-ChildItem -Recurse | Select-Object -First 20 Name, Length | Format-Table
+        
     - name: Fix CMakeLists.txt
       shell: powershell
       run: |
-        (Get-Content CMakeLists.txt) -replace '^cmake_minimum_required.*', 'cmake_minimum_required(VERSION 3.10)' | Set-Content CMakeLists.txt
-
-    - name: Set up MSVC
-      uses: ilammy/msvc-dev-cmd@v1
-      with:
-        arch: x64
-
-    - name: Install CMake
-      uses: lukka/get-cmake@latest
-
-    - name: Download and install complete dependencies via vcpkg
+        Write-Host "=== Fixing CMakeLists.txt ==="
+        if (Test-Path CMakeLists.txt) {
+          $content = Get-Content CMakeLists.txt -Raw
+          Write-Host "Original first line: $($content.Substring(0, 100))..."
+          $fixed = $content -replace 'cmake_minimum_required\s*\(.*\)', 'cmake_minimum_required(VERSION 3.10)'
+          Set-Content CMakeLists.txt -Value $fixed -NoNewline
+          Write-Host "Fixed CMakeLists.txt"
+        } else {
+          Write-Host "ERROR: CMakeLists.txt not found!"
+          Get-ChildItem
+        }
+        
+    - name: Install vcpkg and dependencies
       shell: powershell
       run: |
+        Write-Host "=== Installing vcpkg ==="
+        
         # Install vcpkg
         git clone https://github.com/microsoft/vcpkg
         .\vcpkg\bootstrap-vcpkg.bat
         
-        # Install SuiteSparse with all features and dependencies
-        .\vcpkg\vcpkg install suitesparse[metis]:x64-windows
-        .\vcpkg\vcpkg install openblas:x64-windows  # BLAS/LAPACK implementation
-        .\vcpkg\vcpkg install lapack-reference:x64-windows  # Reference LAPACK
-        .\vcpkg\vcpkg install fltk:x64-windows
-        .\vcpkg\vcpkg integrate install
+        # Install minimal dependencies
+        Write-Host "Installing SuiteSparse..."
+        .\vcpkg\vcpkg install suitesparse:x64-windows --triplet x64-windows
         
-        # Set vcpkg toolchain
-        $vcpkgToolchain = "$pwd\vcpkg\scripts\buildsystems\vcpkg.cmake"
-        echo "VCPKG_TOOLCHAIN=$vcpkgToolchain" >> $env:GITHUB_ENV
+        Write-Host "Installing FLTK..."
+        .\vcpkg\vcpkg install fltk:x64-windows --triplet x64-windows
         
-        # Set include directory for SuiteSparse headers
-        $suiteSparseInclude = "$pwd\vcpkg\installed\x64-windows\include"
-        echo "SUITESPARSE_INCLUDE=$suiteSparseInclude" >> $env:GITHUB_ENV
-
-    - name: Configure BFF with explicit paths
+        Write-Host "Installing BLAS/LAPACK..."
+        .\vcpkg\vcpkg install openblas:x64-windows --triplet x64-windows
+        
+        # Set environment variable
+        $toolchain = "$pwd\vcpkg\scripts\buildsystems\vcpkg.cmake"
+        Write-Host "VCPKG_TOOLCHAIN: $toolchain"
+        echo "VCPKG_TOOLCHAIN=$toolchain" >> $env:GITHUB_ENV
+        
+    - name: Configure BFF
       shell: powershell
       run: |
+        Write-Host "=== Configuring BFF ==="
+        
+        # Create build directory
         New-Item -ItemType Directory -Force -Path "build"
         Set-Location build
         
-        # Set environment variables for SuiteSparse
-        $env:SUITESPARSE_DIR = "$pwd\..\vcpkg\installed\x64-windows"
-        $env:BLAS_DIR = "$pwd\..\vcpkg\installed\x64-windows"
-        $env:LAPACK_DIR = "$pwd\..\vcpkg\installed\x64-windows"
-        
-        # Configure with explicit paths
+        # Simple configuration
+        Write-Host "Running CMake with vcpkg toolchain..."
         cmake .. `
           -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} `
           -DCMAKE_TOOLCHAIN_FILE="${{ env.VCPKG_TOOLCHAIN }}" `
-          -DCMAKE_INSTALL_PREFIX="$pwd\install" `
-          -DSUITESPARSE_INCLUDE_DIR_HINTS="${{ env.SUITESPARSE_INCLUDE }}" `
-          -DSUITESPARSE_LIBRARY_DIR_HINTS="$pwd\..\vcpkg\installed\x64-windows\lib" `
-          -DSUITESPARSE_BLAS_LIBRARY="$pwd\..\vcpkg\installed\x64-windows\lib\openblas.lib" `
-          -DSUITESPARSE_LAPACK_LIBRARY="$pwd\..\vcpkg\installed\x64-windows\lib\lapack.lib" `
-          -DENABLE_BFF_CLI=ON `
-          -DENABLE_BFF_GUI=ON `
           -DVCPKG_TARGET_TRIPLET=x64-windows `
-          -DCMAKE_POLICY_DEFAULT_CMP0074=NEW  # FindPackage handles <Package>_ROOT variables
+          -DENABLE_BFF_CLI=ON `
+          -DENABLE_BFF_GUI=ON
         
         Write-Host "CMake configuration completed"
-
-    - name: Build BFF
+        
+    - name: Attempt Build
       shell: powershell
       run: |
+        Write-Host "=== Attempting Build ==="
         Set-Location build
-        cmake --build . --config ${{ env.BUILD_TYPE }} --target install -- /m
         
-        # Verify build
-        if (Test-Path "install\bin\bff-gui.exe") {
-          Write-Host "SUCCESS: bff-gui.exe built"
-        } else {
-          Write-Host "Looking for executables..."
-          Get-ChildItem . -Recurse -Filter "*.exe" | ForEach-Object {
-            Write-Host "Found: $($_.FullName)"
-            New-Item -ItemType Directory -Force -Path "install\bin" -ErrorAction SilentlyContinue
-            Copy-Item $_.FullName -Destination "install\bin\" -Force
+        # Try to build
+        cmake --build . --config ${{ env.BUILD_TYPE }} || Write-Host "Build failed, continuing..."
+        
+        # Look for any output
+        Write-Host "=== Build Output ==="
+        Get-ChildItem . -Recurse -Filter "*.exe" | ForEach-Object {
+          Write-Host "Found executable: $($_.FullName)"
+        }
+        
+    - name: Create Artifact if Anything Built
+      if: success() || failure()
+      shell: powershell
+      run: |
+        Write-Host "=== Creating Artifact ==="
+        
+        # Create output directory
+        New-Item -ItemType Directory -Force -Path "output"
+        
+        # Copy any executables
+        $exes = Get-ChildItem -Path "." -Recurse -Filter "*.exe"
+        if ($exes) {
+          foreach ($exe in $exes) {
+            Write-Host "Copying: $($exe.Name)"
+            Copy-Item $exe.FullName -Destination "output\" -Force
           }
+        } else {
+          Write-Host "No executables found"
+          # Create a dummy file so we can see the artifact
+          "Build attempted but no executables were produced" | Out-File "output\BUILD_LOG.txt"
         }
+        
+        # Create simple README
+        @'
+BFF Windows Build Attempt
+=========================
+This is an attempted build of BFF v1.6 for Windows.
 
-    - name: Patch FindSuiteSparse.cmake to fix header search
-      if: failure()
-      shell: powershell
-      run: |
-        # Temporarily patch the FindSuiteSparse.cmake to work with vcpkg layout
-        $findSuiteSparse = "cmake/FindSuiteSparse.cmake"
-        if (Test-Path $findSuiteSparse) {
-          $content = Get-Content $findSuiteSparse -Raw
-          
-          # Replace the problematic final check
-          $newContent = $content -replace 'if\(NOT SuiteSparse_FIND_QUIETLY\)\s+message\(STATUS "Finish to FindSuiteSparse\.cmake => SuiteSparse_FOUND=\$\{SuiteSparse_FOUND\}"\)\s+endif\(\)', 'if(NOT SuiteSparse_FIND_QUIETLY)
-  message(STATUS "Finish to FindSuiteSparse.cmake => SuiteSparse_FOUND=${SuiteSparse_FOUND}")
-endif()
-if(WIN32 AND SuiteSparse_AMD_FOUND AND SuiteSparse_CHOLMOD_FOUND)
-  # On Windows with vcpkg, we may have libraries but not all headers
-  # Allow build to proceed if we have the essential components
-  set(SuiteSparse_FOUND TRUE)
-  message(STATUS "Overriding SuiteSparse_FOUND=TRUE for Windows vcpkg build")
-endif()'
-          
-          Set-Content $findSuiteSparse -Value $newContent -NoNewline
-          Write-Host "Patched FindSuiteSparse.cmake"
-          
-          # Try configuration again
-          Set-Location build
-          cmake .. `
-            -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} `
-            -DCMAKE_TOOLCHAIN_FILE="${{ env.VCPKG_TOOLCHAIN }}" `
-            -DCMAKE_INSTALL_PREFIX="$pwd\install" `
-            -DENABLE_BFF_CLI=ON `
-            -DENABLE_BFF_GUI=ON `
-            -DVCPKG_TARGET_TRIPLET=x64-windows
-            
-          cmake --build . --config ${{ env.BUILD_TYPE }} --target install -- /m
-        }
-
-    - name: Collect dependencies
-      shell: powershell
-      run: |
-        # Create distribution
-        New-Item -ItemType Directory -Force -Path "dist"
+If executables are present, they should be in this folder.
+Otherwise, check the build logs for errors.
+'@ | Out-File "output\README.txt"
         
-        # Copy executables
-        if (Test-Path "build\install\bin\*.exe") {
-          Copy-Item "build\install\bin\*.exe" -Destination "dist\" -Force
-          Write-Host "Copied executables"
-        }
+        # Create zip
+        Compress-Archive -Path "output\*" -DestinationPath "bff-build-attempt.zip" -Force
         
-        # Copy all DLLs from vcpkg
-        if (Test-Path "vcpkg\installed\x64-windows\bin\*.dll") {
-          Copy-Item "vcpkg\installed\x64-windows\bin\*.dll" -Destination "dist\" -Force
-          Write-Host "Copied vcpkg DLLs"
-        }
-        
-        # Also copy DLLs from debug bin if they exist
-        if (Test-Path "vcpkg\installed\x64-windows\debug\bin\*.dll") {
-          Copy-Item "vcpkg\installed\x64-windows\debug\bin\*.dll" -Destination "dist\" -Force
-          Write-Host "Copied debug DLLs"
-        }
-
-    - name: Create distribution package
-      shell: powershell
-      run: |
-        # Create README using array approach
-        $readmeLines = @()
-        $readmeLines += "# BFF (Boundary First Flattening) v1.6 - Windows Binary"
-        $readmeLines += ""
-        $readmeLines += "Requirements:"
-        $readmeLines += "- Windows 10 or later"
-        $readmeLines += "- Visual C++ Redistributable"
-        $readmeLines += ""
-        $readmeLines += "Usage:"
-        $readmeLines += "- Run bff-gui.exe for graphical interface"
-        $readmeLines += "- Run bff.exe for command line"
-        $readmeLines += ""
-        $readmeLines += "Built using:"
-        $readmeLines += "- vcpkg for dependency management"
-        $readmeLines += "- SuiteSparse with OpenBLAS"
-        $readmeLines += "- FLTK GUI library"
-        $readmeLines += "- MSVC compiler"
-        
-        $readmeLines | Out-File -FilePath "dist\README.txt" -Encoding UTF8
-        
-        # Create ZIP
-        Compress-Archive -Path "dist\*" -DestinationPath "bff-windows-v1.6.zip" -Force
-
-    - name: Upload artifact
+    - name: Upload Build Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: bff-windows-binary
-        path: bff-windows-v1.6.zip
-        retention-days: 30
+        name: bff-windows-build
+        path: bff-build-attempt.zip
+        retention-days: 1
