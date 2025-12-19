@@ -2,11 +2,6 @@ name: Build BFF Windows Binary
 
 on:
   workflow_dispatch:
-    inputs:
-      debug:
-        description: 'Enable debug output'
-        required: false
-        default: 'false'
 
 env:
   BUILD_TYPE: Release
@@ -19,10 +14,8 @@ jobs:
     - name: Debug - Show environment
       shell: powershell
       run: |
-        Write-Host "=== Starting BFF Build ==="
+        Write-Host "Starting BFF Build"
         Write-Host "Runner: $env:RUNNER_OS"
-        Write-Host "Workspace: $env:GITHUB_WORKSPACE"
-        Write-Host "Event: $env:GITHUB_EVENT_NAME"
         
     - name: Checkout BFF source code
       uses: actions/checkout@v4
@@ -33,59 +26,41 @@ jobs:
     - name: Show repository structure
       shell: powershell
       run: |
-        Write-Host "=== Repository Structure ==="
-        Get-ChildItem -Recurse | Select-Object -First 20 Name, Length | Format-Table
+        Write-Host "Repository Structure:"
+        Get-ChildItem | Select-Object Name, Length | Format-Table
         
     - name: Fix CMakeLists.txt
       shell: powershell
       run: |
-        Write-Host "=== Fixing CMakeLists.txt ==="
         if (Test-Path CMakeLists.txt) {
           $content = Get-Content CMakeLists.txt -Raw
-          Write-Host "Original first line: $($content.Substring(0, 100))..."
           $fixed = $content -replace 'cmake_minimum_required\s*\(.*\)', 'cmake_minimum_required(VERSION 3.10)'
           Set-Content CMakeLists.txt -Value $fixed -NoNewline
           Write-Host "Fixed CMakeLists.txt"
-        } else {
-          Write-Host "ERROR: CMakeLists.txt not found!"
-          Get-ChildItem
         }
         
     - name: Install vcpkg and dependencies
       shell: powershell
       run: |
-        Write-Host "=== Installing vcpkg ==="
-        
         # Install vcpkg
         git clone https://github.com/microsoft/vcpkg
         .\vcpkg\bootstrap-vcpkg.bat
         
-        # Install minimal dependencies
-        Write-Host "Installing SuiteSparse..."
-        .\vcpkg\vcpkg install suitesparse:x64-windows --triplet x64-windows
+        # Install dependencies
+        .\vcpkg\vcpkg install suitesparse:x64-windows
+        .\vcpkg\vcpkg install fltk:x64-windows
+        .\vcpkg\vcpkg install openblas:x64-windows
         
-        Write-Host "Installing FLTK..."
-        .\vcpkg\vcpkg install fltk:x64-windows --triplet x64-windows
-        
-        Write-Host "Installing BLAS/LAPACK..."
-        .\vcpkg\vcpkg install openblas:x64-windows --triplet x64-windows
-        
-        # Set environment variable
+        # Set toolchain
         $toolchain = "$pwd\vcpkg\scripts\buildsystems\vcpkg.cmake"
-        Write-Host "VCPKG_TOOLCHAIN: $toolchain"
         echo "VCPKG_TOOLCHAIN=$toolchain" >> $env:GITHUB_ENV
         
     - name: Configure BFF
       shell: powershell
       run: |
-        Write-Host "=== Configuring BFF ==="
-        
-        # Create build directory
         New-Item -ItemType Directory -Force -Path "build"
         Set-Location build
         
-        # Simple configuration
-        Write-Host "Running CMake with vcpkg toolchain..."
         cmake .. `
           -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} `
           -DCMAKE_TOOLCHAIN_FILE="${{ env.VCPKG_TOOLCHAIN }}" `
@@ -93,29 +68,18 @@ jobs:
           -DENABLE_BFF_CLI=ON `
           -DENABLE_BFF_GUI=ON
         
-        Write-Host "CMake configuration completed"
+        Write-Host "CMake configuration done"
         
-    - name: Attempt Build
+    - name: Build BFF
       shell: powershell
       run: |
-        Write-Host "=== Attempting Build ==="
         Set-Location build
+        cmake --build . --config ${{ env.BUILD_TYPE }}
         
-        # Try to build
-        cmake --build . --config ${{ env.BUILD_TYPE }} || Write-Host "Build failed, continuing..."
-        
-        # Look for any output
-        Write-Host "=== Build Output ==="
-        Get-ChildItem . -Recurse -Filter "*.exe" | ForEach-Object {
-          Write-Host "Found executable: $($_.FullName)"
-        }
-        
-    - name: Create Artifact if Anything Built
-      if: success() || failure()
+    - name: Create Artifact
+      if: always()
       shell: powershell
       run: |
-        Write-Host "=== Creating Artifact ==="
-        
         # Create output directory
         New-Item -ItemType Directory -Force -Path "output"
         
@@ -128,19 +92,17 @@ jobs:
           }
         } else {
           Write-Host "No executables found"
-          # Create a dummy file so we can see the artifact
           "Build attempted but no executables were produced" | Out-File "output\BUILD_LOG.txt"
         }
         
-        # Create simple README
-        @'
-BFF Windows Build Attempt
-=========================
-This is an attempted build of BFF v1.6 for Windows.
-
-If executables are present, they should be in this folder.
-Otherwise, check the build logs for errors.
-'@ | Out-File "output\README.txt"
+        # Create README using simple string concatenation
+        $readmeContent = "BFF Windows Build Attempt`r`n"
+        $readmeContent += "=========================`r`n`r`n"
+        $readmeContent += "This is an attempted build of BFF v1.6 for Windows.`r`n`r`n"
+        $readmeContent += "If executables are present, they should be in this folder.`r`n"
+        $readmeContent += "Otherwise, check the build logs for errors.`r`n"
+        
+        Set-Content -Path "output\README.txt" -Value $readmeContent
         
         # Create zip
         Compress-Archive -Path "output\*" -DestinationPath "bff-build-attempt.zip" -Force
