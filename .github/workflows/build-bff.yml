@@ -97,16 +97,11 @@ jobs:
         $suiteSparseInclude = "C:\suitesparse\include\suitesparse"
         $suiteSparseLib = "C:\suitesparse\lib"
         
-        # Set environment variables for SuiteSparse
-        $env:SUITESPARSE_INC = $suiteSparseInclude
-        $env:SUITESPARSE_LIB = $suiteSparseLib
-        
         # Configure BFF with manual overrides
         cmake .. `
           -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} `
           -DSUITESPARSE_INCLUDE_DIR="$suiteSparseInclude" `
           -DSUITESPARSE_LIBRARY_DIR="$suiteSparseLib" `
-          -DSUITESPARSE_FOUND=TRUE `
           -DFLTK_DIR="C:\fltk\lib\cmake\fltk" `
           -DENABLE_BFF_CLI=ON `
           -DENABLE_BFF_GUI=ON `
@@ -148,20 +143,19 @@ jobs:
           }
         }
         
-        # Create simple README
-        $readme = @"
-# BFF (Boundary First Flattening) v1.6 - Windows Binary
-
-Requirements:
-- Windows 10 or later
-- Visual C++ Redistributable
-
-Usage:
-- Run bff-gui.exe for graphical interface
-- Run bff.exe for command line
-"@
+        # Create README without problematic here-string
+        $readmeLines = @()
+        $readmeLines += "# BFF (Boundary First Flattening) v1.6 - Windows Binary"
+        $readmeLines += ""
+        $readmeLines += "Requirements:"
+        $readmeLines += "- Windows 10 or later"
+        $readmeLines += "- Visual C++ Redistributable"
+        $readmeLines += ""
+        $readmeLines += "Usage:"
+        $readmeLines += "- Run bff-gui.exe for graphical interface"
+        $readmeLines += "- Run bff.exe for command line"
         
-        Set-Content -Path "dist\README.txt" -Value $readme
+        $readmeLines | Out-File -FilePath "dist\README.txt"
         
         # Create ZIP
         Compress-Archive -Path "dist\*" -DestinationPath "bff-windows-v1.6.zip" -Force
