@@ -22,142 +22,144 @@ jobs:
       run: |
         (Get-Content CMakeLists.txt) -replace 'cmake_minimum_required\s*\(.*\)', 'cmake_minimum_required(VERSION 3.10)' | Set-Content CMakeLists.txt
         
-    - name: Download your SuiteSparse binaries
+    - name: Create SuiteSparse directory structure
       shell: powershell
       run: |
-        # Since vcpkg isn't working, let's directly use your pre-built binaries
-        # First, let's see what's actually in your repository
-        $repoUrl = "https://github.com/royeiror/suitesparse-metis-for-windows"
-        
-        # Create SuiteSparse directory
+        # Create SuiteSparse directories
         New-Item -ItemType Directory -Force -Path "C:\SuiteSparse"
         New-Item -ItemType Directory -Force -Path "C:\SuiteSparse\include"
         New-Item -ItemType Directory -Force -Path "C:\SuiteSparse\lib"
         New-Item -ItemType Directory -Force -Path "C:\SuiteSparse\bin"
         
-        # Download the entire repo as zip to examine it
-        Invoke-WebRequest -Uri "$repoUrl/archive/refs/heads/master.zip" -OutFile "suitesparse.zip"
-        Expand-Archive -Path "suitesparse.zip" -DestinationPath "." -Force
+        # Since we can't download from your repo (URLs return 404), create dummy files
+        # These will allow CMake to find "something" and we can see what's missing
         
-        # Look for files
-        Write-Host "Looking for SuiteSparse files..."
-        Get-ChildItem -Path "." -Recurse -Filter "*.lib" | Select-Object -First 10 Name, Directory | Format-Table
-        Get-ChildItem -Path "." -Recurse -Filter "*.h" | Select-Object -First 10 Name, Directory | Format-Table
+        # Create minimal SuiteSparse_config.h
+        $suiteConfig = '#ifndef SUITESPARSE_CONFIG_H
+#define SUITESPARSE_CONFIG_H
+#define SUITESPARSE_VERSION "5.10.1"
+typedef long long SuiteSparse_long;
+#endif'
+        Set-Content -Path "C:\SuiteSparse\include\SuiteSparse_config.h" -Value $suiteConfig
         
-        # Copy any found files
-        Copy-Item -Path ".\suitesparse-metis-for-windows-master\*" -Destination "C:\SuiteSparse\" -Recurse -Force -ErrorAction SilentlyContinue
+        # Create other minimal headers
+        $headers = @("amd.h", "camd.h", "ccolamd.h", "colamd.h", "cholmod.h", "ldl.h")
+        foreach ($header in $headers) {
+            "#pragma once`ntypedef int dummy_$(($header -replace '\.h$',''))_t;" | Out-File "C:\SuiteSparse\include\$header"
+        }
+        
+        # Create dummy .lib files
+        $libs = @("amd", "camd", "ccolamd", "colamd", "cholmod", "ldl", "suitesparseconfig")
+        foreach ($lib in $libs) {
+            "LIBRARY $lib`nEXPORTS`ndummy_export" | Out-File "C:\SuiteSparse\lib\$lib.lib"
+        }
+        
+        Write-Host "Created minimal SuiteSparse structure"
         
     - name: Install FLTK via vcpkg
       shell: powershell
       run: |
-        # Only install FLTK via vcpkg
         git clone https://github.com/microsoft/vcpkg
         .\vcpkg\bootstrap-vcpkg.bat
         .\vcpkg\vcpkg install fltk:x64-windows
         
-        $toolchain = "$pwd\vcpkg\scripts\buildsystems\vcpkg.cmake"
-        echo "VCPKG_TOOLCHAIN=$toolchain" >> $env:GITHUB_ENV
-        echo "FLTK_ROOT=$pwd\vcpkg\installed\x64-windows" >> $env:GITHUB_ENV
+        # Get the installed directory
+        $fltkDir = "$pwd\vcpkg\installed\x64-windows"
+        echo "FLTK_DIR=$fltkDir" >> $env:GITHUB_ENV
         
-    - name: Create custom FindSuiteSparse.cmake
+    - name: Create simple CMakeLists patch
       shell: powershell
       run: |
-        # Create a custom FindSuiteSparse.cmake that works with your binaries
-        $cmakeContent = @()
-        $cmakeContent += 'find_path(SuiteSparse_INCLUDE_DIR NAMES SuiteSparse_config.h PATHS "C:/SuiteSparse/include" "C:/SuiteSparse" NO_DEFAULT_PATH)'
-        $cmakeContent += 'find_library(SuiteSparse_AMD_LIBRARY NAMES amd PATHS "C:/SuiteSparse/lib" "C:/SuiteSparse" NO_DEFAULT_PATH)'
-        $cmakeContent += 'find_library(SuiteSparse_CAMD_LIBRARY NAMES camd PATHS "C:/SuiteSparse/lib" "C:/SuiteSparse" NO_DEFAULT_PATH)'
-        $cmakeContent += 'find_library(SuiteSparse_CCOLAMD_LIBRARY NAMES ccolamd PATHS "C:/SuiteSparse/lib" "C:/SuiteSparse" NO_DEFAULT_PATH)'
-        $cmakeContent += 'find_library(SuiteSparse_COLAMD_LIBRARY NAMES colamd PATHS "C:/SuiteSparse/lib" "C:/SuiteSparse" NO_DEFAULT_PATH)'
-        $cmakeContent += 'find_library(SuiteSparse_CHOLMOD_LIBRARY NAMES cholmod PATHS "C:/SuiteSparse/lib" "C:/SuiteSparse" NO_DEFAULT_PATH)'
-        $cmakeContent += 'find_library(SuiteSparse_LDL_LIBRARY NAMES ldl PATHS "C:/SuiteSparse/lib" "C:/SuiteSparse" NO_DEFAULT_PATH)'
-        $cmakeContent += 'find_library(SuiteSparse_SUITESPARSECONFIG_LIBRARY NAMES suitesparseconfig PATHS "C:/SuiteSparse/lib" "C:/SuiteSparse" NO_DEFAULT_PATH)'
-        $cmakeContent += ''
-        $cmakeContent += 'set(SuiteSparse_FOUND TRUE)'
-        $cmakeContent += 'set(SuiteSparse_INCLUDE_DIRS "${SuiteSparse_INCLUDE_DIR}")'
-        $cmakeContent += 'set(SuiteSparse_LIBRARIES'
-        $cmakeContent += '    ${SuiteSparse_AMD_LIBRARY}'
-        $cmakeContent += '    ${SuiteSparse_CAMD_LIBRARY}'
-        $cmakeContent += '    ${SuiteSparse_CCOLAMD_LIBRARY}'
-        $cmakeContent += '    ${SuiteSparse_COLAMD_LIBRARY}'
-        $cmakeContent += '    ${SuiteSparse_CHOLMOD_LIBRARY}'
-        $cmakeContent += '    ${SuiteSparse_LDL_LIBRARY}'
-        $cmakeContent += '    ${SuiteSparse_SUITESPARSECONFIG_LIBRARY}'
-        $cmakeContent += ')'
-        $cmakeContent += ''
-        $cmakeContent += 'message(STATUS "SuiteSparse include dir: ${SuiteSparse_INCLUDE_DIR}")'
-        $cmakeContent += 'message(STATUS "SuiteSparse libraries: ${SuiteSparse_LIBRARIES}")'
+        # Create a simple patch to bypass SuiteSparse dependency check
+        $patchContent = @'
+# Temporary patch to allow build without full SuiteSparse
+if(WIN32)
+  # Override SuiteSparse check
+  set(SuiteSparse_FOUND TRUE)
+  set(SuiteSparse_INCLUDE_DIRS "C:/SuiteSparse/include")
+  set(SuiteSparse_LIBRARIES "C:/SuiteSparse/lib/amd.lib;C:/SuiteSparse/lib/cholmod.lib")
+  
+  # Also set individual components
+  set(SuiteSparse_AMD_FOUND TRUE)
+  set(SuiteSparse_CHOLMOD_FOUND TRUE)
+  
+  message(STATUS "Bypassing SuiteSparse dependency check for Windows build")
+endif()
+'@
         
-        $cmakeContent | Out-File -FilePath "cmake/FindSuiteSparseCustom.cmake"
+        # Add this to CMakeLists.txt before find_package(SuiteSparse)
+        $cmakeLists = Get-Content CMakeLists.txt -Raw
+        $findSuiteSparse = 'find_package(SuiteSparse REQUIRED)'
+        $patched = $cmakeLists.Replace($findSuiteSparse, "$patchContent`n`n$findSuiteSparse")
+        Set-Content CMakeLists.txt -Value $patched -NoNewline
         
-    - name: Configure BFF with custom SuiteSparse
+    - name: Configure BFF with minimal setup
       shell: powershell
       run: |
         New-Item -ItemType Directory -Force -Path "build"
         Set-Location build
         
-        # Configure with custom SuiteSparse
+        # Use forward slashes for CMake paths
+        $currentDir = $pwd -replace '\\', '/'
+        $parentDir = (Get-Item $currentDir).Parent.FullName -replace '\\', '/'
+        
+        # Configure with simple settings
         cmake .. `
           -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} `
-          -DCMAKE_MODULE_PATH="$pwd\..\cmake" `
-          -DSUITESPARSE_ROOT="C:\SuiteSparse" `
-          -DFLTK_DIR="${{ env.FLTK_ROOT }}\share\fltk" `
+          -DCMAKE_INSTALL_PREFIX="$currentDir/install" `
           -DENABLE_BFF_CLI=ON `
           -DENABLE_BFF_GUI=ON `
-          -DCMAKE_INSTALL_PREFIX="$pwd\install"
+          -DSUITESPARSE_FOUND=TRUE `
+          -DSUITESPARSE_INCLUDE_DIR="C:/SuiteSparse/include" `
+          -DSUITESPARSE_LIBRARY_DIR="C:/SuiteSparse/lib"
         
         Write-Host "CMake configuration attempted"
         
-    - name: Build BFF
+    - name: Try to build BFF core
       shell: powershell
       run: |
         Set-Location build
         
-        # Try to build
-        cmake --build . --config ${{ env.BUILD_TYPE }} --target install -- /m || Write-Host "Build may have issues"
+        # Try to build just the core library first
+        Write-Host "Attempting to build core components..."
         
-        # Look for any executables
-        Get-ChildItem . -Recurse -Filter "*.exe" | ForEach-Object {
-          Write-Host "Found executable: $($_.FullName)"
-          New-Item -ItemType Directory -Force -Path "install\bin" -ErrorAction SilentlyContinue
-          Copy-Item $_.FullName -Destination "install\bin\" -Force
-        }
+        # First, let's see what targets are available
+        cmake --build . --target help 2>&1 | Select-Object -First 20
         
-    - name: Create distribution
+        # Try to build the library target if it exists
+        cmake --build . --config ${{ env.BUILD_TYPE }} --target bff 2>&1 | Select-Object -Last 50
+        
+        # Look for any built files
+        Get-ChildItem . -Recurse -Filter "*.obj" -ErrorAction SilentlyContinue | Select-Object -First 10 Name
+        
+    - name: Create debug artifact
+      if: always()
       shell: powershell
       run: |
-        New-Item -ItemType Directory -Force -Path "dist"
+        # Create output with debug info
+        New-Item -ItemType Directory -Force -Path "debug_output"
         
-        # Copy executables
-        if (Test-Path "build\install\bin\*.exe") {
-          Copy-Item "build\install\bin\*.exe" -Destination "dist\" -Force
-          Write-Host "Copied executables"
+        # Save CMake output
+        if (Test-Path "build\CMakeCache.txt") {
+            Copy-Item "build\CMakeCache.txt" -Destination "debug_output\" -Force
         }
         
-        # Copy SuiteSparse DLLs
-        if (Test-Path "C:\SuiteSparse\bin\*.dll") {
-          Copy-Item "C:\SuiteSparse\bin\*.dll" -Destination "dist\" -Force
-          Write-Host "Copied SuiteSparse DLLs"
-        }
+        # List all files in build directory
+        Get-ChildItem "build" -Recurse | Select-Object Name, Length | Out-File "debug_output\build_files.txt"
         
-        # Copy FLTK DLLs
-        if (Test-Path "${{ env.FLTK_ROOT }}\bin\*.dll") {
-          Copy-Item "${{ env.FLTK_ROOT }}\bin\*.dll" -Destination "dist\" -Force
-          Write-Host "Copied FLTK DLLs"
-        }
+        # Create summary
+        $summary = "Build attempted at: $(Get-Date)`r`n"
+        $summary += "Working directory: $pwd`r`n"
+        $summary += "SuiteSparse directory exists: $(Test-Path 'C:\SuiteSparse')`r`n"
+        $summary += "FLTK directory exists: $(Test-Path '${{ env.FLTK_DIR }}')`r`n"
         
-        # Create README
-        $readme = "BFF Windows Build`r`n"
-        $readme += "===============`r`n`r`n"
-        $readme += "Built with custom SuiteSparse binaries.`r`n"
+        Set-Content -Path "debug_output\summary.txt" -Value $summary
         
-        Set-Content -Path "dist\README.txt" -Value $readme
+        Compress-Archive -Path "debug_output\*" -DestinationPath "debug_info.zip" -Force
         
-        Compress-Archive -Path "dist\*" -DestinationPath "bff-windows.zip" -Force
-        
-    - name: Upload artifact
+    - name: Upload debug info
       uses: actions/upload-artifact@v4
       with:
-        name: bff-windows-binary
-        path: bff-windows.zip
-        retention-days: 30
+        name: build-debug-info
+        path: debug_info.zip
+        retention-days: 7
