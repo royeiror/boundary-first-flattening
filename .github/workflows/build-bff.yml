@@ -26,54 +26,44 @@ jobs:
       shell: powershell
       run: |
         # Create a simple FindSuiteSparse.cmake that works with vcpkg
-        $overrideContent = 'set(SuiteSparse_FOUND TRUE)
-set(SuiteSparse_INCLUDE_DIRS "$ENV{VCPKG_INSTALLED_DIR}/x64-windows/include")
-set(SuiteSparse_LIBRARIES
-    "$ENV{VCPKG_INSTALLED_DIR}/x64-windows/lib/amd.lib"
-    "$ENV{VCPKG_INSTALLED_DIR}/x64-windows/lib/camd.lib"
-    "$ENV{VCPKG_INSTALLED_DIR}/x64-windows/lib/ccolamd.lib"
-    "$ENV{VCPKG_INSTALLED_DIR}/x64-windows/lib/colamd.lib"
-    "$ENV{VCPKG_INSTALLED_DIR}/x64-windows/lib/cholmod.lib"
-    "$ENV{VCPKG_INSTALLED_DIR}/x64-windows/lib/ldl.lib"
-    "$ENV{VCPKG_INSTALLED_DIR}/x64-windows/lib/suitesparseconfig.lib"
-)
-set(SuiteSparse_BLAS_LIBRARIES "$ENV{VCPKG_INSTALLED_DIR}/x64-windows/lib/openblas.lib")
-set(SuiteSparse_LAPACK_LIBRARIES "$ENV{VCPKG_INSTALLED_DIR}/x64-windows/lib/lapack.lib")
-message(STATUS "Using simplified SuiteSparse find module")'
+        $overrideLines = @()
+        $overrideLines += 'set(SuiteSparse_FOUND TRUE)'
+        $overrideLines += 'set(SuiteSparse_INCLUDE_DIRS "$ENV{VCPKG_INSTALLED_DIR}/x64-windows/include")'
+        $overrideLines += 'set(SuiteSparse_LIBRARIES'
+        $overrideLines += '    "$ENV{VCPKG_INSTALLED_DIR}/x64-windows/lib/amd.lib"'
+        $overrideLines += '    "$ENV{VCPKG_INSTALLED_DIR}/x64-windows/lib/camd.lib"'
+        $overrideLines += '    "$ENV{VCPKG_INSTALLED_DIR}/x64-windows/lib/ccolamd.lib"'
+        $overrideLines += '    "$ENV{VCPKG_INSTALLED_DIR}/x64-windows/lib/colamd.lib"'
+        $overrideLines += '    "$ENV{VCPKG_INSTALLED_DIR}/x64-windows/lib/cholmod.lib"'
+        $overrideLines += '    "$ENV{VCPKG_INSTALLED_DIR}/x64-windows/lib/ldl.lib"'
+        $overrideLines += '    "$ENV{VCPKG_INSTALLED_DIR}/x64-windows/lib/suitesparseconfig.lib"'
+        $overrideLines += ')'
+        $overrideLines += 'set(SuiteSparse_BLAS_LIBRARIES "$ENV{VCPKG_INSTALLED_DIR}/x64-windows/lib/openblas.lib")'
+        $overrideLines += 'set(SuiteSparse_LAPACK_LIBRARIES "$ENV{VCPKG_INSTALLED_DIR}/x64-windows/lib/lapack.lib")'
+        $overrideLines += 'message(STATUS "Using simplified SuiteSparse find module")'
         
-        Set-Content -Path "FindSuiteSparseSimple.cmake" -Value $overrideContent
+        $overrideLines | Out-File -FilePath "FindSuiteSparseSimple.cmake"
         
     - name: Install vcpkg with all features
       shell: powershell
       run: |
-        # Install vcpkg
         git clone https://github.com/microsoft/vcpkg
         .\vcpkg\bootstrap-vcpkg.bat
         
-        # Set environment variables
         echo "VCPKG_INSTALLED_DIR=$pwd\vcpkg\installed" >> $env:GITHUB_ENV
         
-        # Install SuiteSparse with ALL features
         .\vcpkg\vcpkg install suitesparse[metis,openblas]:x64-windows
-        
-        # Install FLTK
         .\vcpkg\vcpkg install fltk:x64-windows
         
-        # Set toolchain
         $toolchain = "$pwd\vcpkg\scripts\buildsystems\vcpkg.cmake"
         echo "VCPKG_TOOLCHAIN=$toolchain" >> $env:GITHUB_ENV
         
     - name: Manually download SuiteSparse headers
       shell: powershell
       run: |
-        # Create include directory
         New-Item -ItemType Directory -Force -Path "$env:VCPKG_INSTALLED_DIR\x64-windows\include\suitesparse"
         
-        # Download essential SuiteSparse headers
-        $headers = @(
-          "amd.h", "camd.h", "ccolamd.h", "colamd.h", 
-          "cholmod.h", "cholmod_core.h", "ldl.h", "SuiteSparse_config.h"
-        )
+        $headers = @("amd.h", "camd.h", "ccolamd.h", "colamd.h", "cholmod.h", "cholmod_core.h", "ldl.h", "SuiteSparse_config.h")
         
         $baseUrl = "https://raw.githubusercontent.com/DrTimothyAldenDavis/SuiteSparse/master/SuiteSparse"
         
@@ -95,7 +85,6 @@ message(STATUS "Using simplified SuiteSparse find module")'
         New-Item -ItemType Directory -Force -Path "build"
         Set-Location build
         
-        # Configure with manual SuiteSparse settings
         cmake .. `
           -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} `
           -DCMAKE_TOOLCHAIN_FILE="${{ env.VCPKG_TOOLCHAIN }}" `
@@ -119,22 +108,18 @@ message(STATUS "Using simplified SuiteSparse find module")'
     - name: Create distribution
       shell: powershell
       run: |
-        # Create output directory
         New-Item -ItemType Directory -Force -Path "dist"
         
-        # Copy executables
         if (Test-Path "build\install\bin\*.exe") {
           Copy-Item "build\install\bin\*.exe" -Destination "dist\" -Force
           Write-Host "Copied executables"
         }
         
-        # Copy DLLs from vcpkg
         if (Test-Path "$env:VCPKG_INSTALLED_DIR\x64-windows\bin\*.dll") {
           Copy-Item "$env:VCPKG_INSTALLED_DIR\x64-windows\bin\*.dll" -Destination "dist\" -Force
           Write-Host "Copied DLLs"
         }
         
-        # Create README
         $readme = "BFF Windows Build`r`n"
         $readme += "===============`r`n`r`n"
         $readme += "Built using vcpkg dependencies.`r`n"
@@ -143,7 +128,6 @@ message(STATUS "Using simplified SuiteSparse find module")'
         
         Set-Content -Path "dist\README.txt" -Value $readme
         
-        # Create zip
         Compress-Archive -Path "dist\*" -DestinationPath "bff-windows-v1.6.zip" -Force
         
     - name: Upload artifact
