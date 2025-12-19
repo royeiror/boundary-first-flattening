@@ -17,43 +17,69 @@ jobs:
         repository: 'GeometryCollective/boundary-first-flattening'
         ref: 'v1.6'
         
-    - name: Fix CMakeLists.txt
+    - name: Download SuiteSparse source and binaries
       shell: powershell
       run: |
-        (Get-Content CMakeLists.txt) -replace 'cmake_minimum_required\s*\(.*\)', 'cmake_minimum_required(VERSION 3.10)' | Set-Content CMakeLists.txt
+        # Clone the repository (contains both source and binaries)
+        git clone https://github.com/royeiror/suitesparse-metis-for-windows suitesparse
         
-    - name: Create SuiteSparse directory structure
-      shell: powershell
-      run: |
-        New-Item -ItemType Directory -Force -Path "C:\SuiteSparse"
-        New-Item -ItemType Directory -Force -Path "C:\SuiteSparse\include"
-        New-Item -ItemType Directory -Force -Path "C:\SuiteSparse\lib"
-        New-Item -ItemType Directory -Force -Path "C:\SuiteSparse\bin"
+        # Navigate to SuiteSparse source
+        cd suitesparse
         
-        $suiteConfig = '#ifndef SUITESPARSE_CONFIG_H'
-        $suiteConfig += '#define SUITESPARSE_CONFIG_H'
-        $suiteConfig += '#define SUITESPARSE_VERSION "5.10.1"'
-        $suiteConfig += 'typedef long long SuiteSparse_long;'
-        $suiteConfig += '#endif'
+        # Create a unified include directory for BFF
+        New-Item -ItemType Directory -Force -Path "C:/SuiteSparseUnified/include/suitesparse"
+        New-Item -ItemType Directory -Force -Path "C:/SuiteSparseUnified/lib"
         
-        Set-Content -Path "C:\SuiteSparse\include\SuiteSparse_config.h" -Value $suiteConfig
+        # Collect ALL headers from scattered module directories
+        Write-Host "Collecting SuiteSparse headers..."
         
-        $headers = @("amd.h", "camd.h", "ccolamd.h", "colamd.h", "cholmod.h", "ldl.h")
-        foreach ($header in $headers) {
-            $content = "#pragma once"
-            $content += "`ntypedef int dummy_$(($header -replace '\.h$',''))_t;"
-            Set-Content -Path "C:\SuiteSparse\include\$header" -Value $content
+        # Find all .h files in SuiteSparse subdirectories
+        $headerFiles = Get-ChildItem -Path "SuiteSparse" -Recurse -Filter "*.h"
+        
+        foreach ($header in $headerFiles) {
+          $destPath = "C:/SuiteSparseUnified/include/suitesparse/$($header.Name)"
+          Copy-Item $header.FullName -Destination $destPath -Force
+          Write-Host "Copied: $($header.Name)"
         }
         
-        $libs = @("amd", "camd", "ccolamd", "colamd", "cholmod", "ldl", "suitesparseconfig")
-        foreach ($lib in $libs) {
-            $content = "LIBRARY $lib"
-            $content += "`nEXPORTS"
-            $content += "`ndummy_export"
-            Set-Content -Path "C:\SuiteSparse\lib\$lib.lib" -Value $content
+        # Also copy config header if it exists separately
+        if (Test-Path "SuiteSparse/SuiteSparse_config/SuiteSparse_config.h") {
+          Copy-Item "SuiteSparse/SuiteSparse_config/SuiteSparse_config.h" -Destination "C:/SuiteSparseUnified/include/suitesparse/" -Force
         }
         
-        Write-Host "Created minimal SuiteSparse structure"
+        # Copy libraries from binaries directory
+        Write-Host "Copying SuiteSparse libraries..."
+        
+        # Try to find the binaries
+        $binDirs = @("binaries/x64/lib", "binaries/x64", "lib", "build/install/lib")
+        
+        foreach ($dir in $binDirs) {
+          if (Test-Path $dir) {
+            # Copy .lib files
+            Get-ChildItem -Path $dir -Filter "*.lib" | ForEach-Object {
+              Copy-Item $_.FullName -Destination "C:/SuiteSparseUnified/lib/" -Force
+              Write-Host "Copied library: $($_.Name)"
+            }
+            
+            # Also copy .dll files for runtime
+            Get-ChildItem -Path $dir -Filter "*.dll" | ForEach-Object {
+              Copy-Item $_.FullName -Destination "C:/SuiteSparseUnified/lib/" -Force
+              Write-Host "Copied DLL: $($_.Name)"
+            }
+            break
+          }
+        }
+        
+        # List what we collected
+        Write-Host "Collected headers:"
+        Get-ChildItem "C:/SuiteSparseUnified/include/suitesparse" | Select-Object -First 10 Name
+        
+        Write-Host "Collected libraries:"
+        Get-ChildItem "C:/SuiteSparseUnified/lib" | Select-Object -First 10 Name
+        
+        # Set environment variables
+        echo "SUITESPARSE_INCLUDE_DIR=C:/SuiteSparseUnified/include/suitesparse" >> $env:GITHUB_ENV
+        echo "SUITESPARSE_LIBRARY_DIR=C:/SuiteSparseUnified/lib" >> $env:GITHUB_ENV
         
     - name: Install FLTK via vcpkg
       shell: powershell
@@ -65,80 +91,73 @@ jobs:
         $fltkDir = "$pwd\vcpkg\installed\x64-windows"
         echo "FLTK_DIR=$fltkDir" >> $env:GITHUB_ENV
         
-    - name: Create simple CMakeLists patch
-      shell: powershell
-      run: |
-        $patchLines = @()
-        $patchLines += '# Temporary patch to allow build without full SuiteSparse'
-        $patchLines += 'if(WIN32)'
-        $patchLines += '  # Override SuiteSparse check'
-        $patchLines += '  set(SuiteSparse_FOUND TRUE)'
-        $patchLines += '  set(SuiteSparse_INCLUDE_DIRS "C:/SuiteSparse/include")'
-        $patchLines += '  set(SuiteSparse_LIBRARIES "C:/SuiteSparse/lib/amd.lib;C:/SuiteSparse/lib/cholmod.lib")'
-        $patchLines += '  '
-        $patchLines += '  # Also set individual components'
-        $patchLines += '  set(SuiteSparse_AMD_FOUND TRUE)'
-        $patchLines += '  set(SuiteSparse_CHOLMOD_FOUND TRUE)'
-        $patchLines += '  '
-        $patchLines += '  message(STATUS "Bypassing SuiteSparse dependency check for Windows build")'
-        $patchLines += 'endif()'
-        
-        $patchContent = $patchLines -join "`n"
-        
-        $cmakeLists = Get-Content CMakeLists.txt -Raw
-        $findSuiteSparse = 'find_package(SuiteSparse REQUIRED)'
-        $patched = $cmakeLists.Replace($findSuiteSparse, "$patchContent`n`n$findSuiteSparse")
-        Set-Content CMakeLists.txt -Value $patched -NoNewline
-        
-    - name: Configure BFF with minimal setup
+    - name: Configure BFF
       shell: powershell
       run: |
         New-Item -ItemType Directory -Force -Path "build"
         Set-Location build
         
-        $currentDir = $pwd -replace '\\', '/'
-        
+        # Configure with the unified SuiteSparse directory
         cmake .. `
           -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} `
-          -DCMAKE_INSTALL_PREFIX="$currentDir/install" `
+          -DCMAKE_INSTALL_PREFIX="$pwd/install" `
+          -DSUITESPARSE_INCLUDE_DIR="${{ env.SUITESPARSE_INCLUDE_DIR }}" `
+          -DSUITESPARSE_LIBRARY_DIR="${{ env.SUITESPARSE_LIBRARY_DIR }}" `
           -DENABLE_BFF_CLI=ON `
-          -DENABLE_BFF_GUI=ON
+          -DENABLE_BFF_GUI=ON `
+          -DFLTK_DIR="${{ env.FLTK_DIR }}/share/fltk"
         
-        Write-Host "CMake configuration attempted"
+        Write-Host "CMake configuration complete"
         
-    - name: Try to build BFF core
+    - name: Build BFF
       shell: powershell
       run: |
         Set-Location build
+        cmake --build . --config ${{ env.BUILD_TYPE }} --target install -- /m
         
-        Write-Host "Attempting to build core components..."
-        
-        cmake --build . --config ${{ env.BUILD_TYPE }} 2>&1 | Select-Object -Last 100
-        
-    - name: Create debug artifact
-      if: always()
-      shell: powershell
-      run: |
-        New-Item -ItemType Directory -Force -Path "debug_output"
-        
-        if (Test-Path "build\CMakeCache.txt") {
-            Copy-Item "build\CMakeCache.txt" -Destination "debug_output\" -Force
+        # Check for built executables
+        if (Test-Path "install/bin/*.exe") {
+          Write-Host "SUCCESS: BFF executables built"
+          Get-ChildItem "install/bin/*.exe" | ForEach-Object { Write-Host "  - $($_.Name)" }
+        } else {
+          Write-Host "Looking for executables in build tree..."
+          Get-ChildItem . -Recurse -Filter "*.exe" | ForEach-Object { Write-Host "Found: $($_.FullName)" }
         }
         
-        Get-ChildItem "build" -Recurse -ErrorAction SilentlyContinue | Select-Object Name, Length | Out-File "debug_output\build_files.txt"
+    - name: Create Distribution Package
+      shell: powershell
+      run: |
+        New-Item -ItemType Directory -Force -Path "dist"
         
-        $summary = "Build attempted at: $(Get-Date)"
-        $summary += "`r`nWorking directory: $pwd"
-        $summary += "`r`nSuiteSparse directory exists: $(Test-Path 'C:\SuiteSparse')"
-        $summary += "`r`nFLTK directory exists: $(Test-Path '${{ env.FLTK_DIR }}')"
+        # Copy BFF executables
+        if (Test-Path "build/install/bin/*.exe") {
+          Copy-Item "build/install/bin/*.exe" -Destination "dist/" -Force
+          Write-Host "Copied BFF executables"
+        }
         
-        Set-Content -Path "debug_output\summary.txt" -Value $summary
+        # Copy SuiteSparse DLLs
+        if (Test-Path "C:/SuiteSparseUnified/lib/*.dll") {
+          Copy-Item "C:/SuiteSparseUnified/lib/*.dll" -Destination "dist/" -Force
+          Write-Host "Copied SuiteSparse DLLs"
+        }
         
-        Compress-Archive -Path "debug_output\*" -DestinationPath "debug_info.zip" -Force
+        # Create README
+        $readme = @()
+        $readme += "BFF Windows Build"
+        $readme += "================"
+        $readme += ""
+        $readme += "Built with SuiteSparse from: https://github.com/royeiror/suitesparse-metis-for-windows"
+        $readme += ""
+        $readme += "Run bff-gui.exe for graphical interface"
+        $readme += "Run bff.exe for command line"
         
-    - name: Upload debug info
+        $readme | Out-File -FilePath "dist/README.txt"
+        
+        Compress-Archive -Path "dist/*" -DestinationPath "bff-windows.zip" -Force
+        
+    - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: build-debug-info
-        path: debug_info.zip
-        retention-days: 7
+        name: bff-windows-binary
+        path: bff-windows.zip
+        retention-days: 30
