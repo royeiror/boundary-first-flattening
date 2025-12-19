@@ -25,33 +25,32 @@ jobs:
     - name: Create SuiteSparse directory structure
       shell: powershell
       run: |
-        # Create SuiteSparse directories
         New-Item -ItemType Directory -Force -Path "C:\SuiteSparse"
         New-Item -ItemType Directory -Force -Path "C:\SuiteSparse\include"
         New-Item -ItemType Directory -Force -Path "C:\SuiteSparse\lib"
         New-Item -ItemType Directory -Force -Path "C:\SuiteSparse\bin"
         
-        # Since we can't download from your repo (URLs return 404), create dummy files
-        # These will allow CMake to find "something" and we can see what's missing
+        $suiteConfig = '#ifndef SUITESPARSE_CONFIG_H'
+        $suiteConfig += '#define SUITESPARSE_CONFIG_H'
+        $suiteConfig += '#define SUITESPARSE_VERSION "5.10.1"'
+        $suiteConfig += 'typedef long long SuiteSparse_long;'
+        $suiteConfig += '#endif'
         
-        # Create minimal SuiteSparse_config.h
-        $suiteConfig = '#ifndef SUITESPARSE_CONFIG_H
-#define SUITESPARSE_CONFIG_H
-#define SUITESPARSE_VERSION "5.10.1"
-typedef long long SuiteSparse_long;
-#endif'
         Set-Content -Path "C:\SuiteSparse\include\SuiteSparse_config.h" -Value $suiteConfig
         
-        # Create other minimal headers
         $headers = @("amd.h", "camd.h", "ccolamd.h", "colamd.h", "cholmod.h", "ldl.h")
         foreach ($header in $headers) {
-            "#pragma once`ntypedef int dummy_$(($header -replace '\.h$',''))_t;" | Out-File "C:\SuiteSparse\include\$header"
+            $content = "#pragma once"
+            $content += "`ntypedef int dummy_$(($header -replace '\.h$',''))_t;"
+            Set-Content -Path "C:\SuiteSparse\include\$header" -Value $content
         }
         
-        # Create dummy .lib files
         $libs = @("amd", "camd", "ccolamd", "colamd", "cholmod", "ldl", "suitesparseconfig")
         foreach ($lib in $libs) {
-            "LIBRARY $lib`nEXPORTS`ndummy_export" | Out-File "C:\SuiteSparse\lib\$lib.lib"
+            $content = "LIBRARY $lib"
+            $content += "`nEXPORTS"
+            $content += "`ndummy_export"
+            Set-Content -Path "C:\SuiteSparse\lib\$lib.lib" -Value $content
         }
         
         Write-Host "Created minimal SuiteSparse structure"
@@ -63,31 +62,29 @@ typedef long long SuiteSparse_long;
         .\vcpkg\bootstrap-vcpkg.bat
         .\vcpkg\vcpkg install fltk:x64-windows
         
-        # Get the installed directory
         $fltkDir = "$pwd\vcpkg\installed\x64-windows"
         echo "FLTK_DIR=$fltkDir" >> $env:GITHUB_ENV
         
     - name: Create simple CMakeLists patch
       shell: powershell
       run: |
-        # Create a simple patch to bypass SuiteSparse dependency check
-        $patchContent = @'
-# Temporary patch to allow build without full SuiteSparse
-if(WIN32)
-  # Override SuiteSparse check
-  set(SuiteSparse_FOUND TRUE)
-  set(SuiteSparse_INCLUDE_DIRS "C:/SuiteSparse/include")
-  set(SuiteSparse_LIBRARIES "C:/SuiteSparse/lib/amd.lib;C:/SuiteSparse/lib/cholmod.lib")
-  
-  # Also set individual components
-  set(SuiteSparse_AMD_FOUND TRUE)
-  set(SuiteSparse_CHOLMOD_FOUND TRUE)
-  
-  message(STATUS "Bypassing SuiteSparse dependency check for Windows build")
-endif()
-'@
+        $patchLines = @()
+        $patchLines += '# Temporary patch to allow build without full SuiteSparse'
+        $patchLines += 'if(WIN32)'
+        $patchLines += '  # Override SuiteSparse check'
+        $patchLines += '  set(SuiteSparse_FOUND TRUE)'
+        $patchLines += '  set(SuiteSparse_INCLUDE_DIRS "C:/SuiteSparse/include")'
+        $patchLines += '  set(SuiteSparse_LIBRARIES "C:/SuiteSparse/lib/amd.lib;C:/SuiteSparse/lib/cholmod.lib")'
+        $patchLines += '  '
+        $patchLines += '  # Also set individual components'
+        $patchLines += '  set(SuiteSparse_AMD_FOUND TRUE)'
+        $patchLines += '  set(SuiteSparse_CHOLMOD_FOUND TRUE)'
+        $patchLines += '  '
+        $patchLines += '  message(STATUS "Bypassing SuiteSparse dependency check for Windows build")'
+        $patchLines += 'endif()'
         
-        # Add this to CMakeLists.txt before find_package(SuiteSparse)
+        $patchContent = $patchLines -join "`n"
+        
         $cmakeLists = Get-Content CMakeLists.txt -Raw
         $findSuiteSparse = 'find_package(SuiteSparse REQUIRED)'
         $patched = $cmakeLists.Replace($findSuiteSparse, "$patchContent`n`n$findSuiteSparse")
@@ -99,19 +96,13 @@ endif()
         New-Item -ItemType Directory -Force -Path "build"
         Set-Location build
         
-        # Use forward slashes for CMake paths
         $currentDir = $pwd -replace '\\', '/'
-        $parentDir = (Get-Item $currentDir).Parent.FullName -replace '\\', '/'
         
-        # Configure with simple settings
         cmake .. `
           -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} `
           -DCMAKE_INSTALL_PREFIX="$currentDir/install" `
           -DENABLE_BFF_CLI=ON `
-          -DENABLE_BFF_GUI=ON `
-          -DSUITESPARSE_FOUND=TRUE `
-          -DSUITESPARSE_INCLUDE_DIR="C:/SuiteSparse/include" `
-          -DSUITESPARSE_LIBRARY_DIR="C:/SuiteSparse/lib"
+          -DENABLE_BFF_GUI=ON
         
         Write-Host "CMake configuration attempted"
         
@@ -120,38 +111,26 @@ endif()
       run: |
         Set-Location build
         
-        # Try to build just the core library first
         Write-Host "Attempting to build core components..."
         
-        # First, let's see what targets are available
-        cmake --build . --target help 2>&1 | Select-Object -First 20
-        
-        # Try to build the library target if it exists
-        cmake --build . --config ${{ env.BUILD_TYPE }} --target bff 2>&1 | Select-Object -Last 50
-        
-        # Look for any built files
-        Get-ChildItem . -Recurse -Filter "*.obj" -ErrorAction SilentlyContinue | Select-Object -First 10 Name
+        cmake --build . --config ${{ env.BUILD_TYPE }} 2>&1 | Select-Object -Last 100
         
     - name: Create debug artifact
       if: always()
       shell: powershell
       run: |
-        # Create output with debug info
         New-Item -ItemType Directory -Force -Path "debug_output"
         
-        # Save CMake output
         if (Test-Path "build\CMakeCache.txt") {
             Copy-Item "build\CMakeCache.txt" -Destination "debug_output\" -Force
         }
         
-        # List all files in build directory
-        Get-ChildItem "build" -Recurse | Select-Object Name, Length | Out-File "debug_output\build_files.txt"
+        Get-ChildItem "build" -Recurse -ErrorAction SilentlyContinue | Select-Object Name, Length | Out-File "debug_output\build_files.txt"
         
-        # Create summary
-        $summary = "Build attempted at: $(Get-Date)`r`n"
-        $summary += "Working directory: $pwd`r`n"
-        $summary += "SuiteSparse directory exists: $(Test-Path 'C:\SuiteSparse')`r`n"
-        $summary += "FLTK directory exists: $(Test-Path '${{ env.FLTK_DIR }}')`r`n"
+        $summary = "Build attempted at: $(Get-Date)"
+        $summary += "`r`nWorking directory: $pwd"
+        $summary += "`r`nSuiteSparse directory exists: $(Test-Path 'C:\SuiteSparse')"
+        $summary += "`r`nFLTK directory exists: $(Test-Path '${{ env.FLTK_DIR }}')"
         
         Set-Content -Path "debug_output\summary.txt" -Value $summary
         
