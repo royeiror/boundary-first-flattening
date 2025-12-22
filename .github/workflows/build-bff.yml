@@ -23,28 +23,26 @@ jobs:
         # Read the CMakeLists.txt
         $content = Get-Content CMakeLists.txt -Raw
         
-        # Find the find_package(SuiteSparse) line
-        $findPackageLine = 'find_package\(SuiteSparse REQUIRED\)'
+        # Build replacement content using array
+        $replacementLines = @()
+        $replacementLines += '# MANUALLY SET SUITESPARSE FOR WINDOWS BUILD'
+        $replacementLines += 'set(SuiteSparse_FOUND TRUE)'
+        $replacementLines += 'set(SuiteSparse_INCLUDE_DIRS "C:/SuiteSparseHeaders")'
+        $replacementLines += 'set(SuiteSparse_LIBRARIES "C:/SuiteSparseLibs")'
+        $replacementLines += 'set(SuiteSparse_AMD_FOUND TRUE)'
+        $replacementLines += 'set(SuiteSparse_CAMD_FOUND TRUE)'
+        $replacementLines += 'set(SuiteSparse_COLAMD_FOUND TRUE)'
+        $replacementLines += 'set(SuiteSparse_CHOLMOD_FOUND TRUE)'
+        $replacementLines += 'set(SuiteSparse_LDL_FOUND TRUE)'
+        $replacementLines += 'set(SuiteSparse_SUITESPARSECONFIG_FOUND TRUE)'
+        $replacementLines += 'set(SuiteSparse_BLAS_LIBRARIES "C:/SuiteSparseLibs/openblas.lib")'
+        $replacementLines += 'set(SuiteSparse_LAPACK_LIBRARIES "C:/SuiteSparseLibs/lapack.lib")'
+        $replacementLines += 'message(STATUS "Using manually configured SuiteSparse for Windows build")'
         
-        # Replace with direct variable setting
-        $replacement = @'
-# MANUALLY SET SUITESPARSE FOR WINDOWS BUILD
-set(SuiteSparse_FOUND TRUE)
-set(SuiteSparse_INCLUDE_DIRS "C:/SuiteSparseHeaders")
-set(SuiteSparse_LIBRARIES "C:/SuiteSparseLibs")
-set(SuiteSparse_AMD_FOUND TRUE)
-set(SuiteSparse_CAMD_FOUND TRUE)
-set(SuiteSparse_COLAMD_FOUND TRUE)
-set(SuiteSparse_CHOLMOD_FOUND TRUE)
-set(SuiteSparse_LDL_FOUND TRUE)
-set(SuiteSparse_SUITESPARSECONFIG_FOUND TRUE)
-set(SuiteSparse_BLAS_LIBRARIES "C:/SuiteSparseLibs/openblas.lib")
-set(SuiteSparse_LAPACK_LIBRARIES "C:/SuiteSparseLibs/lapack.lib")
-message(STATUS "Using manually configured SuiteSparse for Windows build")
-'@
+        $replacement = $replacementLines -join "`n"
         
-        # Make the replacement
-        $newContent = $content -replace $findPackageLine, $replacement
+        # Find and replace the find_package line
+        $newContent = $content -replace 'find_package\(SuiteSparse REQUIRED\)', $replacement
         Set-Content CMakeLists.txt -Value $newContent -NoNewline
         Write-Host "Patched CMakeLists.txt to bypass FindSuiteSparse.cmake"
         
